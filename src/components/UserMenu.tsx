@@ -49,6 +49,12 @@ import { FavoritesPanel } from './FavoritesPanel';
 import { NotificationPanel } from './NotificationPanel';
 import { OfflineDownloadPanel } from './OfflineDownloadPanel';
 import { PersonalCenterPanel } from './PersonalCenterPanel';
+import {
+  isTraditionalChineseEnabled,
+  setTraditionalChineseEnabled,
+  TRADITIONAL_CHINESE_CHANGE_EVENT,
+  TRADITIONAL_CHINESE_STORAGE_KEY,
+} from './TraditionalChineseProvider';
 import TVRemotePanel from './tv/TVRemotePanel';
 import { useVersionCheck } from './VersionCheckProvider';
 import { VersionPanel } from './VersionPanel';
@@ -204,6 +210,8 @@ export const UserMenu: React.FC = () => {
   const [danmakuMaxCount, setDanmakuMaxCount] = useState(0);
   const [danmakuHeatmapDisabled, setDanmakuHeatmapDisabled] = useState(false);
   const [searchTraditionalToSimplified, setSearchTraditionalToSimplified] =
+    useState(false);
+  const [interfaceTraditionalChinese, setInterfaceTraditionalChinese] =
     useState(false);
   const [exactSearch, setExactSearch] = useState(true);
   const [maxConcurrentDownloads, setMaxConcurrentDownloads] = useState(6);
@@ -798,6 +806,9 @@ export const UserMenu: React.FC = () => {
         );
       }
 
+      // 加载繁体中文界面设置（未手动设置时按系统语系自动判断）
+      setInterfaceTraditionalChinese(isTraditionalChineseEnabled());
+
       // 加载精确搜索设置
       const savedExactSearch = localStorage.getItem('exactSearch');
       if (savedExactSearch !== null) {
@@ -836,6 +847,25 @@ export const UserMenu: React.FC = () => {
         setFilesystemSavePath(savedFilesystemSavePath);
       }
     }
+  }, []);
+
+  // 同步繁体中文界面设置（顶栏 LanguageToggle 快捷切换时保持开关状态一致）
+  useEffect(() => {
+    const syncTraditionalChinese = () => {
+      setInterfaceTraditionalChinese(isTraditionalChineseEnabled());
+      setSearchTraditionalToSimplified(
+        localStorage.getItem('searchTraditionalToSimplified') === 'true'
+      );
+    };
+    window.addEventListener(
+      TRADITIONAL_CHINESE_CHANGE_EVENT,
+      syncTraditionalChinese
+    );
+    return () =>
+      window.removeEventListener(
+        TRADITIONAL_CHINESE_CHANGE_EVENT,
+        syncTraditionalChinese
+      );
   }, []);
 
   // 加载邮件通知设置
@@ -1670,6 +1700,14 @@ export const UserMenu: React.FC = () => {
     }
   };
 
+  const handleInterfaceTraditionalChineseToggle = (value: boolean) => {
+    setInterfaceTraditionalChinese(value);
+    if (value && !searchTraditionalToSimplified) {
+      setSearchTraditionalToSimplified(true);
+    }
+    setTraditionalChineseEnabled(value);
+  };
+
   const handleHomeBannerToggle = (value: boolean) => {
     setHomeBannerEnabled(value);
     if (typeof window !== 'undefined') {
@@ -1846,6 +1884,9 @@ export const UserMenu: React.FC = () => {
       localStorage.setItem('homeContinueWatchingEnabled', 'true');
       localStorage.setItem('homeModules', JSON.stringify(defaultHomeModules));
       localStorage.setItem('searchTraditionalToSimplified', 'false');
+      // 恢复默认 = 清除手动设置，回到按系统语系自动判断
+      localStorage.removeItem(TRADITIONAL_CHINESE_STORAGE_KEY);
+      window.dispatchEvent(new CustomEvent(TRADITIONAL_CHINESE_CHANGE_EVENT));
       window.dispatchEvent(new CustomEvent('homeModulesUpdated'));
     }
   };
@@ -3084,6 +3125,34 @@ export const UserMenu: React.FC = () => {
                           checked={searchTraditionalToSimplified}
                           onChange={(e) =>
                             handleSearchTraditionalToSimplifiedToggle(
+                              e.target.checked
+                            )
+                          }
+                        />
+                        <div className='w-11 h-6 bg-gray-300 rounded-full peer-checked:bg-green-500 transition-colors dark:bg-gray-600'></div>
+                        <div className='absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full transition-transform peer-checked:translate-x-5'></div>
+                      </div>
+                    </label>
+                  </div>
+
+                  {/* 繁体中文界面 */}
+                  <div className='flex items-center justify-between'>
+                    <div>
+                      <h4 className='text-sm font-medium text-gray-700 dark:text-gray-300'>
+                        繁体中文界面
+                      </h4>
+                      <p className='text-xs text-gray-500 dark:text-gray-400 mt-1'>
+                        将界面与内容自动转换为繁体中文（台湾用语），开启时联动启用搜索繁体转简体
+                      </p>
+                    </div>
+                    <label className='flex items-center cursor-pointer'>
+                      <div className='relative'>
+                        <input
+                          type='checkbox'
+                          className='sr-only peer'
+                          checked={interfaceTraditionalChinese}
+                          onChange={(e) =>
+                            handleInterfaceTraditionalChineseToggle(
                               e.target.checked
                             )
                           }

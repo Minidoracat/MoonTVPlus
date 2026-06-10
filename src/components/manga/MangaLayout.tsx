@@ -4,6 +4,7 @@ import { BookOpen, ChevronLeft, Compass, History, List, Search, Settings2 } from
 import Link from 'next/link';
 import { usePathname, useSearchParams } from 'next/navigation';
 
+import { LanguageToggle } from '@/components/LanguageToggle';
 import { useSite } from '@/components/SiteProvider';
 import { ThemeToggle } from '@/components/ThemeToggle';
 import { UpdateNotification } from '@/components/UpdateNotification';
@@ -144,6 +145,7 @@ export default function MangaLayout({ children }: MangaLayoutProps) {
               </>
             ) : (
               <>
+                <LanguageToggle />
                 <ThemeToggle />
                 <UserMenu />
                 <UpdateNotification />

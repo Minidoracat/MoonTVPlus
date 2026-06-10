@@ -213,6 +213,7 @@ export const UserMenu: React.FC = () => {
     useState(false);
   const [interfaceTraditionalChinese, setInterfaceTraditionalChinese] =
     useState(false);
+  const [crossRegionTitleSearch, setCrossRegionTitleSearch] = useState(false);
   const [exactSearch, setExactSearch] = useState(true);
   const [maxConcurrentDownloads, setMaxConcurrentDownloads] = useState(6);
   const [downloadThreadsPerTask, setDownloadThreadsPerTask] = useState(6);
@@ -808,6 +809,14 @@ export const UserMenu: React.FC = () => {
 
       // 加载繁体中文界面设置（未手动设置时按系统语系自动判断）
       setInterfaceTraditionalChinese(isTraditionalChineseEnabled());
+
+      // 加载三地片名搜索设置
+      const savedCrossRegionTitleSearch = localStorage.getItem(
+        'crossRegionTitleSearch'
+      );
+      if (savedCrossRegionTitleSearch !== null) {
+        setCrossRegionTitleSearch(savedCrossRegionTitleSearch === 'true');
+      }
 
       // 加载精确搜索设置
       const savedExactSearch = localStorage.getItem('exactSearch');
@@ -1708,6 +1717,13 @@ export const UserMenu: React.FC = () => {
     setTraditionalChineseEnabled(value);
   };
 
+  const handleCrossRegionTitleSearchToggle = (value: boolean) => {
+    setCrossRegionTitleSearch(value);
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('crossRegionTitleSearch', String(value));
+    }
+  };
+
   const handleHomeBannerToggle = (value: boolean) => {
     setHomeBannerEnabled(value);
     if (typeof window !== 'undefined') {
@@ -1848,6 +1864,7 @@ export const UserMenu: React.FC = () => {
     setHomeContinueWatchingEnabled(true);
     setHomeModules(defaultHomeModules);
     setSearchTraditionalToSimplified(false);
+    setCrossRegionTitleSearch(false);
 
     if (typeof window !== 'undefined') {
       localStorage.setItem('defaultAggregateSearch', JSON.stringify(true));
@@ -1886,6 +1903,7 @@ export const UserMenu: React.FC = () => {
       localStorage.setItem('searchTraditionalToSimplified', 'false');
       // 恢复默认 = 清除手动设置，回到按系统语系自动判断
       localStorage.removeItem(TRADITIONAL_CHINESE_STORAGE_KEY);
+      localStorage.setItem('crossRegionTitleSearch', 'false');
       window.dispatchEvent(new CustomEvent(TRADITIONAL_CHINESE_CHANGE_EVENT));
       window.dispatchEvent(new CustomEvent('homeModulesUpdated'));
     }
@@ -3155,6 +3173,33 @@ export const UserMenu: React.FC = () => {
                             handleInterfaceTraditionalChineseToggle(
                               e.target.checked
                             )
+                          }
+                        />
+                        <div className='w-11 h-6 bg-gray-300 rounded-full peer-checked:bg-green-500 transition-colors dark:bg-gray-600'></div>
+                        <div className='absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full transition-transform peer-checked:translate-x-5'></div>
+                      </div>
+                    </label>
+                  </div>
+
+                  {/* 三地片名搜索 */}
+                  <div className='flex items-center justify-between'>
+                    <div>
+                      <h4 className='text-sm font-medium text-gray-700 dark:text-gray-300'>
+                        三地片名搜索
+                      </h4>
+                      <p className='text-xs text-gray-500 dark:text-gray-400 mt-1'>
+                        通过豆瓣别名识别中港台不同译名并一并搜索（如：刺激1995
+                        ↔ 肖申克的救赎）
+                      </p>
+                    </div>
+                    <label className='flex items-center cursor-pointer'>
+                      <div className='relative'>
+                        <input
+                          type='checkbox'
+                          className='sr-only peer'
+                          checked={crossRegionTitleSearch}
+                          onChange={(e) =>
+                            handleCrossRegionTitleSearchToggle(e.target.checked)
                           }
                         />
                         <div className='w-11 h-6 bg-gray-300 rounded-full peer-checked:bg-green-500 transition-colors dark:bg-gray-600'></div>

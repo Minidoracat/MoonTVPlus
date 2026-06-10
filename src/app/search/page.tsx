@@ -51,6 +51,8 @@ type SearchCachePayload = {
   results: SearchResult[];
   query: string;
   updatedAt: number;
+  // 三地片名搜索的别名集合（可选，旧缓存无此字段）
+  aliases?: string[];
 };
 
 function SearchPageClient() {
@@ -85,6 +87,13 @@ function SearchPageClient() {
   const [isLoading, setIsLoading] = useState(false);
   const [showResults, setShowResults] = useState(false);
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
+  // 三地片名搜索：后端解析出的别名集合（精确搜索过滤时一并匹配）
+  const [searchAliases, setSearchAliases] = useState<string[]>([]);
+  const searchAliasesRef = useRef<string[]>([]);
+  const applySearchAliases = (aliases: string[]) => {
+    searchAliasesRef.current = aliases;
+    setSearchAliases(aliases);
+  };
   const [showSuggestions, setShowSuggestions] = useState(false);
   const eventSourceRef = useRef<EventSource | null>(null);
   const [totalSources, setTotalSources] = useState(0);
@@ -115,7 +124,7 @@ function SearchPageClient() {
   };
 
   // 从 sessionStorage 获取完整缓存的搜索结果（partial 只给播放页快速启动使用）
-  const getCachedResults = (query: string): SearchResult[] | null => {
+  const getCachedResults = (query: string): SearchCachePayload | null => {
     if (typeof window === 'undefined') return null;
     try {
       const cacheKey = getCacheKey(query);
@@ -124,7 +133,7 @@ function SearchPageClient() {
 
       const parsed = JSON.parse(cached) as SearchCachePayload;
       if (parsed?.status === 'complete' && Array.isArray(parsed.results)) {
-        return parsed.results;
+        return parsed;
       }
     } catch (error) {
       console.error('Failed to get cached results:', error);
@@ -146,6 +155,7 @@ function SearchPageClient() {
         results,
         query: query.trim(),
         updatedAt: Date.now(),
+        aliases: searchAliasesRef.current,
       };
       sessionStorage.setItem(cacheKey, JSON.stringify(payload));
     } catch (error) {
@@ -386,7 +396,12 @@ function SearchPageClient() {
     const normalizedTitle = title.toLowerCase();
     const normalizedQuery = query.toLowerCase();
 
-    return normalizedTitle.includes(normalizedQuery);
+    if (normalizedTitle.includes(normalizedQuery)) return true;
+
+    // 三地片名搜索：标题命中任一别名（如「肖申克的救赎」）也视为精确匹配
+    return searchAliases.some(
+      (alias) => alias && normalizedTitle.includes(alias.toLowerCase())
+    );
   };
 
   const allExactSearchResults = useMemo(() => {
@@ -395,7 +410,7 @@ function SearchPageClient() {
     return searchResults.filter((item) =>
       titleContainsQuery(item.title, submittedSearchQuery)
     );
-  }, [searchResults, submittedSearchQuery, exactSearch]);
+  }, [searchResults, submittedSearchQuery, exactSearch, searchAliases]);
 
   // 聚合后的结果（按标题和年份分组）
   const aggregatedResults = useMemo(() => {
@@ -670,7 +685,14 @@ function SearchPageClient() {
     ];
 
     return { categoriesAll, categoriesAgg };
-  }, [searchResults, aggregatedResults, exactSearch, filterAll, filterAgg]);
+  }, [
+    searchResults,
+    aggregatedResults,
+    exactSearch,
+    filterAll,
+    filterAgg,
+    searchAliases,
+  ]);
 
   // 非聚合：应用筛选与排序
   const filteredAllResults = useMemo(() => {
@@ -1167,11 +1189,12 @@ function SearchPageClient() {
 
       // 检查是否有缓存且不是强制刷新
       if (!forceRefresh) {
-        const cachedResults = getCachedResults(trimmed);
-        if (cachedResults && cachedResults.length > 0) {
+        const cachedPayload = getCachedResults(trimmed);
+        if (cachedPayload && cachedPayload.results.length > 0) {
           // 使用缓存的结果
           setIsLoading(false); // 先设置加载状态为 false
-          setSearchResults(cachedResults);
+          setSearchResults(cachedPayload.results);
+          applySearchAliases(cachedPayload.aliases || []);
           setShowResults(true);
           setTotalSources(1);
           setCompletedSources(1);
@@ -1203,6 +1226,7 @@ function SearchPageClient() {
       setIsLoading(true);
       setShowResults(true);
       setSearchResults([]);
+      applySearchAliases([]);
       setTotalSources(0);
       setCompletedSources(0);
       // 清理缓冲
@@ -1230,10 +1254,16 @@ function SearchPageClient() {
         setUseFluidSearch(currentFluidSearch);
       }
 
+      // 三地片名别名搜索（开启时后端用豆瓣别名扩展搜索关键词）
+      const aliasParam =
+        localStorage.getItem('crossRegionTitleSearch') === 'true'
+          ? '&alias=1'
+          : '';
+
       if (currentFluidSearch) {
         // 流式搜索：打开新的流式连接
         const es = new EventSource(
-          `/api/search/ws?q=${encodeURIComponent(trimmed)}`
+          `/api/search/ws?q=${encodeURIComponent(trimmed)}${aliasParam}`
         );
         eventSourceRef.current = es;
 
@@ -1246,6 +1276,12 @@ function SearchPageClient() {
               case 'start':
                 setTotalSources(payload.totalSources || 0);
                 setCompletedSources(0);
+                break;
+              case 'aliases':
+                // 三地片名搜索：记录别名，供精确搜索过滤匹配
+                applySearchAliases(
+                  Array.isArray(payload.aliases) ? payload.aliases : []
+                );
                 break;
               case 'source_result': {
                 setCompletedSources((prev) => prev + 1);
@@ -1339,10 +1375,15 @@ function SearchPageClient() {
         };
       } else {
         // 传统搜索：使用普通接口
-        fetch(`/api/search?q=${encodeURIComponent(trimmed)}`)
+        fetch(`/api/search?q=${encodeURIComponent(trimmed)}${aliasParam}`)
           .then((response) => response.json())
           .then((data) => {
             if (currentQueryRef.current !== trimmed) return;
+
+            // 三地片名搜索：记录别名，供精确搜索过滤匹配
+            applySearchAliases(
+              Array.isArray(data.aliases) ? data.aliases : []
+            );
 
             if (data.results && Array.isArray(data.results)) {
               const activeYearOrder =

@@ -4,7 +4,6 @@ import { NextRequest, NextResponse } from 'next/server';
 
 import { getAuthInfoFromCookie } from '@/lib/auth';
 import { getAvailableApiSites, getCacheTime, getConfig } from '@/lib/config';
-import { searchFromApi } from '@/lib/downstream';
 import { getProxyToken } from '@/lib/emby-token';
 import { hasFeaturePermission } from '@/lib/permissions';
 import {
@@ -13,6 +12,10 @@ import {
   normalizeScriptSearchResults,
   normalizeScriptSources,
 } from '@/lib/source-script';
+import {
+  resolveTitleAliases,
+  searchFromApiWithQueries,
+} from '@/lib/title-alias';
 import { yellowWords } from '@/lib/yellow';
 
 export const runtime = 'nodejs';
@@ -177,10 +180,25 @@ export async function GET(request: NextRequest) {
       })
     : Promise.resolve([]);
 
+  // 三地片名别名扩展（豆瓣又名）：与其他源搜索并行解析，失败退回仅用原词
+  let resolvedAliases: string[] = [];
+  const queriesPromise: Promise<string[]> =
+    searchParams.get('alias') === '1'
+      ? resolveTitleAliases(query).then((aliases) => {
+          if (aliases.length > 0) {
+            resolvedAliases = aliases;
+            console.log('[Search] 片名别名扩展:', query, '->', aliases);
+          }
+          return [query, ...aliases];
+        })
+      : Promise.resolve([query]);
+
   // 添加超时控制和错误处理，避免慢接口拖累整体响应
   const searchPromises = apiSites.map((site) =>
     Promise.race([
-      searchFromApi(site, query),
+      queriesPromise.then((queries) =>
+        searchFromApiWithQueries(site, queries)
+      ),
       new Promise((_, reject) =>
         setTimeout(() => reject(new Error(`${site.name} timeout`)), 20000)
       ),
@@ -284,11 +302,14 @@ export async function GET(request: NextRequest) {
 
     if (flattenedResults.length === 0) {
       // no cache if empty
-      return NextResponse.json({ results: [] }, { status: 200 });
+      return NextResponse.json(
+        { results: [], aliases: resolvedAliases },
+        { status: 200 }
+      );
     }
 
     return NextResponse.json(
-      { results: flattenedResults },
+      { results: flattenedResults, aliases: resolvedAliases },
       {
         headers: {
           'Cache-Control': `public, max-age=${cacheTime}, s-maxage=${cacheTime}`,

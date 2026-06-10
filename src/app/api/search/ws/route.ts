@@ -4,16 +4,19 @@ import { NextRequest, NextResponse } from 'next/server';
 
 import { getAuthInfoFromCookie } from '@/lib/auth';
 import { getAvailableApiSites, getConfig } from '@/lib/config';
-import { searchFromApi } from '@/lib/downstream';
-import { hasFeaturePermission } from '@/lib/permissions';
-import { yellowWords } from '@/lib/yellow';
 import { getProxyToken } from '@/lib/emby-token';
+import { hasFeaturePermission } from '@/lib/permissions';
 import {
   executeSavedSourceScript,
   listEnabledSourceScripts,
   normalizeScriptSearchResults,
   normalizeScriptSources,
 } from '@/lib/source-script';
+import {
+  resolveTitleAliases,
+  searchFromApiWithQueries,
+} from '@/lib/title-alias';
+import { yellowWords } from '@/lib/yellow';
 
 export const runtime = 'nodejs';
 
@@ -44,6 +47,17 @@ export async function GET(request: NextRequest) {
     hasFeaturePermission(authInfo.username, 'private_library'),
     hasFeaturePermission(authInfo.username, 'emby'),
   ]);
+
+  // 三地片名别名扩展（豆瓣又名）：异步解析，不阻塞 SSE 流的建立与其他源搜索
+  const queriesPromise: Promise<string[]> =
+    searchParams.get('alias') === '1'
+      ? resolveTitleAliases(query).then((aliases) => {
+          if (aliases.length > 0) {
+            console.log('[Search WS] 片名别名扩展:', query, '->', aliases);
+          }
+          return [query, ...aliases];
+        })
+      : Promise.resolve([query]);
 
   // 创建权重映射表
   const weightMap = new Map<string, number>();
@@ -326,12 +340,24 @@ export async function GET(request: NextRequest) {
           });
       }
 
+      // 等待别名解析（start 事件与 Emby/OpenList 搜索已先行，不被阻塞）
+      const queries = await queriesPromise;
+      if (queries.length > 1 && !streamClosed) {
+        // 告知前端别名集合，供精确搜索过滤时一并匹配
+        const aliasEvent = `data: ${JSON.stringify({
+          type: 'aliases',
+          aliases: queries.slice(1),
+          timestamp: Date.now()
+        })}\n\n`;
+        safeEnqueue(encoder.encode(aliasEvent));
+      }
+
       // 为每个源创建搜索 Promise
       const searchPromises = sortedApiSites.map(async (site) => {
         try {
           // 添加超时控制
           const searchPromise = Promise.race([
-            searchFromApi(site, query),
+            searchFromApiWithQueries(site, queries),
             new Promise((_, reject) =>
               setTimeout(() => reject(new Error(`${site.name} timeout`)), 20000)
             ),

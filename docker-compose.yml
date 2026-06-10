@@ -1,0 +1,32 @@
+services:
+  moontvplus-core:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: moontvplus-custom:local
+    container_name: moontvplus-core
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3100:3000"
+    env_file:
+      - ./.env
+    environment:
+      HOSTNAME: 0.0.0.0
+      PORT: 3000
+      NEXT_PUBLIC_STORAGE_TYPE: kvrocks
+      KVROCKS_URL: redis://moontvplus-kvrocks:6666
+      OFFLINE_DOWNLOAD_DIR: /data
+    volumes:
+      - ./data/downloads:/data
+    depends_on:
+      - moontvplus-kvrocks
+
+  moontvplus-kvrocks:
+    image: apache/kvrocks:latest
+    container_name: moontvplus-kvrocks
+    restart: unless-stopped
+    volumes:
+      - moontvplus-kvrocks-data:/var/lib/kvrocks
+
+volumes:
+  moontvplus-kvrocks-data:

@@ -40,24 +40,23 @@ const MobileHeader = ({ showBackButton = false }: MobileHeaderProps) => {
               />
             </svg>
           </Link>
-          {showBackButton && <BackButton />}
+          {showBackButton ? <BackButton /> : <LanguageToggle />}
         </div>
 
         {/* 右侧按钮 */}
         <div className='flex items-center gap-2'>
-          <LanguageToggle />
           <ThemeToggle />
           <UserMenu />
           <UpdateNotification />
         </div>
       </div>
 
-      {/* 中间：Logo（绝对居中） */}
-      <div className='absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2'>
+      {/* 中间：Logo（绝对居中，限宽避免遮挡两侧按钮） */}
+      <div className='absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 max-w-[calc(100vw-216px)]'>
         <Link
           href='/'
           prefetch={false}
-          className='text-2xl font-bold text-green-600 tracking-tight hover:opacity-80 transition-opacity'
+          className='block truncate text-xl font-bold text-green-600 tracking-tight hover:opacity-80 transition-opacity'
         >
           {siteName}
         </Link>

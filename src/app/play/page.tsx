@@ -84,12 +84,17 @@ import EpisodeSelector from '@/components/EpisodeSelector';
 import PageLayout from '@/components/PageLayout';
 import PansouSearch from '@/components/PansouSearch';
 import ProxyImage from '@/components/ProxyImage';
+import PwaSafariPrompt from '@/components/PwaSafariPrompt';
 import { useSite } from '@/components/SiteProvider';
 import SmartRecommendations from '@/components/SmartRecommendations';
 import Toast, { ToastProps } from '@/components/Toast';
 import VideoCard from '@/components/VideoCard';
 
 import { useDownload } from '@/contexts/DownloadContext';
+import {
+  isIOSStandaloneWebApp,
+  supportsProgrammaticPictureInPicture,
+} from '@/lib/ios-pwa';
 
 // 扩展 HTMLVideoElement 类型以支持 hls 属性
 declare global {
@@ -6484,6 +6489,15 @@ function PlayPageClient() {
       return false;
     })();
 
+    // iOS 主画面 PWA 目前会暴露 PiP 入口但 requestPictureInPicture()
+    // 会抛出 NotSupportedError；Safari 网页模式则可正常使用。
+    const isIOSStandalonePWA = isIOSStandaloneWebApp();
+    const supportsProgrammaticPiP = supportsProgrammaticPictureInPicture();
+
+    if (artRef.current) {
+      artRef.current.dataset.iosPwaPipUnsupported = isIOSStandalonePWA ? 'true' : 'false';
+    }
+
     // 辅助函数：检测代理 URL 是否需要显式声明 m3u8 类型
     // Artplayer 通过 URL 扩展名自动检测类型，但代理 URL（如 /api/proxy-m3u8?url=...）没有 .m3u8 扩展名
     const getVideoType = (url: string): string | undefined => {
@@ -6702,7 +6716,7 @@ function PlayPageClient() {
           isLive: false,
           muted: false,
           autoplay: true,
-          pip: true,
+          pip: supportsProgrammaticPiP,
           autoSize: false,
           autoMini: false,
           screenshot: true,
@@ -6747,6 +6761,7 @@ function PlayPageClient() {
             playsInline: true,
             'webkit-playsinline': 'true',
             referrerpolicy: 'no-referrer',
+            disablePictureInPicture: !supportsProgrammaticPiP,
           } as any,
           // HLS 支持配置
           customType: {
@@ -9707,6 +9722,8 @@ function PlayPageClient() {
                 )}
 
               </div>
+
+              <PwaSafariPrompt className='mt-3 px-2 lg:flex-shrink-0' />
 
               {/* 第三方应用打开按钮 - 观影室同步状态下隐藏 */}
               {videoUrl && !playSync.isInRoom && (

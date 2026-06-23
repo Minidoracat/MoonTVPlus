@@ -5,8 +5,13 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { useEffect, useRef, useState } from 'react';
 
 import { useWebLiveSync } from '@/hooks/useWebLiveSync';
+import {
+  isIOSStandaloneWebApp,
+  supportsProgrammaticPictureInPicture,
+} from '@/lib/ios-pwa';
 
 import PageLayout from '@/components/PageLayout';
+import PwaSafariPrompt from '@/components/PwaSafariPrompt';
 import { useWatchRoomContextSafe } from '@/components/WatchRoomProvider';
 
 let Artplayer: any = null;
@@ -211,12 +216,27 @@ export default function WebLivePage() {
     // 销毁旧的播放器实例
     cleanupPlayer();
 
+    const isIOSStandalonePWA = isIOSStandaloneWebApp();
+    const supportsProgrammaticPiP = supportsProgrammaticPictureInPicture();
+
+    artRef.current.dataset.iosPwaPipUnsupported = isIOSStandalonePWA ? 'true' : 'false';
+
     artPlayerRef.current = new Artplayer({
       container: artRef.current,
       url: videoUrl,
       isLive: true,
       autoplay: true,
+      pip: supportsProgrammaticPiP,
       fullscreen: true,
+      fullscreenWeb: true,
+      playsInline: true,
+      airplay: true,
+      moreVideoAttr: {
+        playsInline: true,
+        'webkit-playsinline': 'true',
+        preload: 'metadata',
+        disablePictureInPicture: !supportsProgrammaticPiP,
+      } as Partial<HTMLVideoElement> & Record<'webkit-playsinline', string>,
       customType: {
         m3u8: m3u8Loader,
         flv: flvLoader
@@ -462,7 +482,11 @@ export default function WebLivePage() {
           <div className={`grid gap-4 lg:h-[500px] xl:h-[650px] 2xl:h-[750px] transition-all duration-300 ease-in-out ${isChannelListCollapsed ? 'grid-cols-1' : 'grid-cols-1 md:grid-cols-4'}`}>
             <div className={`h-full transition-all duration-300 ease-in-out ${isChannelListCollapsed ? 'col-span-1' : 'md:col-span-3'}`}>
               <div className='relative w-full h-[300px] lg:h-full'>
-                <div ref={artRef} className='bg-black w-full h-full rounded-xl overflow-hidden shadow-lg border border-white/0 dark:border-white/30'></div>
+                <div
+                  ref={artRef}
+                  data-art-mobile-fullscreen-web='true'
+                  className='bg-black w-full h-full rounded-xl overflow-hidden shadow-lg border border-white/0 dark:border-white/30'
+                ></div>
 
                 {errorMessage && (
                   <div className='absolute inset-0 bg-black/90 backdrop-blur-sm rounded-xl overflow-hidden shadow-lg border border-white/0 dark:border-white/30 flex items-center justify-center z-[600] transition-all duration-300'>
@@ -500,6 +524,8 @@ export default function WebLivePage() {
                   </div>
                 )}
               </div>
+
+              <PwaSafariPrompt className='mt-3 px-2 lg:flex-shrink-0' />
 
               {/* 外部播放器按钮 */}
               {currentSource && !webLiveSync.isInRoom && (

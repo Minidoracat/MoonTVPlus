@@ -197,18 +197,46 @@ div[data-media-provider] video {
   background-color: #000 !important; /* 其余区域填充为黑色 */
 }
 
-/* 隐藏移动端竖屏时的 pip 按钮 */
-@media (max-width: 768px) {
-  .art-control-pip {
-    display: none !important;
+/* ArtPlayer mobile controls: keep PiP reachable; keep web fullscreen opt-in per player to avoid /play iOS duplicates. */
+.art-video-player.art-mobile .art-control-fullscreenWeb {
+  display: none !important;
+}
+
+[data-art-mobile-fullscreen-web='true'] .art-video-player.art-mobile .art-control-fullscreenWeb {
+  display: flex !important;
+}
+
+[data-ios-pwa-pip-unsupported='true'] .art-control-pip {
+  display: none !important;
+}
+
+.art-video-player.art-mobile .art-control-volume {
+  display: none !important;
+}
+
+.art-video-player.art-mobile .art-controls-right .art-control {
+  min-width: 44px;
+  min-height: 44px;
+}
+
+@media (display-mode: standalone), (display-mode: fullscreen) {
+  .art-video-player.art-mobile {
+    --art-control-height: 44px;
+    --art-bottom-gap: max(10px, env(safe-area-inset-bottom));
   }
 
-  .art-control-fullscreenWeb {
-    display: none !important;
+  .art-video-player.art-mobile .art-bottom {
+    box-sizing: border-box;
+    padding-right: max(var(--art-padding), env(safe-area-inset-right));
+    padding-bottom: max(10px, env(safe-area-inset-bottom));
   }
 
-  .art-control-volume {
-    display: none !important;
+  .art-video-player.art-mobile .art-controls {
+    min-height: 44px;
+  }
+
+  .art-video-player.art-mobile .art-controls-right {
+    margin-right: 0;
   }
 }
 

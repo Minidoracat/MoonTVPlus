@@ -7,6 +7,7 @@ import {
   Film,
   Globe,
   Images,
+  PlayCircle,
   Star,
   Tag,
   Users,
@@ -43,6 +44,8 @@ interface DetailPanelProps {
   };
   sourceId?: string;
   source?: string;
+  onPlay?: () => void;
+  playLabel?: string;
   useDrawer?: boolean;
   drawerWidth?: string;
 }
@@ -109,6 +112,8 @@ const DetailPanel: React.FC<DetailPanelProps> = ({
   cmsData,
   sourceId,
   source,
+  onPlay,
+  playLabel = '播放',
   useDrawer = false,
   drawerWidth = 'w-full md:w-[25%]',
 }) => {
@@ -1149,6 +1154,17 @@ const DetailPanel: React.FC<DetailPanelProps> = ({
     </button>
   ) : null;
 
+  const playButton = onPlay ? (
+    <button
+      type='button'
+      onClick={onPlay}
+      className='mt-4 inline-flex min-h-11 items-center justify-center gap-2 rounded-lg bg-green-500 px-5 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-green-600'
+    >
+      <PlayCircle size={18} />
+      {playLabel}
+    </button>
+  ) : null;
+
   const virtualGalleryLayout = React.useMemo(() => {
     if (galleryImages.length === 0 || galleryViewportWidth <= 0) {
       return {
@@ -1535,6 +1551,7 @@ const DetailPanel: React.FC<DetailPanelProps> = ({
                       </div>
                     )}
                   </div>
+                  {playButton}
                 </div>
               </div>
 
@@ -2133,6 +2150,7 @@ const DetailPanel: React.FC<DetailPanelProps> = ({
                       </div>
                     )}
                   </div>
+                  {playButton}
                 </div>
               </div>
 

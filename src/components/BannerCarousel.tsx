@@ -24,6 +24,7 @@ import {
 } from '@/lib/tmdb.client';
 import { getDoubanDetail } from '@/lib/douban.client';
 
+import DetailPanel from '@/components/DetailPanel';
 import ProxyImage from '@/components/ProxyImage';
 
 interface BannerCarouselProps {
@@ -80,11 +81,13 @@ export default function BannerCarousel({
   const titleTextRef = useRef<HTMLSpanElement>(null);
   const touchStartX = useRef(0);
   const touchEndX = useRef(0);
+  const didSwipe = useRef(false);
   const isManualChange = useRef(false); // 标记是否为手动切换
 
   // LocalStorage 缓存配置
   const LOCALSTORAGE_DURATION = 24 * 60 * 60 * 1000; // 1天
   const currentTitle = items[currentIndex]?.title || '';
+  const [showDetailPanel, setShowDetailPanel] = useState(false);
 
   // 根据数据源获取缓存key
   const getLocalStorageKey = (source: string) => {
@@ -464,6 +467,7 @@ export default function BannerCarousel({
       const minSwipeDistance = 50; // 最小滑动距离
 
       if (Math.abs(distance) > minSwipeDistance) {
+        didSwipe.current = true;
         if (distance > 0) {
           // 向左滑动，显示下一张
           goToNext();
@@ -471,6 +475,9 @@ export default function BannerCarousel({
           // 向右滑动，显示上一张
           goToPrevious();
         }
+        setTimeout(() => {
+          didSwipe.current = false;
+        }, 300);
       }
     }
 
@@ -503,6 +510,7 @@ export default function BannerCarousel({
   const currentItem = items[currentIndex];
 
   return (
+    <>
     <div
       className={`relative w-full ${bannerHeightClassMap[bannerHeightScale]} overflow-hidden group`}
       onMouseEnter={() => setIsPaused(true)}
@@ -511,9 +519,10 @@ export default function BannerCarousel({
       onTouchMove={handleTouchMove}
       onTouchEnd={handleTouchEnd}
       onClick={() => {
+        if (didSwipe.current) return;
         // 移动端点击整个轮播图跳转
         if (window.innerWidth < 768) {
-          handlePlay(currentItem.title);
+          setShowDetailPanel(true);
         }
       }}
     >
@@ -704,5 +713,18 @@ export default function BannerCarousel({
         ))}
       </div>
     </div>
+    {showDetailPanel && (
+      <DetailPanel
+        isOpen={showDetailPanel}
+        onClose={() => setShowDetailPanel(false)}
+        title={currentItem.title}
+        poster={getImageUrl(currentItem.poster_path || currentItem.backdrop_path || null)}
+        doubanId={dataSource === 'Douban' ? currentItem.id : undefined}
+        tmdbId={dataSource === 'TMDB' ? currentItem.id : undefined}
+        type={currentItem.media_type}
+        onPlay={() => handlePlay(currentItem.title)}
+      />
+    )}
+    </>
   );
 }

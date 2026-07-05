@@ -391,17 +391,7 @@ const VideoCard = forwardRef<VideoCardHandle, VideoCardProps>(
       [from, actualSource, actualId, onDelete]
     );
 
-    const handleClick = useCallback(() => {
-      // 即将上映的电影：单击显示上映倒计时提示，不跳转
-      if (isUpcoming) {
-        setShowUpcomingInfo(true);
-        // 2秒后自动隐藏
-        setTimeout(() => {
-          setShowUpcomingInfo(false);
-        }, 2000);
-        return;
-      }
-
+    const handlePlay = useCallback(() => {
       onBeforeNavigate?.();
 
       if (origin === 'live' && actualSource && actualId) {
@@ -459,7 +449,6 @@ const VideoCard = forwardRef<VideoCardHandle, VideoCardProps>(
         }
       }
     }, [
-      isUpcoming,
       origin,
       from,
       actualSource,
@@ -472,6 +461,25 @@ const VideoCard = forwardRef<VideoCardHandle, VideoCardProps>(
       actualSearchType,
       onBeforeNavigate,
     ]);
+
+    const handleClick = useCallback(() => {
+      // 即将上映的电影：单击显示上映倒计时提示，不跳转
+      if (isUpcoming) {
+        setShowUpcomingInfo(true);
+        // 2秒后自动隐藏
+        setTimeout(() => {
+          setShowUpcomingInfo(false);
+        }, 2000);
+        return;
+      }
+
+      if (origin !== 'live') {
+        setShowDetailPanel(true);
+        return;
+      }
+
+      handlePlay();
+    }, [isUpcoming, origin, handlePlay]);
 
     // 新标签页播放处理函数
     const handlePlayInNewTab = useCallback(() => {
@@ -575,7 +583,7 @@ const VideoCard = forwardRef<VideoCardHandle, VideoCardProps>(
     // 长按手势hook
     const longPressProps = useLongPress({
       onLongPress: handleLongPress,
-      onClick: handleClick, // 保持点击播放功能
+      onClick: handleClick,
       longPressDelay: 500,
     });
 
@@ -718,7 +726,7 @@ const VideoCard = forwardRef<VideoCardHandle, VideoCardProps>(
           id: 'play',
           label: origin === 'live' ? '观看直播' : '播放',
           icon: <PlayCircleIcon size={20} />,
-          onClick: handleClick,
+          onClick: handlePlay,
           color: 'primary' as const,
         });
 
@@ -898,6 +906,7 @@ const VideoCard = forwardRef<VideoCardHandle, VideoCardProps>(
       isAggregate,
       dynamicSourceNames,
       handleClick,
+      handlePlay,
       handleToggleFavorite,
       handleDeleteRecord,
       handlePlayInNewTab,
@@ -1016,7 +1025,11 @@ const VideoCard = forwardRef<VideoCardHandle, VideoCardProps>(
                 }}
                 onClick={(e) => {
                   e.stopPropagation();
-                  setShowImageViewer(true);
+                  if (origin === 'live') {
+                    setShowImageViewer(true);
+                  } else {
+                    setShowDetailPanel(true);
+                  }
                 }}
                 onError={(e) => {
                   const img = e.currentTarget as HTMLImageElement;
@@ -1146,22 +1159,41 @@ const VideoCard = forwardRef<VideoCardHandle, VideoCardProps>(
                     return false;
                   }}
                 >
-                  <PlayCircleIcon
-                    size={50}
-                    strokeWidth={0.8}
-                    className='text-white fill-transparent transition-all duration-300 ease-out hover:fill-green-500 hover:scale-[1.1]'
-                    style={
-                      {
-                        WebkitUserSelect: 'none',
-                        userSelect: 'none',
-                        WebkitTouchCallout: 'none',
-                      } as React.CSSProperties
-                    }
-                    onContextMenu={(e) => {
-                      e.preventDefault();
-                      return false;
-                    }}
-                  />
+                  {origin === 'live' ? (
+                    <PlayCircleIcon
+                      size={50}
+                      strokeWidth={0.8}
+                      className='text-white fill-transparent transition-all duration-300 ease-out hover:fill-green-500 hover:scale-[1.1]'
+                      style={
+                        {
+                          WebkitUserSelect: 'none',
+                          userSelect: 'none',
+                          WebkitTouchCallout: 'none',
+                        } as React.CSSProperties
+                      }
+                      onContextMenu={(e) => {
+                        e.preventDefault();
+                        return false;
+                      }}
+                    />
+                  ) : (
+                    <Info
+                      size={48}
+                      strokeWidth={1}
+                      className='text-white transition-all duration-300 ease-out hover:text-green-400 hover:scale-[1.1]'
+                      style={
+                        {
+                          WebkitUserSelect: 'none',
+                          userSelect: 'none',
+                          WebkitTouchCallout: 'none',
+                        } as React.CSSProperties
+                      }
+                      onContextMenu={(e) => {
+                        e.preventDefault();
+                        return false;
+                      }}
+                    />
+                  )}
                 </div>
               )
             )}
@@ -2085,6 +2117,8 @@ const VideoCard = forwardRef<VideoCardHandle, VideoCardProps>(
             cmsData={cmsData}
             sourceId={id}
             source={source}
+            onPlay={handlePlay}
+            playLabel={playTime && playTime > 0 ? '继续播放' : '播放'}
           />
         )}
 

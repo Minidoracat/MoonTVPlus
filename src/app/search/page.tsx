@@ -31,12 +31,13 @@ import {
   getSearchHistory,
   subscribeToDataUpdates,
 } from '@/lib/db.client';
-import { SearchResult } from '@/lib/types';
 import { appendSpecialSourceParam, isSpecialSourcesEnabledOnDevice } from '@/lib/special-source.client';
+import { SearchResult } from '@/lib/types';
 import { processImageUrl } from '@/lib/utils';
 
 import AcgSearch from '@/components/AcgSearch';
 import CapsuleSwitch from '@/components/CapsuleSwitch';
+import DetailPanel from '@/components/DetailPanel';
 import ImageViewer from '@/components/ImageViewer';
 import PageLayout from '@/components/PageLayout';
 import PansouSearch, { CLOUD_TYPE_NAMES } from '@/components/PansouSearch';
@@ -59,6 +60,24 @@ type SearchCachePayload = {
   updatedAt: number;
   // 三地片名搜索的别名集合（可选，旧缓存无此字段）
   aliases?: string[];
+};
+
+type SearchListItem = {
+  key: string;
+  title: string;
+  poster: string;
+  year?: string;
+  type: 'movie' | 'tv';
+  episodes?: number;
+  sourceName?: string;
+  sourceNames?: string[];
+  doubanId?: number;
+  desc?: string;
+  vodRemarks?: string;
+  isAggregate?: boolean;
+  source?: string;
+  id?: string;
+  query?: string;
 };
 
 function SearchPageClient() {
@@ -309,6 +328,9 @@ function SearchPageClient() {
     url: string;
     alt: string;
   } | null>(null);
+  const [selectedListDetail, setSelectedListDetail] = useState<
+    (SearchListItem & { url: string }) | null
+  >(null);
 
   // 在“无排序”场景用于每个源批次的预排序：完全匹配标题优先，其次年份倒序，未知年份最后
   const sortBatchForNoOrder = (items: SearchResult[]) => {
@@ -871,23 +893,7 @@ function SearchPageClient() {
     </span>
   );
 
-  const renderListItem = (item: {
-    key: string;
-    title: string;
-    poster: string;
-    year?: string;
-    type: 'movie' | 'tv';
-    episodes?: number;
-    sourceName?: string;
-    sourceNames?: string[];
-    doubanId?: number;
-    desc?: string;
-    vodRemarks?: string;
-    isAggregate?: boolean;
-    source?: string;
-    id?: string;
-    query?: string;
-  }) => {
+  const renderListItem = (item: SearchListItem) => {
     const yearText = item.year && item.year !== 'unknown' ? item.year : '';
     const sourceTags = item.isAggregate
       ? Array.from(new Set(item.sourceNames || []))
@@ -919,8 +925,7 @@ function SearchPageClient() {
         key={item.key}
         type='button'
         onClick={() => {
-          savePartialCacheForPlayback();
-          router.push(itemUrl);
+          setSelectedListDetail({ ...item, url: itemUrl });
         }}
         className='group w-full rounded-2xl border border-gray-200/80 bg-white/90 p-3 text-left shadow-sm transition-all hover:border-green-300 hover:shadow-md dark:border-gray-700 dark:bg-gray-900/70 dark:hover:border-green-700'
       >
@@ -2350,6 +2355,24 @@ function SearchPageClient() {
           onClose={() => setPreviewImage(null)}
           imageUrl={previewImage.url}
           alt={previewImage.alt}
+        />
+      )}
+
+      {selectedListDetail && (
+        <DetailPanel
+          isOpen={!!selectedListDetail}
+          onClose={() => setSelectedListDetail(null)}
+          title={selectedListDetail.title}
+          poster={selectedListDetail.poster}
+          doubanId={selectedListDetail.doubanId}
+          type={selectedListDetail.type}
+          sourceId={selectedListDetail.id}
+          source={selectedListDetail.source}
+          onPlay={() => {
+            savePartialCacheForPlayback();
+            router.push(selectedListDetail.url);
+          }}
+          playLabel='播放'
         />
       )}
 

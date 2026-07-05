@@ -56,6 +56,7 @@ import {
   saveLocalEpisodeProgress,
 } from '@/lib/episode-progress';
 import { isNetdiskSource, normalizeNetdiskSource } from '@/lib/netdisk/source';
+import { shouldBlockSuspiciousAutoNext } from '@/lib/playback-auto-next';
 import {
   getRecommendationCache,
   recommendationCacheKeys,
@@ -8985,6 +8986,22 @@ function PlayPageClient() {
 
         // 监听视频播放结束事件，自动播放下一集（房员禁用）
         artPlayerRef.current.on('video:ended', () => {
+          const currentTime = artPlayerRef.current?.currentTime || 0;
+          const duration = artPlayerRef.current?.duration || 0;
+
+          if (shouldBlockSuspiciousAutoNext(currentTime, duration)) {
+            console.warn('[PlayPage] Blocked suspicious early auto-next', {
+              currentTime,
+              duration,
+              source: currentSourceRef.current,
+              id: currentIdRef.current,
+            });
+            if (artPlayerRef.current) {
+              artPlayerRef.current.notice.show = '來源疑似只播放廣告或提前結束，已停止自動下一集';
+            }
+            return;
+          }
+
           // 房员禁用自动播放下一集
           if (playSync.shouldDisableControls) {
             console.log('[PlayPage] Member cannot auto-play next episode');

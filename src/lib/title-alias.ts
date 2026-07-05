@@ -32,6 +32,9 @@ interface TMDBSearchItem {
   name?: string;
   original_title?: string;
   original_name?: string;
+  known_for?: TMDBSearchItem[];
+  popularity?: number;
+  vote_count?: number;
 }
 
 interface TMDBSearchResponse {
@@ -43,6 +46,11 @@ interface TMDBDetailResponse {
   name?: string;
   original_title?: string;
   original_name?: string;
+}
+
+interface TMDBCombinedCreditsResponse {
+  cast?: TMDBSearchItem[];
+  crew?: TMDBSearchItem[];
 }
 
 const aliasCache = new Map<string, { aliases: string[]; expires: number }>();
@@ -109,7 +117,28 @@ function getRegionalTitleAliases(query: string): string[] {
 }
 
 function getTMDBTitle(item?: TMDBSearchItem | TMDBDetailResponse | null) {
-  return item?.title || item?.name || item?.original_title || item?.original_name || '';
+  return (
+    item?.title ||
+    item?.name ||
+    item?.original_title ||
+    item?.original_name ||
+    ''
+  );
+}
+
+function getTMDBTitles(item?: TMDBSearchItem | null): string[] {
+  if (!item) return [];
+  return [getTMDBTitle(item), item.original_title || item.original_name || ''];
+}
+
+function sortTMDBItemsByPopularity(items: TMDBSearchItem[]): TMDBSearchItem[] {
+  return items
+    .filter((item) => item.media_type === 'movie' || item.media_type === 'tv')
+    .sort(
+      (a, b) =>
+        (b.popularity || 0) - (a.popularity || 0) ||
+        (b.vote_count || 0) - (a.vote_count || 0)
+    );
 }
 
 async function fetchTMDBJson<T>(url: string): Promise<T> {
@@ -132,7 +161,8 @@ async function resolveFromTMDB(query: string): Promise<string[]> {
   const apiKey = config.SiteConfig.TMDBApiKey?.split(',')[0]?.trim();
   if (!apiKey) return [];
 
-  const baseUrl = config.SiteConfig.TMDBReverseProxy || 'https://api.themoviedb.org';
+  const baseUrl =
+    config.SiteConfig.TMDBReverseProxy || 'https://api.themoviedb.org';
   const normalizedQuery = normalizeAliasName(query);
   const searchLanguages = ['zh-TW', 'zh-HK', 'zh-CN'];
   const searchResults = await Promise.all(
@@ -141,9 +171,7 @@ async function resolveFromTMDB(query: string): Promise<string[]> {
         apiKey
       )}&language=${language}&query=${encodeURIComponent(query)}&page=1`;
       const data = await fetchTMDBJson<TMDBSearchResponse>(url);
-      return (data.results || []).filter(
-        (item) => item.media_type === 'movie' || item.media_type === 'tv'
-      );
+      return data.results || [];
     })
   );
 
@@ -152,34 +180,69 @@ async function resolveFromTMDB(query: string): Promise<string[]> {
     .map((item, index) => {
       const title = getTMDBTitle(item);
       const normalizedTitle = normalizeAliasName(title);
-      const score = normalizedTitle === normalizedQuery
-        ? 2
-        : normalizedTitle.includes(normalizedQuery)
-          ? 1
-          : 0;
+      let score = 0;
+      if (normalizedTitle === normalizedQuery) {
+        score = item.media_type === 'person' ? 3 : 2;
+      } else if (
+        normalizedTitle &&
+        item.media_type === 'person' &&
+        normalizedQuery.includes(normalizedTitle)
+      ) {
+        score = 2;
+      } else if (normalizedTitle.includes(normalizedQuery)) {
+        score = 1;
+      }
       return { item, index, score };
     })
     .filter((candidate) => candidate.score > 0);
 
-  const selected = candidates.sort((a, b) => b.score - a.score || a.index - b.index)[0]?.item;
-  if (!selected?.id || !selected.media_type || selected.media_type === 'person') return [];
+  const selected = candidates.sort(
+    (a, b) => b.score - a.score || a.index - b.index
+  )[0]?.item;
+  if (!selected?.id || !selected.media_type) return [];
+
+  if (selected.media_type === 'person') {
+    const url = `${baseUrl}/3/person/${
+      selected.id
+    }/combined_credits?api_key=${encodeURIComponent(apiKey)}&language=zh-CN`;
+    const credits = await fetchTMDBJson<TMDBCombinedCreditsResponse>(url).catch(
+      () => null
+    );
+    const names = [
+      ...sortTMDBItemsByPopularity(selected.known_for || []).flatMap(
+        getTMDBTitles
+      ),
+      ...sortTMDBItemsByPopularity([
+        ...(credits?.cast || []),
+        ...(credits?.crew || []),
+      ]).flatMap(getTMDBTitles),
+    ];
+    return orderAliases(names, query);
+  }
 
   const detailLanguages = ['zh-CN', 'zh-TW', 'zh-HK'];
   const details = await Promise.all(
     detailLanguages.map(async (language) => {
-      const url = `${baseUrl}/3/${selected.media_type}/${selected.id}?api_key=${encodeURIComponent(
-        apiKey
-      )}&language=${language}`;
+      const url = `${baseUrl}/3/${selected.media_type}/${
+        selected.id
+      }?api_key=${encodeURIComponent(apiKey)}&language=${language}`;
       return fetchTMDBJson<TMDBDetailResponse>(url).catch(() => null);
     })
   );
 
-  return orderAliases([getTMDBTitle(selected), ...details.map(getTMDBTitle)], query);
+  return orderAliases(
+    [getTMDBTitle(selected), ...details.map(getTMDBTitle)],
+    query
+  );
 }
 
 async function resolveFromProviders(query: string): Promise<string[]> {
   const [doubanAliases, tmdbAliases] = await Promise.all([
-    withFallbackTimeout(resolveFromDouban(query), DOUBAN_TIMEOUT, [] as string[]),
+    withFallbackTimeout(
+      resolveFromDouban(query),
+      DOUBAN_TIMEOUT,
+      [] as string[]
+    ),
     withFallbackTimeout(resolveFromTMDB(query), TMDB_TIMEOUT, [] as string[]),
   ]);
 
@@ -217,8 +280,8 @@ async function resolveFromDouban(query: string): Promise<string[]> {
           const score = normalizedNames.includes(normalizedQuery)
             ? 2
             : normalizedNames.some((name) => name.includes(normalizedQuery))
-              ? 1
-              : 0;
+            ? 1
+            : 0;
           return { index, names, score };
         } catch {
           return null;

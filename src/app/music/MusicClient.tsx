@@ -275,8 +275,8 @@ export default function MusicClient({ children: _children }: { children?: React.
     isOpen: false,
     title: '',
     message: '',
-    onConfirm: () => {},
-    onCancel: () => {},
+    onConfirm: () => undefined,
+    onCancel: () => undefined,
   });
 
   // PiP 相关状态
@@ -1265,8 +1265,8 @@ export default function MusicClient({ children: _children }: { children?: React.
             isOpen: false,
             title: '',
             message: '',
-            onConfirm: () => {},
-            onCancel: () => {},
+            onConfirm: () => undefined,
+            onCancel: () => undefined,
           });
         }
       },
@@ -1275,8 +1275,8 @@ export default function MusicClient({ children: _children }: { children?: React.
           isOpen: false,
           title: '',
           message: '',
-          onConfirm: () => {},
-          onCancel: () => {},
+          onConfirm: () => undefined,
+          onCancel: () => undefined,
         });
       },
     });

@@ -1,4 +1,4 @@
-/* eslint-disable no-console, @typescript-eslint/no-explicit-any, @typescript-eslint/no-non-null-assertion */
+/* eslint-disable no-console, @typescript-eslint/no-explicit-any, @typescript-eslint/no-non-null-assertion, @typescript-eslint/no-var-requires, no-case-declarations */
 
 import { AdminConfig } from './admin.types';
 import { MusicPlayRecord } from './db.client';

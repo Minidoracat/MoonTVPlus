@@ -2,8 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 
 import { getAuthInfoFromCookie } from '@/lib/auth';
 import { isTVModeEnabled } from '@/lib/tv-mode';
-
-const { listTVRemoteDevices } = require('@/lib/tv-remote-hub');
+import { listTVRemoteDevices } from '@/lib/tv-remote-hub';
 
 export const runtime = 'nodejs';
 

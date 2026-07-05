@@ -726,7 +726,7 @@ function applyLegadoSelector($: cheerio.CheerioAPI, current: cheerio.Cheerio<any
   if (
     tokens.length > 1
     && tokens.every((token) => !/[>+~]/.test(token))
-    && tokens.some((token) => /(?:\[!?\-?\d+\]|\[-?\d*:|-?\d+\]$|\.-?\d+(?::\-?\d*){0,2})$/.test(token))
+    && tokens.some((token) => /(?:\[!?-?\d+\]|\[-?\d*:|-?\d+\]$|\.-?\d+(?::-?\d*){0,2})$/.test(token))
   ) {
     let next = current;
     for (const token of tokens) {
@@ -1077,7 +1077,9 @@ async function resolveLegadoConfig(): Promise<ResolvedLegadoConfig> {
     try {
       const parsed = JSON.parse(envJson);
       sources = normalizeImportedSources(parsed);
-    } catch {}
+    } catch {
+      // Ignore invalid env source JSON.
+    }
   }
 
   try {
@@ -1087,7 +1089,9 @@ async function resolveLegadoConfig(): Promise<ResolvedLegadoConfig> {
       const subscriptionSources = await legadoSubscriptionStore.getSourcesForSubscriptions(config.OPDSConfig.LegadoSubscriptions || []);
       sources = [...sources, ...subscriptionSources];
     }
-  } catch {}
+  } catch {
+    // Ignore storage/config bootstrap failures; env config still applies.
+  }
 
   return { enabled, cacheTTL, sources: sources.filter((source) => !!source.url && source.enabled !== false) };
 }

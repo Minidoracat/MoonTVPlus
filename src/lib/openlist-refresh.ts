@@ -243,7 +243,7 @@ async function performScan(
     const pageSize = 100;
     let total = 0;
 
-    while (true) {
+    for (;;) {
       const listResponse = await client.listDirectory(rootPath, currentPage, pageSize, true);
 	  console.log(listResponse);
       if (listResponse.code !== 200) {

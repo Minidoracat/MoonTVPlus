@@ -68,6 +68,7 @@ function textValue(value: any): string {
 function sanitizeXmlForParsing(xml: string): string {
   return xml
     .replace(/^\uFEFF/, '')
+    // eslint-disable-next-line no-control-regex
     .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, '')
     .replace(/&(?!(?:#\d+|#x[a-fA-F0-9]+|amp|lt|gt|quot|apos);)/g, '&amp;');
 }

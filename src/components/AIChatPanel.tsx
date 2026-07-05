@@ -518,7 +518,7 @@ export default function AIChatPanel({
         let assistantMessage = '';
         let buffer = ''; // 缓冲区，用于保存不完整的行
 
-        while (true) {
+        for (;;) {
           const { done, value } = await reader.read();
           if (done) break;
 

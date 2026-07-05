@@ -31,7 +31,9 @@ class EmbyManager {
   private static instance: EmbyManager;
   private clients: Map<string, EmbyClient> = new Map();
 
-  private constructor() {}
+  private constructor() {
+    // Singleton.
+  }
 
   static getInstance(): EmbyManager {
     if (!EmbyManager.instance) {

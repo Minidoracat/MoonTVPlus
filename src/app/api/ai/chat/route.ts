@@ -78,7 +78,7 @@ function transformToSSE(
       let inThinkingBlock = false; // 是否在thinking块内
 
       try {
-        while (true) {
+        for (;;) {
           const { done, value } = await reader.read();
           if (done) break;
 

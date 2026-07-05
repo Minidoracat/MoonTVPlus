@@ -64,7 +64,9 @@ export default function TVRemoteReceiver() {
             detail: { url },
           }));
         }
-      } catch {}
+      } catch {
+        // Ignore malformed localRemoteUrl hash payloads.
+      }
     };
 
     const onLocalRemoteKey = (event: Event) => {

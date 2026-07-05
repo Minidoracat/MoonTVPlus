@@ -40,7 +40,7 @@ function buildCommentPrompt(
   movieName: string,
   movieInfo?: string,
   searchResults?: string,
-  count: number = 10
+  count = 10
 ): string {
   return `你是一个影评生成助手。请生成真实自然的观众评论。
 

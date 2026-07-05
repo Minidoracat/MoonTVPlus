@@ -1,4 +1,5 @@
 module.exports = {
+  ignorePatterns: ['src/lib/pancheck/vendor/**'],
   env: {
     browser: true,
     es2021: true,

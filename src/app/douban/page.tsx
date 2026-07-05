@@ -24,6 +24,7 @@ function DoubanPageClient() {
   const searchParams = useSearchParams();
   const [doubanData, setDoubanData] = useState<DoubanItem[]>([]);
   const [loading, setLoading] = useState(false);
+  const [loadError, setLoadError] = useState('');
   const [currentPage, setCurrentPage] = useState(0);
   const [hasMore, setHasMore] = useState(true);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
@@ -279,6 +280,7 @@ function DoubanPageClient() {
 
     try {
       setLoading(true);
+      setLoadError('');
       // 确保在加载初始数据时重置页面状态
       setDoubanData([]);
       setCurrentPage(0);
@@ -305,7 +307,15 @@ function DoubanPageClient() {
           throw new Error('没有找到对应的分类');
         }
       } else if (type === 'anime' && primarySelection === '每日放送') {
-        const calendarData = await GetBangumiCalendarData();
+        const calendarData = await Promise.race([
+          GetBangumiCalendarData(),
+          new Promise<never>((_, reject) =>
+            setTimeout(
+              () => reject(new Error('Bangumi calendar 请求超时')),
+              8000
+            )
+          ),
+        ]);
         const weekdayData = calendarData.find(
           (item) => item.weekday.en === selectedWeekday
         );
@@ -383,6 +393,7 @@ function DoubanPageClient() {
         if (isSnapshotEqual(requestSnapshot, currentSnapshot)) {
           setDoubanData(data.list);
           setHasMore(data.list.length !== 0);
+          setLoadError('');
           setLoading(false);
         } else {
           console.log('参数不一致，不执行任何操作，避免设置过期数据');
@@ -393,6 +404,11 @@ function DoubanPageClient() {
       }
     } catch (err) {
       console.error(err);
+      setLoadError(
+        type === 'anime' && primarySelection === '每日放送'
+          ? 'Bangumi 暂时无法读取，请稍后再试。'
+          : '内容加载失败，请稍后再试。'
+      );
       setLoading(false); // 发生错误时总是停止loading状态
     }
   }, [
@@ -812,28 +828,36 @@ function DoubanPageClient() {
         {/* 内容展示区域 */}
         <div ref={contentRef} className='max-w-[95%] mx-auto mt-8 overflow-visible'>
           {/* 内容网格 */}
-          <div className='justify-start grid grid-cols-3 gap-x-2 gap-y-12 px-0 sm:px-2 sm:grid-cols-[repeat(auto-fill,minmax(160px,1fr))] sm:gap-x-8 sm:gap-y-20'>
-            {loading || !selectorsReady
-              ? // 显示骨架屏
-                skeletonData.map((index) => <DoubanCardSkeleton key={index} />)
-              : // 显示实际数据
-                doubanData.map((item, index) => (
-                  <div key={`${item.title}-${index}`} className='w-full'>
-                    <VideoCard
-                      from='douban'
-                      title={item.title}
-                      poster={item.poster}
-                      douban_id={Number(item.id)}
-                      rate={item.rate}
-                      year={item.year}
-                      type={type === 'movie' ? 'movie' : ''} // 电影类型严格控制，tv 不控
-                      isBangumi={
-                        type === 'anime' && primarySelection === '每日放送'
-                      }
-                    />
-                  </div>
-                ))}
-          </div>
+          {loadError && !loading ? (
+            <div className='rounded-2xl border border-yellow-500/30 bg-yellow-500/10 px-5 py-4 text-sm text-yellow-700 dark:text-yellow-200'>
+              {loadError}
+            </div>
+          ) : (
+            <div className='justify-start grid grid-cols-3 gap-x-2 gap-y-12 px-0 sm:px-2 sm:grid-cols-[repeat(auto-fill,minmax(160px,1fr))] sm:gap-x-8 sm:gap-y-20'>
+              {loading || !selectorsReady
+                ? // 显示骨架屏
+                  skeletonData.map((index) => (
+                    <DoubanCardSkeleton key={index} />
+                  ))
+                : // 显示实际数据
+                  doubanData.map((item, index) => (
+                    <div key={`${item.title}-${index}`} className='w-full'>
+                      <VideoCard
+                        from='douban'
+                        title={item.title}
+                        poster={item.poster}
+                        douban_id={Number(item.id)}
+                        rate={item.rate}
+                        year={item.year}
+                        type={type === 'movie' ? 'movie' : ''} // 电影类型严格控制，tv 不控
+                        isBangumi={
+                          type === 'anime' && primarySelection === '每日放送'
+                        }
+                      />
+                    </div>
+                  ))}
+            </div>
+          )}
 
           {/* 加载更多指示器 */}
           {hasMore && !loading && (
@@ -862,7 +886,7 @@ function DoubanPageClient() {
           )}
 
           {/* 空状态 */}
-          {!loading && doubanData.length === 0 && (
+          {!loading && !loadError && doubanData.length === 0 && (
             <div className='text-center text-gray-500 py-8'>暂无相关内容</div>
           )}
         </div>

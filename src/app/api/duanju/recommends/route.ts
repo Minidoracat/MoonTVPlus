@@ -8,6 +8,7 @@ import { SearchResult } from '@/lib/types';
 import { cleanHtmlTags } from '@/lib/utils';
 
 export const runtime = 'nodejs';
+export const dynamic = 'force-dynamic';
 
 // 服务端内存缓存
 let cachedRecommends: {

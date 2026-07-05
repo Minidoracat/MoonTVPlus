@@ -69,7 +69,46 @@ describe('resolveTitleAliases', () => {
     ]);
   });
 
-  it('expands actor or director names to TMDB known works', async () => {
+  it('does not expand actor or director names in title mode', async () => {
+    (getConfig as jest.Mock).mockResolvedValue({
+      SiteConfig: {
+        TMDBApiKey: 'tmdb-key',
+        TMDBReverseProxy: 'https://tmdb.example',
+      },
+    });
+    (fetchDoubanData as jest.Mock).mockResolvedValue([]);
+    global.fetch = jest.fn(async (url: string) => {
+      if (url.includes('/search/multi')) {
+        return {
+          ok: true,
+          json: async () => ({
+            results: [
+              {
+                id: 42,
+                media_type: 'person',
+                name: '周星驰',
+                known_for: [
+                  {
+                    id: 1,
+                    media_type: 'movie',
+                    title: '功夫',
+                    original_title: 'Kung Fu Hustle',
+                    popularity: 90,
+                  },
+                ],
+              },
+            ],
+          }),
+        };
+      }
+
+      return { ok: false, status: 404 };
+    }) as unknown as typeof fetch;
+
+    await expect(resolveTitleAliases('周星驰')).resolves.toEqual([]);
+  });
+
+  it('expands actor or director names to TMDB known works in person mode', async () => {
     (getConfig as jest.Mock).mockResolvedValue({
       SiteConfig: {
         TMDBApiKey: 'tmdb-key',
@@ -135,7 +174,7 @@ describe('resolveTitleAliases', () => {
       return { ok: false, status: 404 };
     }) as unknown as typeof fetch;
 
-    await expect(resolveTitleAliases('周星驰')).resolves.toEqual([
+    await expect(resolveTitleAliases('周星驰', 'person')).resolves.toEqual([
       '功夫',
       '少林足球',
       '食神',

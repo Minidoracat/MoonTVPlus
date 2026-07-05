@@ -183,9 +183,11 @@ export async function GET(request: NextRequest) {
 
   // 三地片名别名扩展（豆瓣又名）：与其他源搜索并行解析，失败退回仅用原词
   let resolvedAliases: string[] = [];
+  const aliasMode =
+    searchParams.get('aliasMode') === 'person' ? 'person' : 'title';
   const queriesPromise: Promise<string[]> =
     searchParams.get('alias') === '1'
-      ? resolveTitleAliases(query).then((aliases) => {
+      ? resolveTitleAliases(query, aliasMode).then((aliases) => {
           if (aliases.length > 0) {
             resolvedAliases = aliases;
             console.log('[Search] 片名别名扩展:', query, '->', aliases);

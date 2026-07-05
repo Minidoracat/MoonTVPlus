@@ -32,7 +32,10 @@ import {
   subscribeToDataUpdates,
 } from '@/lib/db.client';
 import { titleMatchesSearchOrAlias } from '@/lib/search-title-match';
-import { appendSpecialSourceParam, isSpecialSourcesEnabledOnDevice } from '@/lib/special-source.client';
+import {
+  appendSpecialSourceParam,
+  isSpecialSourcesEnabledOnDevice,
+} from '@/lib/special-source.client';
 import { SearchResult } from '@/lib/types';
 import { processImageUrl } from '@/lib/utils';
 
@@ -54,11 +57,14 @@ const PANSOU_CLOUD_TYPE_OPTIONS = Object.entries(CLOUD_TYPE_NAMES).map(
   ([value, label]) => ({ value, label })
 );
 
+type VideoSearchMode = 'title' | 'person';
+
 type SearchCachePayload = {
   status: 'complete' | 'partial';
   results: SearchResult[];
   query: string;
   updatedAt: number;
+  searchMode?: VideoSearchMode;
   // 三地片名搜索的别名集合（可选，旧缓存无此字段）
   aliases?: string[];
 };
@@ -125,6 +131,8 @@ function SearchPageClient() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const submittedSearchQuery = searchParams.get('q')?.trim() || '';
+  const searchMode: VideoSearchMode =
+    searchParams.get('mode') === 'person' ? 'person' : 'title';
   const currentQueryRef = useRef<string>('');
   const [searchQuery, setSearchQuery] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -176,7 +184,11 @@ function SearchPageClient() {
       if (!cached) return null;
 
       const parsed = JSON.parse(cached) as SearchCachePayload;
-      if (parsed?.status === 'complete' && Array.isArray(parsed.results)) {
+      if (
+        parsed?.status === 'complete' &&
+        parsed.searchMode === searchMode &&
+        Array.isArray(parsed.results)
+      ) {
         return parsed;
       }
     } catch (error) {
@@ -199,6 +211,7 @@ function SearchPageClient() {
         results,
         query: query.trim(),
         updatedAt: Date.now(),
+        searchMode,
         aliases: searchAliasesRef.current,
       };
       sessionStorage.setItem(cacheKey, JSON.stringify(payload));
@@ -226,6 +239,28 @@ function SearchPageClient() {
     } catch (error) {
       console.error('Failed to clear cached results:', error);
     }
+  };
+
+  const buildSearchUrl = (
+    query: string,
+    type: 'video' | 'pansou' | 'acg' = activeTab,
+    mode: VideoSearchMode = searchMode
+  ) => {
+    const params = new URLSearchParams();
+    params.set('q', query);
+    params.set('type', type);
+    if (type === 'video') params.set('mode', mode);
+    return `/search?${params.toString()}`;
+  };
+
+  const getAliasParam = () => {
+    const shouldResolveAliases =
+      searchMode === 'person' ||
+      localStorage.getItem('crossRegionTitleSearch') !== 'false';
+
+    return shouldResolveAliases
+      ? `&alias=1&aliasMode=${searchMode === 'person' ? 'person' : 'title'}`
+      : '';
   };
 
   const getGroupRef = (key: string) => {
@@ -1188,14 +1223,14 @@ function SearchPageClient() {
           // 如果转换后的文本与原文本不同，更新 URL
           if (originalQuery !== query) {
             const trimmedConverted = query.trim();
+            const nextType =
+              searchParams.get('type') === 'pansou'
+                ? 'pansou'
+                : searchParams.get('type') === 'acg'
+                ? 'acg'
+                : 'video';
             // 使用 replace 而不是 push，避免在历史记录中留下繁体版本
-            router.replace(
-              `/search?q=${encodeURIComponent(trimmedConverted)}${
-                searchParams.get('type')
-                  ? `&type=${searchParams.get('type')}`
-                  : ''
-              }`
-            );
+            router.replace(buildSearchUrl(trimmedConverted, nextType));
             return; // 等待 URL 更新后重新触发此 effect
           }
         } catch (error) {
@@ -1313,11 +1348,8 @@ function SearchPageClient() {
         setUseFluidSearch(currentFluidSearch);
       }
 
-      // 三地片名别名搜索（开启时后端用豆瓣别名扩展搜索关键词）
-      const aliasParam =
-        localStorage.getItem('crossRegionTitleSearch') !== 'false'
-          ? '&alias=1'
-          : '';
+      // 片名模式只做三地片名别名；人物模式才展开演员/导演作品，避免默认搜索过度发散。
+      const aliasParam = getAliasParam();
 
       if (currentFluidSearch) {
         // 流式搜索：打开新的流式连接
@@ -1446,9 +1478,7 @@ function SearchPageClient() {
             if (currentQueryRef.current !== trimmed) return;
 
             // 三地片名搜索：记录别名，供精确搜索过滤匹配
-            applySearchAliases(
-              Array.isArray(data.aliases) ? data.aliases : []
-            );
+            applySearchAliases(Array.isArray(data.aliases) ? data.aliases : []);
 
             if (data.results && Array.isArray(data.results)) {
               const activeYearOrder =
@@ -1573,15 +1603,15 @@ function SearchPageClient() {
     // 根据当前选项卡执行不同的搜索
     if (activeTab === 'video') {
       // 影视搜索
-      router.push(`/search?q=${encodeURIComponent(trimmed)}&type=video`);
+      router.push(buildSearchUrl(trimmed, 'video'));
       // 其余由 searchParams 变化的 effect 处理
     } else if (activeTab === 'pansou') {
       // 网盘搜索 - 触发搜索
-      router.push(`/search?q=${encodeURIComponent(trimmed)}&type=pansou`);
+      router.push(buildSearchUrl(trimmed, 'pansou'));
       setTriggerPansouSearch((prev) => !prev); // 切换状态来触发搜索
     } else if (activeTab === 'acg') {
       // ACG 磁力搜索 - 触发搜索
-      router.push(`/search?q=${encodeURIComponent(trimmed)}&type=acg`);
+      router.push(buildSearchUrl(trimmed, 'acg'));
       setTriggerAcgSearch((prev) => !prev);
     }
   };
@@ -1614,21 +1644,15 @@ function SearchPageClient() {
     // 根据当前选项卡执行不同的搜索
     if (activeTab === 'video') {
       // 影视搜索
-      router.push(
-        `/search?q=${encodeURIComponent(processedSuggestion)}&type=video`
-      );
+      router.push(buildSearchUrl(processedSuggestion, 'video'));
       // 其余由 searchParams 变化的 effect 处理
     } else if (activeTab === 'pansou') {
       // 网盘搜索 - 触发搜索
-      router.push(
-        `/search?q=${encodeURIComponent(processedSuggestion)}&type=pansou`
-      );
+      router.push(buildSearchUrl(processedSuggestion, 'pansou'));
       setTriggerPansouSearch((prev) => !prev);
     } else if (activeTab === 'acg') {
       // ACG 磁力搜索 - 触发搜索
-      router.push(
-        `/search?q=${encodeURIComponent(processedSuggestion)}&type=acg`
-      );
+      router.push(buildSearchUrl(processedSuggestion, 'acg'));
       setTriggerAcgSearch((prev) => !prev);
     }
   };
@@ -1763,10 +1787,33 @@ function SearchPageClient() {
     // 如果有搜索关键词，更新 URL
     const currentQuery = searchParams.get('q');
     if (currentQuery) {
-      router.push(
-        `/search?q=${encodeURIComponent(currentQuery)}&type=${newTab}`
-      );
+      router.push(buildSearchUrl(currentQuery, newTab));
     }
+  };
+
+  const handleSearchModeChange = (mode: VideoSearchMode) => {
+    if (mode === searchMode) return;
+
+    const currentQuery = (
+      searchQuery.trim() ||
+      searchParams.get('q')?.trim() ||
+      ''
+    ).replace(/\s+/g, ' ');
+
+    applySearchAliases([]);
+    setIsFromCache(false);
+    setShowSuggestions(false);
+
+    if (currentQuery) {
+      setSearchQuery(currentQuery);
+      setShowResults(true);
+      setIsLoading(true);
+      router.push(buildSearchUrl(currentQuery, 'video', mode));
+      return;
+    }
+
+    router.replace(buildSearchUrl('', 'video', mode));
+    document.getElementById('searchInput')?.focus();
   };
 
   return (
@@ -1783,7 +1830,11 @@ function SearchPageClient() {
                 value={searchQuery}
                 onChange={handleInputChange}
                 onFocus={handleInputFocus}
-                placeholder='搜索片名、导演、演员...'
+                placeholder={
+                  searchMode === 'person'
+                    ? '搜尋演員、導演...'
+                    : '搜尋電影、電視劇...'
+                }
                 autoComplete='off'
                 className='w-full h-12 rounded-lg bg-gray-50/80 py-3 pl-10 pr-12 text-sm text-gray-700 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-green-400 focus:bg-white border border-gray-200/50 shadow-sm dark:bg-gray-800 dark:text-gray-300 dark:placeholder-gray-500 dark:focus:bg-gray-700 dark:border-gray-700'
               />
@@ -1819,9 +1870,7 @@ function SearchPageClient() {
                   setSearchQuery(trimmed);
                   setShowResults(true);
                   setShowSuggestions(false);
-                  router.push(
-                    `/search?q=${encodeURIComponent(trimmed)}&type=${activeTab}`
-                  );
+                  router.push(buildSearchUrl(trimmed, activeTab));
                   if (activeTab === 'pansou') {
                     setTriggerPansouSearch((prev) => !prev);
                   } else if (activeTab === 'acg') {
@@ -1866,6 +1915,33 @@ function SearchPageClient() {
               }
             />
           </div>
+
+          {activeTab === 'video' && (
+            <div className='mt-3 flex justify-center'>
+              <div className='inline-flex rounded-full bg-gray-100 p-1 text-xs font-medium text-gray-500 shadow-sm dark:bg-gray-800 dark:text-gray-400'>
+                {[
+                  { label: '片名', value: 'title' },
+                  { label: '演員/導演', value: 'person' },
+                ].map((option) => (
+                  <button
+                    key={option.value}
+                    type='button'
+                    onClick={() =>
+                      handleSearchModeChange(option.value as VideoSearchMode)
+                    }
+                    aria-pressed={searchMode === option.value}
+                    className={`rounded-full px-3 py-1.5 transition-colors ${
+                      searchMode === option.value
+                        ? 'bg-green-500 text-white shadow'
+                        : 'hover:bg-gray-200 dark:hover:bg-gray-700'
+                    }`}
+                  >
+                    {option.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
 
           {activeTab === 'pansou' &&
             netdiskSearchEnabled &&
@@ -2334,26 +2410,14 @@ function SearchPageClient() {
                         // 根据当前选项卡执行不同的搜索
                         if (activeTab === 'video') {
                           // 影视搜索
-                          router.push(
-                            `/search?q=${encodeURIComponent(
-                              item.trim()
-                            )}&type=video`
-                          );
+                          router.push(buildSearchUrl(item.trim(), 'video'));
                         } else if (activeTab === 'pansou') {
                           // 网盘搜索
-                          router.push(
-                            `/search?q=${encodeURIComponent(
-                              item.trim()
-                            )}&type=pansou`
-                          );
+                          router.push(buildSearchUrl(item.trim(), 'pansou'));
                           setTriggerPansouSearch((prev) => !prev);
                         } else if (activeTab === 'acg') {
                           // ACG 磁力搜索
-                          router.push(
-                            `/search?q=${encodeURIComponent(
-                              item.trim()
-                            )}&type=acg`
-                          );
+                          router.push(buildSearchUrl(item.trim(), 'acg'));
                           setTriggerAcgSearch((prev) => !prev);
                         }
                       }}

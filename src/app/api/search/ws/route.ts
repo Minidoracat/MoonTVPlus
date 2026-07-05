@@ -50,9 +50,11 @@ export async function GET(request: NextRequest) {
   ]);
 
   // 三地片名别名扩展（豆瓣又名）：异步解析，不阻塞 SSE 流的建立与其他源搜索
+  const aliasMode =
+    searchParams.get('aliasMode') === 'person' ? 'person' : 'title';
   const queriesPromise: Promise<string[]> =
     searchParams.get('alias') === '1'
-      ? resolveTitleAliases(query).then((aliases) => {
+      ? resolveTitleAliases(query, aliasMode).then((aliases) => {
           if (aliases.length > 0) {
             console.log('[Search WS] 片名别名扩展:', query, '->', aliases);
           }

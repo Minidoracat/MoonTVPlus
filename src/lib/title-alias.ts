@@ -53,6 +53,8 @@ interface TMDBCombinedCreditsResponse {
   crew?: TMDBSearchItem[];
 }
 
+export type TitleAliasMode = 'title' | 'person';
+
 const aliasCache = new Map<string, { aliases: string[]; expires: number }>();
 const ALIAS_CACHE_TTL = 24 * 60 * 60 * 1000; // 别名几乎不变，缓存 24 小时
 const ALIAS_NEGATIVE_TTL = 5 * 60 * 1000; // 解析失败短缓存，避免豆瓣被挡时反复重试拖慢搜索
@@ -156,7 +158,10 @@ async function fetchTMDBJson<T>(url: string): Promise<T> {
   }
 }
 
-async function resolveFromTMDB(query: string): Promise<string[]> {
+async function resolveFromTMDB(
+  query: string,
+  mode: TitleAliasMode
+): Promise<string[]> {
   const config = await getConfig();
   const apiKey = config.SiteConfig.TMDBApiKey?.split(',')[0]?.trim();
   if (!apiKey) return [];
@@ -202,6 +207,8 @@ async function resolveFromTMDB(query: string): Promise<string[]> {
   if (!selected?.id || !selected.media_type) return [];
 
   if (selected.media_type === 'person') {
+    if (mode !== 'person') return [];
+
     const url = `${baseUrl}/3/person/${
       selected.id
     }/combined_credits?api_key=${encodeURIComponent(apiKey)}&language=zh-CN`;
@@ -220,6 +227,8 @@ async function resolveFromTMDB(query: string): Promise<string[]> {
     return orderAliases(names, query);
   }
 
+  if (mode === 'person') return [];
+
   const detailLanguages = ['zh-CN', 'zh-TW', 'zh-HK'];
   const details = await Promise.all(
     detailLanguages.map(async (language) => {
@@ -236,14 +245,29 @@ async function resolveFromTMDB(query: string): Promise<string[]> {
   );
 }
 
-async function resolveFromProviders(query: string): Promise<string[]> {
+async function resolveFromProviders(
+  query: string,
+  mode: TitleAliasMode
+): Promise<string[]> {
+  if (mode === 'person') {
+    return withFallbackTimeout(
+      resolveFromTMDB(query, 'person'),
+      TMDB_TIMEOUT,
+      [] as string[]
+    );
+  }
+
   const [doubanAliases, tmdbAliases] = await Promise.all([
     withFallbackTimeout(
       resolveFromDouban(query),
       DOUBAN_TIMEOUT,
       [] as string[]
     ),
-    withFallbackTimeout(resolveFromTMDB(query), TMDB_TIMEOUT, [] as string[]),
+    withFallbackTimeout(
+      resolveFromTMDB(query, 'title'),
+      TMDB_TIMEOUT,
+      [] as string[]
+    ),
   ]);
 
   return orderAliases(
@@ -304,16 +328,20 @@ async function resolveFromDouban(query: string): Promise<string[]> {
 /**
  * 解析片名的跨地区别名，失败或超时返回空数组（不影响原始搜索）
  */
-export async function resolveTitleAliases(query: string): Promise<string[]> {
+export async function resolveTitleAliases(
+  query: string,
+  mode: TitleAliasMode = 'title'
+): Promise<string[]> {
   const key = query.trim();
   if (!key) return [];
-  const cached = aliasCache.get(key);
+  const cacheKey = `${mode}:${key}`;
+  const cached = aliasCache.get(cacheKey);
   if (cached && cached.expires > Date.now()) return cached.aliases;
 
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     const aliases = await Promise.race([
-      resolveFromProviders(key),
+      resolveFromProviders(key, mode),
       new Promise<string[]>((_, reject) => {
         timer = setTimeout(
           () => reject(new Error('alias resolve timeout')),
@@ -321,12 +349,12 @@ export async function resolveTitleAliases(query: string): Promise<string[]> {
         );
       }),
     ]);
-    setAliasCache(key, aliases);
+    setAliasCache(cacheKey, aliases);
     return aliases;
   } catch (error) {
     console.warn('[TitleAlias] 解析片名别名失败:', (error as Error).message);
     // 失败短缓存，避免豆瓣不可用时每次搜索都等满超时
-    setAliasCache(key, [], ALIAS_NEGATIVE_TTL);
+    setAliasCache(cacheKey, [], ALIAS_NEGATIVE_TTL);
     return [];
   } finally {
     if (timer) clearTimeout(timer);

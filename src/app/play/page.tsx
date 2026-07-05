@@ -7661,19 +7661,9 @@ function PlayPageClient() {
                   return;
                 }
 
-                // 如果在 PWA 模式下，直接使用容器全屏（可以隐藏状态栏）
+                // iOS PWA 原生 video 全屏仍会保留状态栏，且可能锁在竖屏；改用网页全屏保留弹幕和控制栏。
                 if (isPWA) {
-                  const container = artPlayerRef.current.template.$container;
-                  if (container && container.webkitEnterFullscreen) {
-                    container.webkitEnterFullscreen().catch((err: Error) => {
-                      console.error('PWA 全屏失败:', err);
-                      // 如果失败，降级使用网页全屏
-                      artPlayerRef.current.fullscreenWeb = true;
-                    });
-                  } else {
-                    // 不支持原生全屏，使用网页全屏
-                    artPlayerRef.current.fullscreenWeb = true;
-                  }
+                  artPlayerRef.current.fullscreenWeb = true;
                   return;
                 }
 
@@ -7746,7 +7736,7 @@ function PlayPageClient() {
                       <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="2"/>
                       <path d="M12 16v-4m0-4h.01" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
                     </svg>
-                    <span>将网站添加到主屏幕（PWA）后，网页全屏可以完全全屏</span>
+                    <span>iOS 会保留系统状态栏；网页全屏可保留弹幕和播放器控制栏</span>
                   </div>
                 </div>
               `;

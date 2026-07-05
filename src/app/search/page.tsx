@@ -31,6 +31,7 @@ import {
   getSearchHistory,
   subscribeToDataUpdates,
 } from '@/lib/db.client';
+import { titleMatchesSearchOrAlias } from '@/lib/search-title-match';
 import { appendSpecialSourceParam, isSpecialSourcesEnabledOnDevice } from '@/lib/special-source.client';
 import { SearchResult } from '@/lib/types';
 import { processImageUrl } from '@/lib/utils';
@@ -78,6 +79,11 @@ type SearchListItem = {
   source?: string;
   id?: string;
   query?: string;
+  cmsData?: {
+    desc?: string;
+    episodes?: string[];
+    episodes_titles?: string[];
+  };
 };
 
 function SearchPageClient() {
@@ -431,18 +437,7 @@ function SearchPageClient() {
 
   // 辅助函数：检查标题是否包含搜索词（用于精确搜索）
   const titleContainsQuery = (title: string, query: string): boolean => {
-    if (!exactSearch) return true; // 如果未开启精确搜索，不过滤
-    if (!query || !title) return true; // 如果没有搜索词或标题，不过滤
-
-    const normalizedTitle = title.toLowerCase();
-    const normalizedQuery = query.toLowerCase();
-
-    if (normalizedTitle.includes(normalizedQuery)) return true;
-
-    // 三地片名搜索：标题命中任一别名（如「肖申克的救赎」）也视为精确匹配
-    return searchAliases.some(
-      (alias) => alias && normalizedTitle.includes(alias.toLowerCase())
-    );
+    return titleMatchesSearchOrAlias(title, query, searchAliases, exactSearch);
   };
 
   const allExactSearchResults = useMemo(() => {
@@ -2131,6 +2126,15 @@ function SearchPageClient() {
                                   desc,
                                   vodRemarks,
                                   isAggregate: true,
+                                  cmsData: douban_id
+                                    ? undefined
+                                    : {
+                                        desc,
+                                        episodes: Array.from(
+                                          { length: episodes || 0 },
+                                          () => ''
+                                        ),
+                                      },
                                   query:
                                     searchQuery.trim() !== title
                                       ? searchQuery.trim()
@@ -2153,6 +2157,17 @@ function SearchPageClient() {
                                     episodes={episodes}
                                     source_names={source_names}
                                     douban_id={douban_id}
+                                    cmsData={
+                                      douban_id
+                                        ? undefined
+                                        : {
+                                            desc,
+                                            episodes: Array.from(
+                                              { length: episodes || 0 },
+                                              () => ''
+                                            ),
+                                          }
+                                    }
                                     query={
                                       searchQuery.trim() !== title
                                         ? searchQuery.trim()
@@ -2185,6 +2200,13 @@ function SearchPageClient() {
                                   type,
                                   desc: item.desc,
                                   vodRemarks: item.vod_remarks,
+                                  cmsData: item.douban_id
+                                    ? undefined
+                                    : {
+                                        desc: item.desc,
+                                        episodes: item.episodes,
+                                        episodes_titles: item.episodes_titles,
+                                      },
                                 });
                               }
 
@@ -2204,6 +2226,16 @@ function SearchPageClient() {
                                     source={item.source}
                                     source_name={item.source_name}
                                     douban_id={item.douban_id}
+                                    cmsData={
+                                      item.douban_id
+                                        ? undefined
+                                        : {
+                                            desc: item.desc,
+                                            episodes: item.episodes,
+                                            episodes_titles:
+                                              item.episodes_titles,
+                                          }
+                                    }
                                     query={
                                       searchQuery.trim() !== item.title
                                         ? searchQuery.trim()
@@ -2366,6 +2398,7 @@ function SearchPageClient() {
           poster={selectedListDetail.poster}
           doubanId={selectedListDetail.doubanId}
           type={selectedListDetail.type}
+          cmsData={selectedListDetail.cmsData}
           sourceId={selectedListDetail.id}
           source={selectedListDetail.source}
           onPlay={() => {

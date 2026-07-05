@@ -97,6 +97,33 @@ interface GalleryImage {
   imageType: 'backdrop' | 'poster';
 }
 
+interface DoubanSearchResult {
+  id: string;
+  title: string;
+}
+
+interface DoubanDetailResult {
+  title?: string;
+  original_title?: string;
+  year?: string;
+  pic?: {
+    large?: string;
+    normal?: string;
+  };
+  rating?: {
+    value: number;
+    count: number;
+  };
+  intro?: string;
+  genres?: string[];
+  directors?: Array<{ name: string; id?: string }>;
+  actors?: Array<{ name: string; id?: string }>;
+  countries?: string[];
+  languages?: string[];
+  durations?: string[];
+  episodes_count?: number;
+}
+
 const DetailPanel: React.FC<DetailPanelProps> = ({
   isOpen,
   onClose,
@@ -380,6 +407,31 @@ const DetailPanel: React.FC<DetailPanelProps> = ({
       return;
     }
 
+    const applyDoubanDetail = (data: DoubanDetailResult) => {
+      const detailData = {
+        title: data.title || title,
+        originalTitle: data.original_title,
+        year: data.year,
+        poster: data.pic?.large || data.pic?.normal || poster,
+        rating: data.rating
+          ? {
+              value: data.rating.value,
+              count: data.rating.count,
+            }
+          : undefined,
+        intro: data.intro,
+        genres: data.genres,
+        directors: data.directors,
+        actors: data.actors,
+        countries: data.countries,
+        languages: data.languages,
+        duration: data.durations?.[0],
+        episodesCount: data.episodes_count,
+      };
+      setDetailData(detailData);
+      setOriginalDetailData(detailData);
+    };
+
     const fetchDetail = async () => {
       setLoading(true);
       setError(null);
@@ -483,28 +535,7 @@ const DetailPanel: React.FC<DetailPanelProps> = ({
           }
           const data = await response.json();
 
-          const detailData = {
-            title: data.title,
-            originalTitle: data.original_title,
-            year: data.year,
-            poster: data.pic?.large || data.pic?.normal || poster,
-            rating: data.rating
-              ? {
-                  value: data.rating.value,
-                  count: data.rating.count,
-                }
-              : undefined,
-            intro: data.intro,
-            genres: data.genres,
-            directors: data.directors,
-            actors: data.actors,
-            countries: data.countries,
-            languages: data.languages,
-            duration: data.durations?.[0],
-            episodesCount: data.episodes_count,
-          };
-          setDetailData(detailData);
-          setOriginalDetailData(detailData);
+          applyDoubanDetail(data);
           return;
         }
 
@@ -512,7 +543,12 @@ const DetailPanel: React.FC<DetailPanelProps> = ({
         if (title) {
           setCurrentSource('tmdb');
           setOriginalSource('tmdb');
-          await fetchTmdbData();
+          try {
+            await fetchTmdbData();
+          } catch (tmdbError) {
+            const foundDouban = await fetchDoubanDataByTitle();
+            if (!foundDouban) throw tmdbError;
+          }
           return;
         }
 
@@ -660,6 +696,33 @@ const DetailPanel: React.FC<DetailPanelProps> = ({
       }
 
       throw new Error('未找到相关内容');
+    };
+
+    const fetchDoubanDataByTitle = async () => {
+      const searchResponse = await fetch(
+        `/api/douban/search?q=${encodeURIComponent(title)}`
+      );
+      if (!searchResponse.ok) return false;
+
+      const searchData = await searchResponse.json();
+      const candidates = Array.isArray(searchData.data)
+        ? (searchData.data as DoubanSearchResult[])
+        : [];
+      const normalizedTitle = title.trim().toLowerCase();
+      const matched = candidates.find(
+        (item) => item.title?.trim().toLowerCase() === normalizedTitle
+      );
+
+      if (!matched?.id) return false;
+
+      const detailResponse = await fetch(`/api/douban/detail?id=${matched.id}`);
+      if (!detailResponse.ok) return false;
+
+      const data = await detailResponse.json();
+      setCurrentSource('douban');
+      setOriginalSource('douban');
+      applyDoubanDetail(data);
+      return true;
     };
 
     fetchDetail();

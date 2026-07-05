@@ -1315,7 +1315,7 @@ function SearchPageClient() {
 
       // 三地片名别名搜索（开启时后端用豆瓣别名扩展搜索关键词）
       const aliasParam =
-        localStorage.getItem('crossRegionTitleSearch') === 'true'
+        localStorage.getItem('crossRegionTitleSearch') !== 'false'
           ? '&alias=1'
           : '';
 

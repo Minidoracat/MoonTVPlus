@@ -217,7 +217,7 @@ export const UserMenu: React.FC = () => {
     useState(false);
   const [interfaceTraditionalChinese, setInterfaceTraditionalChinese] =
     useState(false);
-  const [crossRegionTitleSearch, setCrossRegionTitleSearch] = useState(false);
+  const [crossRegionTitleSearch, setCrossRegionTitleSearch] = useState(true);
   const [exactSearch, setExactSearch] = useState(true);
   const [maxConcurrentDownloads, setMaxConcurrentDownloads] = useState(6);
   const [downloadThreadsPerTask, setDownloadThreadsPerTask] = useState(6);
@@ -830,9 +830,7 @@ export const UserMenu: React.FC = () => {
       const savedCrossRegionTitleSearch = localStorage.getItem(
         'crossRegionTitleSearch'
       );
-      if (savedCrossRegionTitleSearch !== null) {
-        setCrossRegionTitleSearch(savedCrossRegionTitleSearch === 'true');
-      }
+      setCrossRegionTitleSearch(savedCrossRegionTitleSearch !== 'false');
 
       // 加载精确搜索设置
       const savedExactSearch = localStorage.getItem('exactSearch');
@@ -2167,7 +2165,7 @@ export const UserMenu: React.FC = () => {
       localStorage.setItem('searchTraditionalToSimplified', 'false');
       // 恢复默认 = 清除手动设置，回到按系统语系自动判断
       localStorage.removeItem(TRADITIONAL_CHINESE_STORAGE_KEY);
-      localStorage.setItem('crossRegionTitleSearch', 'false');
+      localStorage.setItem('crossRegionTitleSearch', 'true');
       window.dispatchEvent(new CustomEvent(TRADITIONAL_CHINESE_CHANGE_EVENT));
       window.dispatchEvent(new CustomEvent('homeModulesUpdated'));
     }

@@ -8,7 +8,7 @@
  * 扩展为多个关键词一并搜索资源站。解析失败或超时自动降级为仅用原词搜索。
  */
 
-import { ApiSite } from '@/lib/config';
+import { ApiSite, getConfig } from '@/lib/config';
 import { fetchDoubanData } from '@/lib/douban';
 import { searchFromApi } from '@/lib/downstream';
 import { SearchResult } from '@/lib/types';
@@ -25,12 +25,35 @@ interface DoubanSubjectDetail {
   aka?: string[];
 }
 
+interface TMDBSearchItem {
+  id: number;
+  media_type?: 'movie' | 'tv' | 'person';
+  title?: string;
+  name?: string;
+  original_title?: string;
+  original_name?: string;
+}
+
+interface TMDBSearchResponse {
+  results?: TMDBSearchItem[];
+}
+
+interface TMDBDetailResponse {
+  title?: string;
+  name?: string;
+  original_title?: string;
+  original_name?: string;
+}
+
 const aliasCache = new Map<string, { aliases: string[]; expires: number }>();
 const ALIAS_CACHE_TTL = 24 * 60 * 60 * 1000; // 别名几乎不变，缓存 24 小时
 const ALIAS_NEGATIVE_TTL = 5 * 60 * 1000; // 解析失败短缓存，避免豆瓣被挡时反复重试拖慢搜索
 const ALIAS_CACHE_MAX = 500;
-const MAX_ALIASES = 3;
-const RESOLVE_TIMEOUT = 4000;
+const MAX_ALIASES = 5;
+const MAX_SUBJECT_CANDIDATES = 6;
+const RESOLVE_TIMEOUT = 4500;
+const DOUBAN_TIMEOUT = 3500;
+const TMDB_TIMEOUT = 2500;
 
 const CJK_REGEX = /[一-鿿]/;
 
@@ -42,31 +65,177 @@ function setAliasCache(key: string, aliases: string[], ttl = ALIAS_CACHE_TTL) {
   aliasCache.set(key, { aliases, expires: Date.now() + ttl });
 }
 
+function cleanAliasName(name: string): string {
+  return name.replace(/[（(]\s*[港台澳]\s*[)）]\s*$/, '').trim();
+}
+
+function normalizeAliasName(name: string): string {
+  return cleanAliasName(name).replace(/\s+/g, '').toLowerCase();
+}
+
+function orderAliases(names: string[], query: string): string[] {
+  const normalizedQuery = normalizeAliasName(query);
+  const unique = Array.from(
+    new Set(
+      names
+        .map(cleanAliasName)
+        .filter((name) => name && normalizeAliasName(name) !== normalizedQuery)
+    )
+  );
+
+  // 中文片名优先：资源站基本以中文片名收录
+  return [
+    ...unique.filter((name) => CJK_REGEX.test(name)),
+    ...unique.filter((name) => !CJK_REGEX.test(name)),
+  ].slice(0, MAX_ALIASES);
+}
+
+function withFallbackTimeout<T>(promise: Promise<T>, ms: number, fallback: T) {
+  return Promise.race([
+    promise.catch(() => fallback),
+    new Promise<T>((resolve) => setTimeout(() => resolve(fallback), ms)),
+  ]);
+}
+
+function getRegionalTitleAliases(query: string): string[] {
+  const normalized = cleanAliasName(query);
+  const prefix = normalized.slice(0, -1);
+  const last = normalized.slice(-1);
+  if (prefix.length < 2) return [];
+
+  if (last === '人') return [`${prefix}侠`, `${prefix}俠`];
+  if (last === '侠' || last === '俠') return [`${prefix}人`];
+  return [];
+}
+
+function getTMDBTitle(item?: TMDBSearchItem | TMDBDetailResponse | null) {
+  return item?.title || item?.name || item?.original_title || item?.original_name || '';
+}
+
+async function fetchTMDBJson<T>(url: string): Promise<T> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), TMDB_TIMEOUT);
+  try {
+    const response = await fetch(url, {
+      signal: controller.signal,
+      headers: { Accept: 'application/json, text/plain, */*' },
+    });
+    if (!response.ok) throw new Error(`TMDB HTTP ${response.status}`);
+    return (await response.json()) as T;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+async function resolveFromTMDB(query: string): Promise<string[]> {
+  const config = await getConfig();
+  const apiKey = config.SiteConfig.TMDBApiKey?.split(',')[0]?.trim();
+  if (!apiKey) return [];
+
+  const baseUrl = config.SiteConfig.TMDBReverseProxy || 'https://api.themoviedb.org';
+  const normalizedQuery = normalizeAliasName(query);
+  const searchLanguages = ['zh-TW', 'zh-HK', 'zh-CN'];
+  const searchResults = await Promise.all(
+    searchLanguages.map(async (language) => {
+      const url = `${baseUrl}/3/search/multi?api_key=${encodeURIComponent(
+        apiKey
+      )}&language=${language}&query=${encodeURIComponent(query)}&page=1`;
+      const data = await fetchTMDBJson<TMDBSearchResponse>(url);
+      return (data.results || []).filter(
+        (item) => item.media_type === 'movie' || item.media_type === 'tv'
+      );
+    })
+  );
+
+  const candidates = searchResults
+    .flat()
+    .map((item, index) => {
+      const title = getTMDBTitle(item);
+      const normalizedTitle = normalizeAliasName(title);
+      const score = normalizedTitle === normalizedQuery
+        ? 2
+        : normalizedTitle.includes(normalizedQuery)
+          ? 1
+          : 0;
+      return { item, index, score };
+    })
+    .filter((candidate) => candidate.score > 0);
+
+  const selected = candidates.sort((a, b) => b.score - a.score || a.index - b.index)[0]?.item;
+  if (!selected?.id || !selected.media_type || selected.media_type === 'person') return [];
+
+  const detailLanguages = ['zh-CN', 'zh-TW', 'zh-HK'];
+  const details = await Promise.all(
+    detailLanguages.map(async (language) => {
+      const url = `${baseUrl}/3/${selected.media_type}/${selected.id}?api_key=${encodeURIComponent(
+        apiKey
+      )}&language=${language}`;
+      return fetchTMDBJson<TMDBDetailResponse>(url).catch(() => null);
+    })
+  );
+
+  return orderAliases([getTMDBTitle(selected), ...details.map(getTMDBTitle)], query);
+}
+
+async function resolveFromProviders(query: string): Promise<string[]> {
+  const [doubanAliases, tmdbAliases] = await Promise.all([
+    withFallbackTimeout(resolveFromDouban(query), DOUBAN_TIMEOUT, [] as string[]),
+    withFallbackTimeout(resolveFromTMDB(query), TMDB_TIMEOUT, [] as string[]),
+  ]);
+
+  return orderAliases(
+    [...tmdbAliases, ...getRegionalTitleAliases(query), ...doubanAliases],
+    query
+  );
+}
+
 async function resolveFromDouban(query: string): Promise<string[]> {
   // 1. 豆瓣搜索定位条目（subject_suggest 支持繁体输入与又名匹配）
   const suggests = await fetchDoubanData<DoubanSuggestItem[]>(
     `https://movie.douban.com/j/subject_suggest?q=${encodeURIComponent(query)}`
   );
-  const subject = Array.isArray(suggests)
-    ? suggests.find((item) => item.id && item.title && item.year)
-    : undefined;
-  if (!subject) return [];
+  const subjects = Array.isArray(suggests)
+    ? suggests
+        .filter((item) => item.id && item.title && item.year)
+        .slice(0, MAX_SUBJECT_CANDIDATES)
+    : [];
+  if (subjects.length === 0) return [];
 
-  // 2. 条目详情的 title + aka 含各地译名（如「刺激1995(台)」「月黑高飞(港)」）
-  const detail = await fetchDoubanData<DoubanSubjectDetail>(
-    `https://m.douban.com/rexxar/api/v2/subject/${subject.id}`
+  // 2. 不只信第一个 suggest；取前几个候选详情，优先选择 title/aka 精确命中原词的条目。
+  const normalizedQuery = normalizeAliasName(query);
+  const candidates = (
+    await Promise.all(
+      subjects.map(async (subject, index) => {
+        try {
+          const detail = await fetchDoubanData<DoubanSubjectDetail>(
+            `https://m.douban.com/rexxar/api/v2/subject/${subject.id}`
+          );
+          const names = [detail.title || subject.title, ...(detail.aka || [])]
+            .filter((name): name is string => !!name)
+            .map(cleanAliasName);
+          const normalizedNames = names.map(normalizeAliasName);
+          const score = normalizedNames.includes(normalizedQuery)
+            ? 2
+            : normalizedNames.some((name) => name.includes(normalizedQuery))
+              ? 1
+              : 0;
+          return { index, names, score };
+        } catch {
+          return null;
+        }
+      })
+    )
+  ).filter((item): item is { index: number; names: string[]; score: number } =>
+    Boolean(item)
   );
-  const names = [detail.title, ...(detail.aka || [])]
-    .filter((name): name is string => !!name)
-    .map((name) => name.replace(/[（(]\s*[港台澳]\s*[)）]\s*$/, '').trim())
-    .filter((name) => name && name !== query);
 
-  // 中文片名优先：资源站基本以中文片名收录
-  const ordered = [
-    ...names.filter((name) => CJK_REGEX.test(name)),
-    ...names.filter((name) => !CJK_REGEX.test(name)),
-  ];
-  return Array.from(new Set(ordered)).slice(0, MAX_ALIASES);
+  const selected =
+    candidates
+      .filter((candidate) => candidate.score > 0)
+      .sort((a, b) => b.score - a.score || a.index - b.index)[0] ||
+    candidates[0];
+
+  return selected ? orderAliases(selected.names, query) : [];
 }
 
 /**
@@ -81,7 +250,7 @@ export async function resolveTitleAliases(query: string): Promise<string[]> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     const aliases = await Promise.race([
-      resolveFromDouban(key),
+      resolveFromProviders(key),
       new Promise<string[]>((_, reject) => {
         timer = setTimeout(
           () => reject(new Error('alias resolve timeout')),

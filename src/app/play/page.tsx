@@ -702,6 +702,7 @@ function PlayPageClient() {
   const [doubanCardSubtitle, setDoubanCardSubtitle] = useState<string>('');
   const [doubanAka, setDoubanAka] = useState<string[]>([]);
   const [doubanYear, setDoubanYear] = useState<string>(''); // 从 pubdate 提取的年份
+  const [doubanDetailFailed, setDoubanDetailFailed] = useState(false);
 
   // 纠错后的描述信息（用于显示，不触发 detail 更新）
   const [correctedDesc, setCorrectedDesc] = useState<string>('');
@@ -1261,6 +1262,7 @@ function PlayPageClient() {
         setDoubanCardSubtitle('');
         setDoubanAka([]);
         setDoubanYear('');
+        setDoubanDetailFailed(false);
         return;
       }
 
@@ -1269,11 +1271,15 @@ function PlayPageClient() {
         setDoubanCardSubtitle('');
         setDoubanAka([]);
         setDoubanYear('');
+        setDoubanDetailFailed(false);
         return;
       }
 
       try {
-        const doubanData = await getDoubanDetail(videoDoubanId.toString());
+        setDoubanDetailFailed(false);
+        const doubanData = await getDoubanDetail(videoDoubanId.toString(), {
+          suppressGlobalError: true,
+        });
 
         // 设置评分
         if (doubanData.rating) {
@@ -1311,6 +1317,7 @@ function PlayPageClient() {
         setDoubanCardSubtitle('');
         setDoubanAka([]);
         setDoubanYear('');
+        setDoubanDetailFailed(true);
       }
     };
 
@@ -1325,14 +1332,9 @@ function PlayPageClient() {
         return;
       }
 
-      // 检查是否禁用背景图
-      if (typeof window !== 'undefined') {
-        const disabled = localStorage.getItem('tmdb_backdrop_disabled');
-        if (disabled === 'true') {
-          setTmdbBackdrop(null);
-          return;
-        }
-      }
+      const backdropDisabled =
+        typeof window !== 'undefined' &&
+        localStorage.getItem('tmdb_backdrop_disabled') === 'true';
 
       if (!videoTitle) {
         setTmdbBackdrop(null);
@@ -1350,13 +1352,13 @@ function PlayPageClient() {
           const detailsCache = getRecommendationCache<any>(detailsCacheKey);
 
           if (detailsCache) {
-            if (detailsCache.backdrop) {
+            if (!backdropDisabled && detailsCache.backdrop) {
               setTmdbBackdrop(processImageUrl(detailsCache.backdrop));
             } else {
               setTmdbBackdrop(null);
             }
 
-            if (!videoDoubanId || videoDoubanId === 0) {
+            if (!videoDoubanId || videoDoubanId === 0 || doubanDetailFailed) {
               populateDoubanFieldsFromTMDB(detailsCache);
             }
             populatePlayMetadataFromTMDB(detailsCache);
@@ -1378,14 +1380,14 @@ function PlayPageClient() {
 
         const result = await response.json();
 
-        if (result.backdrop) {
+        if (!backdropDisabled && result.backdrop) {
           setTmdbBackdrop(processImageUrl(result.backdrop));
         } else {
           setTmdbBackdrop(null);
         }
 
-        // 如果没有豆瓣ID，使用TMDb数据补充
-        if (!videoDoubanId || videoDoubanId === 0) {
+        // 如果没有豆瓣ID或豆瓣详情失败，使用TMDb数据补充
+        if (!videoDoubanId || videoDoubanId === 0 || doubanDetailFailed) {
           populateDoubanFieldsFromTMDB(result);
         }
         populatePlayMetadataFromTMDB(result);
@@ -1489,7 +1491,7 @@ function PlayPageClient() {
     };
 
     fetchTMDBBackdrop();
-  }, [videoTitle, videoDoubanId, isDirectPlay]);
+  }, [videoTitle, videoDoubanId, doubanDetailFailed, isDirectPlay]);
 
   useEffect(() => {
     if (

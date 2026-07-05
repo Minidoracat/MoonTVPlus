@@ -704,7 +704,8 @@ export async function fetchDoubanDetail(
  * 统一的豆瓣详情数据获取函数，根据代理设置选择使用服务端 API 或客户端代理获取
  */
 export async function getDoubanDetail(
-  id: string
+  id: string,
+  options: { suppressGlobalError?: boolean } = {}
 ): Promise<DoubanDetailApiResponse> {
   const { proxyType, proxyUrl, backupProxyType, backupProxyUrl } =
     getDoubanProxyConfig();
@@ -725,7 +726,9 @@ export async function getDoubanDetail(
       }
     );
   } catch (error) {
-    dispatchDoubanGlobalError('获取豆瓣详情数据失败');
+    if (!options.suppressGlobalError) {
+      dispatchDoubanGlobalError('获取豆瓣详情数据失败');
+    }
     throw error;
   }
 }

@@ -87,6 +87,47 @@ function normalizeAliasName(name: string): string {
   return cleanAliasName(name).replace(/\s+/g, '').toLowerCase();
 }
 
+type ScriptConverter = (text: string) => string;
+interface ScriptConverters {
+  t2s: ScriptConverter;
+  s2t: ScriptConverter;
+}
+
+let scriptConvertersPromise: Promise<ScriptConverters | null> | null = null;
+
+/**
+ * 简繁字形转换器（服务端）：查询词与 TMDB/豆瓣返回的片名、人名可能分属
+ * 简繁两种字形（如「高桥一生」vs「高橋一生」），比对与检索前需归一。
+ */
+function getScriptConverters(): Promise<ScriptConverters | null> {
+  if (!scriptConvertersPromise) {
+    scriptConvertersPromise = import('opencc-js')
+      .then((module) => {
+        const OpenCC = module.default || module;
+        return {
+          t2s: OpenCC.Converter({ from: 't', to: 'cn' }),
+          s2t: OpenCC.Converter({ from: 'cn', to: 't' }),
+        };
+      })
+      .catch((error) => {
+        console.warn(
+          '[TitleAlias] 加载 opencc-js 转换器失败:',
+          (error as Error).message
+        );
+        scriptConvertersPromise = null; // 允许下次重试
+        return null;
+      });
+  }
+  return scriptConvertersPromise;
+}
+
+// 仅用于候选匹配打分（统一转简体再比对）；不要用在 orderAliases 的去重上，
+// 否则会滤掉与查询词只差简繁字形、但资源站检索需要的别名变体
+function normalizeForMatch(name: string, cc: ScriptConverters | null): string {
+  const normalized = normalizeAliasName(name);
+  return cc ? cc.t2s(normalized) : normalized;
+}
+
 function orderAliases(
   names: string[],
   query: string,
@@ -176,23 +217,34 @@ async function resolveFromTMDB(
 
   const baseUrl =
     config.SiteConfig.TMDBReverseProxy || 'https://api.themoviedb.org';
-  const normalizedQuery = normalizeAliasName(query);
+  const cc = await getScriptConverters();
+  const normalizedQuery = normalizeForMatch(query, cc);
+  // TMDB 的检索不做简繁归一：简体查「高桥一生」搜不到日文原名「高橋一生」，
+  // 因此原词与简繁变体都要各搜一次
+  const queryVariants = Array.from(
+    new Set([query, ...(cc ? [cc.t2s(query), cc.s2t(query)] : [])])
+  );
   const searchLanguages = ['zh-TW', 'zh-HK', 'zh-CN'];
   const searchResults = await Promise.all(
-    searchLanguages.map(async (language) => {
-      const url = `${baseUrl}/3/search/multi?api_key=${encodeURIComponent(
-        apiKey
-      )}&language=${language}&query=${encodeURIComponent(query)}&page=1`;
-      const data = await fetchTMDBJson<TMDBSearchResponse>(url);
-      return data.results || [];
-    })
+    queryVariants.flatMap((variant) =>
+      searchLanguages.map(async (language) => {
+        const url = `${baseUrl}/3/search/multi?api_key=${encodeURIComponent(
+          apiKey
+        )}&language=${language}&query=${encodeURIComponent(variant)}&page=1`;
+        // 单个变体/语言失败不拖垮整批检索
+        const data = await fetchTMDBJson<TMDBSearchResponse>(url).catch(
+          () => null
+        );
+        return data?.results || [];
+      })
+    )
   );
 
   const candidates = searchResults
     .flat()
     .map((item, index) => {
       const title = getTMDBTitle(item);
-      const normalizedTitle = normalizeAliasName(title);
+      const normalizedTitle = normalizeForMatch(title, cc);
       let score = 0;
       if (normalizedTitle === normalizedQuery) {
         score = item.media_type === 'person' ? 3 : 2;
@@ -299,7 +351,8 @@ async function resolveFromDouban(query: string): Promise<string[]> {
   if (subjects.length === 0) return [];
 
   // 2. 不只信第一个 suggest；取前几个候选详情，优先选择 title/aka 精确命中原词的条目。
-  const normalizedQuery = normalizeAliasName(query);
+  const cc = await getScriptConverters();
+  const normalizedQuery = normalizeForMatch(query, cc);
   const candidates = (
     await Promise.all(
       subjects.map(async (subject, index) => {
@@ -310,7 +363,9 @@ async function resolveFromDouban(query: string): Promise<string[]> {
           const names = [detail.title || subject.title, ...(detail.aka || [])]
             .filter((name): name is string => !!name)
             .map(cleanAliasName);
-          const normalizedNames = names.map(normalizeAliasName);
+          const normalizedNames = names.map((name) =>
+            normalizeForMatch(name, cc)
+          );
           const score = normalizedNames.includes(normalizedQuery)
             ? 2
             : normalizedNames.some((name) => name.includes(normalizedQuery))

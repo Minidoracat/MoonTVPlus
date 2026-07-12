@@ -201,6 +201,55 @@ describe('resolveTitleAliases', () => {
     ]);
   });
 
+  it('finds a person whose TMDB name uses a different Chinese script', async () => {
+    (getConfig as jest.Mock).mockResolvedValue({
+      SiteConfig: {
+        TMDBApiKey: 'tmdb-key',
+        TMDBReverseProxy: 'https://tmdb.example',
+      },
+    });
+    (fetchDoubanData as jest.Mock).mockResolvedValue([]);
+    global.fetch = jest.fn(async (url: string) => {
+      if (url.includes('/search/multi')) {
+        // 模拟 TMDB 检索不做简繁归一：只有繁体原名「高橋一生」能搜到
+        if (!url.includes(encodeURIComponent('高橋一生'))) {
+          return { ok: true, json: async () => ({ results: [] }) };
+        }
+        return {
+          ok: true,
+          json: async () => ({
+            results: [{ id: 5, media_type: 'person', name: '高橋一生' }],
+          }),
+        };
+      }
+
+      if (url.includes('/person/5/combined_credits')) {
+        return {
+          ok: true,
+          json: async () => ({
+            cast: [
+              { id: 50, media_type: 'tv', name: '民王', popularity: 30 },
+              {
+                id: 51,
+                media_type: 'movie',
+                title: '罗曼史',
+                popularity: 20,
+              },
+            ],
+          }),
+        };
+      }
+
+      return { ok: false, status: 404 };
+    }) as unknown as typeof fetch;
+
+    // 简体输入 -> 繁体变体命中人物，且人名简繁比对归一后打分成功
+    await expect(resolveTitleAliases('高桥一生', 'person')).resolves.toEqual([
+      '民王',
+      '罗曼史',
+    ]);
+  });
+
   it('keeps up to 30 works in person mode instead of the title-mode cap of 5', async () => {
     (getConfig as jest.Mock).mockResolvedValue({
       SiteConfig: {

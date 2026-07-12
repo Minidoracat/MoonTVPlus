@@ -97,9 +97,10 @@ export function EmailSettingsPanel({
   statusMessage,
   statusType,
 }: EmailSettingsPanelProps) {
-  if (!isOpen || !mounted) return null;
-
+  // hooks 必须在 early return 之前调用，否则 isOpen 切换时 hooks 数量不一致会崩溃
   const [notificationTab, setNotificationTab] = useState<NotificationTab>('email');
+
+  if (!isOpen || !mounted) return null;
 
   const pushDisabled =
     emailSettingsSaving ||

@@ -250,6 +250,56 @@ describe('resolveTitleAliases', () => {
     ]);
   });
 
+  it('skips duplicate empty person entries and falls back to the real one', async () => {
+    (getConfig as jest.Mock).mockResolvedValue({
+      SiteConfig: {
+        TMDBApiKey: 'tmdb-key',
+        TMDBReverseProxy: 'https://tmdb.example',
+      },
+    });
+    (fetchDoubanData as jest.Mock).mockResolvedValue([]);
+    global.fetch = jest.fn(async (url: string) => {
+      if (url.includes('/search/multi')) {
+        // 简体变体命中零作品的空壳分身（排序在前），繁体变体命中真身
+        if (url.includes(encodeURIComponent('长泽雅美'))) {
+          return {
+            ok: true,
+            json: async () => ({
+              results: [{ id: 99, media_type: 'person', name: '长泽雅美' }],
+            }),
+          };
+        }
+        return {
+          ok: true,
+          json: async () => ({
+            results: [{ id: 6, media_type: 'person', name: '長澤雅美' }],
+          }),
+        };
+      }
+
+      if (url.includes('/person/99/combined_credits')) {
+        return { ok: true, json: async () => ({ cast: [], crew: [] }) };
+      }
+
+      if (url.includes('/person/6/combined_credits')) {
+        return {
+          ok: true,
+          json: async () => ({
+            cast: [
+              { id: 60, media_type: 'movie', title: '你的名字', popularity: 95 },
+            ],
+          }),
+        };
+      }
+
+      return { ok: false, status: 404 };
+    }) as unknown as typeof fetch;
+
+    await expect(resolveTitleAliases('长泽雅美', 'person')).resolves.toEqual([
+      '你的名字',
+    ]);
+  });
+
   it('keeps up to 30 works in person mode instead of the title-mode cap of 5', async () => {
     (getConfig as jest.Mock).mockResolvedValue({
       SiteConfig: {

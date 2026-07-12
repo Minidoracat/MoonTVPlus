@@ -263,12 +263,58 @@ async function resolveFromTMDB(
     })
     .filter((candidate) => candidate.score > 0);
 
-  const selected = candidates.sort(
+  const sorted = candidates.sort(
     (a, b) => b.score - a.score || a.index - b.index
-  )[0]?.item;
+  );
+
+  if (mode === 'person') {
+    // TMDB 存在同名空壳人物条目（如简体名的零作品分身），且可能排在真身之前；
+    // 按 id 去重后逐个候选取作品，空结果就尝试下一个
+    const seenIds = new Set<number>();
+    const people: TMDBSearchItem[] = [];
+    for (const candidate of sorted) {
+      const item = candidate.item;
+      if (item.media_type !== 'person' || !item.id || seenIds.has(item.id)) {
+        continue;
+      }
+      seenIds.add(item.id);
+      people.push(item);
+      if (people.length >= 3) break;
+    }
+
+    for (const person of people) {
+      const url = `${baseUrl}/3/person/${
+        person.id
+      }/combined_credits?api_key=${encodeURIComponent(apiKey)}&language=zh-CN`;
+      const credits = await fetchTMDBJson<TMDBCombinedCreditsResponse>(
+        url
+      ).catch(() => null);
+      const names = [
+        ...sortTMDBItemsByPopularity(person.known_for || []).flatMap(
+          getTMDBTitles
+        ),
+        ...sortTMDBItemsByPopularity([
+          ...(credits?.cast || []),
+          ...(credits?.crew || []),
+        ]).flatMap(getTMDBTitles),
+      ];
+      const aliases = orderAliases(names, query, MAX_PERSON_ALIASES);
+      if (aliases.length > 0) return aliases;
+    }
+
+    // 解析为空对用户表现为「搜不到」，留一行可观测
+    console.warn('[TitleAlias] 人物候选无作品:', query, {
+      cc: !!cc,
+      variants: queryVariants.length,
+      results: sorted.length,
+      people: people.length,
+    });
+    return [];
+  }
+
+  const selected = sorted[0]?.item;
   if (!selected?.id || !selected.media_type) {
-    // 解析为空对用户表现为「搜不到」，留一行可观测：cc=false 代表 opencc 未载入，
-    // results=0 代表检索全空/全失败，results>0 代表打分全不中
+    // cc=false 代表 opencc 未载入，results=0 代表检索全空/全失败，>0 代表打分全不中
     console.warn('[TitleAlias] TMDB 未命中候选:', query, {
       cc: !!cc,
       variants: queryVariants.length,
@@ -277,28 +323,7 @@ async function resolveFromTMDB(
     return [];
   }
 
-  if (selected.media_type === 'person') {
-    if (mode !== 'person') return [];
-
-    const url = `${baseUrl}/3/person/${
-      selected.id
-    }/combined_credits?api_key=${encodeURIComponent(apiKey)}&language=zh-CN`;
-    const credits = await fetchTMDBJson<TMDBCombinedCreditsResponse>(url).catch(
-      () => null
-    );
-    const names = [
-      ...sortTMDBItemsByPopularity(selected.known_for || []).flatMap(
-        getTMDBTitles
-      ),
-      ...sortTMDBItemsByPopularity([
-        ...(credits?.cast || []),
-        ...(credits?.crew || []),
-      ]).flatMap(getTMDBTitles),
-    ];
-    return orderAliases(names, query, MAX_PERSON_ALIASES);
-  }
-
-  if (mode === 'person') return [];
+  if (selected.media_type === 'person') return [];
 
   const detailLanguages = ['zh-CN', 'zh-TW', 'zh-HK'];
   const details = await Promise.all(

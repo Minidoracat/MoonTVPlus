@@ -66,8 +66,10 @@ const MAX_SUBJECT_CANDIDATES = 6;
 const RESOLVE_TIMEOUT = 4500;
 const DOUBAN_TIMEOUT = 3500;
 const TMDB_TIMEOUT = 2500;
-// 人物解析需要 search + combined_credits 两次串行请求，给足预算（仍受 RESOLVE_TIMEOUT 兜底）
-const PERSON_RESOLVE_TIMEOUT = 4000;
+// 人物解析需要 search + combined_credits 两次串行请求（各受 TMDB_TIMEOUT=2.5s 上限）
+// 加上简繁变体扇出的尾延迟，最坏超过 5s；4s 预算必然偶发静默超时并被负缓存放大。
+// 人物模式没有别名就搜不到任何东西，宁可多等一点
+const PERSON_RESOLVE_TIMEOUT = 8000;
 
 const CJK_REGEX = /[一-鿿]/;
 
@@ -410,7 +412,8 @@ export async function resolveTitleAliases(
       new Promise<string[]>((_, reject) => {
         timer = setTimeout(
           () => reject(new Error('alias resolve timeout')),
-          RESOLVE_TIMEOUT
+          // 外层兜底须大于人物模式的内层预算，否则内层等待变成必然超时
+          mode === 'person' ? PERSON_RESOLVE_TIMEOUT + 500 : RESOLVE_TIMEOUT
         );
       }),
     ]);

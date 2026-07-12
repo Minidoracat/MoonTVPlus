@@ -266,7 +266,16 @@ async function resolveFromTMDB(
   const selected = candidates.sort(
     (a, b) => b.score - a.score || a.index - b.index
   )[0]?.item;
-  if (!selected?.id || !selected.media_type) return [];
+  if (!selected?.id || !selected.media_type) {
+    // 解析为空对用户表现为「搜不到」，留一行可观测：cc=false 代表 opencc 未载入，
+    // results=0 代表检索全空/全失败，results>0 代表打分全不中
+    console.warn('[TitleAlias] TMDB 未命中候选:', query, {
+      cc: !!cc,
+      variants: queryVariants.length,
+      results: searchResults.flat().length,
+    });
+    return [];
+  }
 
   if (selected.media_type === 'person') {
     if (mode !== 'person') return [];

@@ -1377,7 +1377,10 @@ function SearchPageClient() {
                 );
                 break;
               case 'source_result': {
-                setCompletedSources((prev) => prev + 1);
+                // partial 批次表示该源还有后续作品批次在搜，不计入完成数
+                if (!payload.partial) {
+                  setCompletedSources((prev) => prev + 1);
+                }
                 if (
                   Array.isArray(payload.results) &&
                   payload.results.length > 0

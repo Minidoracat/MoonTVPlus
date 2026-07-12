@@ -192,7 +192,9 @@ export async function GET(request: NextRequest) {
             resolvedAliases = aliases;
             console.log('[Search] 片名别名扩展:', query, '->', aliases);
           }
-          return [query, ...aliases];
+          // 传统接口一次性返回、无法分批补发：人物模式只搜前 5 部代表作，
+          // 否则串行几十个关键词必撞 20s 站点超时反而拿不到结果
+          return [query, ...aliases.slice(0, 5)];
         })
       : Promise.resolve([query]);
 

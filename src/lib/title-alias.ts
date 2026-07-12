@@ -60,10 +60,14 @@ const ALIAS_CACHE_TTL = 24 * 60 * 60 * 1000; // 别名几乎不变，缓存 24 �
 const ALIAS_NEGATIVE_TTL = 5 * 60 * 1000; // 解析失败短缓存，避免豆瓣被挡时反复重试拖慢搜索
 const ALIAS_CACHE_MAX = 500;
 const MAX_ALIASES = 5;
+// 人物模式要覆盖代表作之外的作品，靠 SSE 分批渐进搜索消化数量
+const MAX_PERSON_ALIASES = 30;
 const MAX_SUBJECT_CANDIDATES = 6;
 const RESOLVE_TIMEOUT = 4500;
 const DOUBAN_TIMEOUT = 3500;
 const TMDB_TIMEOUT = 2500;
+// 人物解析需要 search + combined_credits 两次串行请求，给足预算（仍受 RESOLVE_TIMEOUT 兜底）
+const PERSON_RESOLVE_TIMEOUT = 4000;
 
 const CJK_REGEX = /[一-鿿]/;
 
@@ -83,7 +87,11 @@ function normalizeAliasName(name: string): string {
   return cleanAliasName(name).replace(/\s+/g, '').toLowerCase();
 }
 
-function orderAliases(names: string[], query: string): string[] {
+function orderAliases(
+  names: string[],
+  query: string,
+  limit = MAX_ALIASES
+): string[] {
   const normalizedQuery = normalizeAliasName(query);
   const unique = Array.from(
     new Set(
@@ -97,7 +105,7 @@ function orderAliases(names: string[], query: string): string[] {
   return [
     ...unique.filter((name) => CJK_REGEX.test(name)),
     ...unique.filter((name) => !CJK_REGEX.test(name)),
-  ].slice(0, MAX_ALIASES);
+  ].slice(0, limit);
 }
 
 function withFallbackTimeout<T>(promise: Promise<T>, ms: number, fallback: T) {
@@ -224,7 +232,7 @@ async function resolveFromTMDB(
         ...(credits?.crew || []),
       ]).flatMap(getTMDBTitles),
     ];
-    return orderAliases(names, query);
+    return orderAliases(names, query, MAX_PERSON_ALIASES);
   }
 
   if (mode === 'person') return [];
@@ -252,7 +260,7 @@ async function resolveFromProviders(
   if (mode === 'person') {
     return withFallbackTimeout(
       resolveFromTMDB(query, 'person'),
-      TMDB_TIMEOUT,
+      PERSON_RESOLVE_TIMEOUT,
       [] as string[]
     );
   }
@@ -281,11 +289,13 @@ async function resolveFromDouban(query: string): Promise<string[]> {
   const suggests = await fetchDoubanData<DoubanSuggestItem[]>(
     `https://movie.douban.com/j/subject_suggest?q=${encodeURIComponent(query)}`
   );
-  const subjects = Array.isArray(suggests)
-    ? suggests
-        .filter((item) => item.id && item.title && item.year)
-        .slice(0, MAX_SUBJECT_CANDIDATES)
-    : [];
+  if (!Array.isArray(suggests)) return [];
+  // 建议首位是影人 => 查询词是人名：片名模式不猜测其作品，
+  // 否则零分 fallback 会把「人名 -> 单部电影的又名」当成别名（人物请用演员/导演模式）
+  if (suggests[0]?.type === 'celebrity') return [];
+  const subjects = suggests
+    .filter((item) => item.id && item.title && item.year)
+    .slice(0, MAX_SUBJECT_CANDIDATES);
   if (subjects.length === 0) return [];
 
   // 2. 不只信第一个 suggest；取前几个候选详情，优先选择 title/aka 精确命中原词的条目。
@@ -349,7 +359,14 @@ export async function resolveTitleAliases(
         );
       }),
     ]);
-    setAliasCache(cacheKey, aliases);
+    // 人物一定有作品，空结果视为解析失败（TMDB 超时/被挡），只短缓存以便尽快重试
+    setAliasCache(
+      cacheKey,
+      aliases,
+      mode === 'person' && aliases.length === 0
+        ? ALIAS_NEGATIVE_TTL
+        : ALIAS_CACHE_TTL
+    );
     return aliases;
   } catch (error) {
     console.warn('[TitleAlias] 解析片名别名失败:', (error as Error).message);
@@ -364,15 +381,17 @@ export async function resolveTitleAliases(
 /**
  * 用多个关键词（原词 + 别名）搜索同一资源站，并按 source+id 去重合并。
  * 关键词串行执行：避免与站点内部的多页并发相乘，瞬时打爆对方 CC 防护。
+ * 传入 seen 可跨多次调用（分批渐进搜索）去重，只返回本批新增的结果。
  */
 export async function searchFromApiWithQueries(
   apiSite: ApiSite,
-  queries: string[]
+  queries: string[],
+  seen?: Set<string>
 ): Promise<SearchResult[]> {
-  if (queries.length <= 1) {
+  if (!seen && queries.length <= 1) {
     return searchFromApi(apiSite, queries[0]);
   }
-  const seen = new Set<string>();
+  const dedupe = seen ?? new Set<string>();
   const merged: SearchResult[] = [];
   for (const q of queries) {
     const results = await searchFromApi(apiSite, q).catch(
@@ -381,8 +400,8 @@ export async function searchFromApiWithQueries(
     if (!Array.isArray(results)) continue;
     for (const result of results) {
       const dedupeKey = `${result.source}:${result.id}`;
-      if (seen.has(dedupeKey)) continue;
-      seen.add(dedupeKey);
+      if (dedupe.has(dedupeKey)) continue;
+      dedupe.add(dedupeKey);
       merged.push(result);
     }
   }

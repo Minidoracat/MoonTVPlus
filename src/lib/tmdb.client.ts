@@ -472,6 +472,111 @@ export async function getTMDBTrendingContent(
 }
 
 /**
+ * 获取 TMDB 热门榜单（今日/本周），输出豆瓣风格的列表项（服务端使用）。
+ * trending 接口每页固定 20 条，这里把 start/limit 映射到所需页并截取，
+ * 保持与豆瓣分类接口一致的分页契约。
+ */
+export async function getTMDBHotList(
+  apiKey: string,
+  kind: 'movie' | 'tv',
+  timeWindow: 'day' | 'week',
+  start = 0,
+  limit = 25,
+  proxy?: string,
+  reverseProxyBaseUrl?: string
+): Promise<{
+  code: number;
+  message: string;
+  list: Array<{
+    id: string;
+    title: string;
+    poster: string;
+    rate: string;
+    year: string;
+  }>;
+}> {
+  try {
+    const actualKey = getNextApiKey(apiKey);
+    if (!actualKey) {
+      return { code: 400, message: '未配置 TMDB API Key', list: [] };
+    }
+
+    const baseUrl = reverseProxyBaseUrl || DEFAULT_TMDB_BASE_URL;
+    const TMDB_PAGE_SIZE = 20;
+    const firstPage = Math.floor(start / TMDB_PAGE_SIZE);
+    const lastPage = Math.floor((start + limit - 1) / TMDB_PAGE_SIZE);
+
+    const pages = await Promise.all(
+      Array.from({ length: lastPage - firstPage + 1 }, async (_, i) => {
+        const url = `${baseUrl}/3/trending/${kind}/${timeWindow}?api_key=${actualKey}&language=zh-CN&page=${
+          firstPage + i + 1
+        }`;
+        // 有页失败就整批报错（外层 catch 收敛为 code 500）：
+        // 部分页成功会让 slice 的全局索引错位，产生重复/跳号，比空结果更糟
+        const response = await universalFetch(url, proxy);
+        if (!response.ok) {
+          throw new Error(`TMDB Trending API 请求失败: ${response.status}`);
+        }
+        const data: any = await response.json();
+        return (data.results || []) as any[];
+      })
+    );
+
+    const offset = start - firstPage * TMDB_PAGE_SIZE;
+    const list = pages
+      .flat()
+      .slice(offset, offset + limit)
+      .map((item: any) => ({
+        id: String(item.id),
+        title: item.title || item.name || '',
+        poster: getTMDBImageUrl(item.poster_path),
+        rate: item.vote_average ? item.vote_average.toFixed(1) : '',
+        year: (item.release_date || item.first_air_date || '').slice(0, 4),
+      }))
+      .filter((item) => item.title && item.poster);
+
+    return { code: 200, message: '获取成功', list };
+  } catch (error) {
+    // 网络错误信息可能带完整请求 URL（含 api_key），记录前遮蔽
+    const message = ((error as Error)?.message || String(error)).replace(
+      /api_key=[^&\s]+/g,
+      'api_key=***'
+    );
+    console.error('获取 TMDB 热门榜单失败:', message);
+    return { code: 500, message: '获取 TMDB 热门榜单失败', list: [] };
+  }
+}
+
+/**
+ * 请求 /api/tmdb/hot 获取 TMDB 热门榜单（客户端使用）
+ */
+export async function fetchTMDBHot(params: {
+  kind: 'movie' | 'tv';
+  window: 'day' | 'week';
+  pageLimit?: number;
+  pageStart?: number;
+}): Promise<{
+  code: number;
+  message: string;
+  list: Array<{
+    id: string;
+    title: string;
+    poster: string;
+    rate: string;
+    year: string;
+  }>;
+}> {
+  const { kind, window: timeWindow, pageLimit = 25, pageStart = 0 } = params;
+  const response = await fetch(
+    `/api/tmdb/hot?kind=${kind}&window=${timeWindow}&limit=${pageLimit}&start=${pageStart}`
+  );
+  if (!response.ok) {
+    throw new Error(`HTTP error! Status: ${response.status}`);
+  }
+  return response.json();
+}
+
+/**
  * 获取 TMDB 图片完整 URL
  * @param path - 图片路径
  * @param size - 图片尺寸，默认 w500

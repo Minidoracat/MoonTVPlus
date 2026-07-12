@@ -42,6 +42,7 @@ export async function GET(request: NextRequest) {
       DanmakuAutoLoadDefault: true,
       EnableTelegramLogin: Boolean(process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_BOT_USERNAME && process.env.TELEGRAM_LOGIN_ENABLED !== 'false'),
       TelegramBotUsername: process.env.TELEGRAM_BOT_USERNAME || '',
+      TMDBEnabled: Boolean((process.env.TMDB_API_KEY || '').trim()),
     });
   }
 
@@ -70,6 +71,8 @@ export async function GET(request: NextRequest) {
     ),
     TelegramBotUsername: config.TelegramConfig?.botUsername || process.env.TELEGRAM_BOT_USERNAME || '',
     DanmakuAutoLoadDefault: config.SiteConfig.DanmakuAutoLoadDefault !== false,
+    // 是否配置了 TMDB API Key（只暴露有无，不暴露密钥本身）
+    TMDBEnabled: Boolean(config.SiteConfig.TMDBApiKey?.trim()),
     loginBackgroundImage: config.ThemeConfig?.loginBackgroundImage || '',
     registerBackgroundImage: config.ThemeConfig?.registerBackgroundImage || '',
     homeBackgroundImage: config.ThemeConfig?.homeBackgroundImage || '',

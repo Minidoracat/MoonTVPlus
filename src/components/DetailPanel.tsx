@@ -133,7 +133,7 @@ const DetailPanel: React.FC<DetailPanelProps> = ({
   bangumiId,
   isBangumi,
   tmdbId,
-  type = 'movie',
+  type,
   seasonNumber,
   currentEpisode,
   cmsData,
@@ -602,19 +602,28 @@ const DetailPanel: React.FC<DetailPanelProps> = ({
         }
       }
 
-      const searchResponse = await fetch(
-        `/api/tmdb/search?query=${encodeURIComponent(searchTitle)}`
-      );
-      if (!searchResponse.ok) {
-        throw new Error('搜索失败');
+      // 已带精确 TMDB id 且媒体类型明确时直接查详情，
+      // 避免同名条目/重拍版经片名搜索误命中 results[0]
+      let detailId: number | undefined;
+      let mediaType: 'movie' | 'tv' = type || 'movie';
+      if (tmdbId && type) {
+        detailId = tmdbId;
+      } else {
+        const searchResponse = await fetch(
+          `/api/tmdb/search?query=${encodeURIComponent(searchTitle)}`
+        );
+        if (!searchResponse.ok) {
+          throw new Error('搜索失败');
+        }
+        const searchData = await searchResponse.json();
+        const result = searchData.results?.[0];
+        if (result) {
+          detailId = result.id;
+          mediaType = result.media_type || type || 'movie';
+        }
       }
-      const searchData = await searchResponse.json();
 
-      if (searchData.results && searchData.results.length > 0) {
-        const result = searchData.results[0];
-        const detailId = result.id;
-        const mediaType = result.media_type || type;
-
+      if (detailId) {
         // 获取详情
         const detailResponse = await fetch(
           `/api/tmdb/detail?id=${detailId}&type=${mediaType}`

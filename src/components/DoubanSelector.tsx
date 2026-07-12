@@ -16,16 +16,25 @@ interface DoubanSelectorProps {
   type: 'movie' | 'tv' | 'show' | 'anime';
   primarySelection?: string;
   secondarySelection?: string;
+  showTmdbHot?: boolean;
   onPrimaryChange: (value: string) => void;
   onSecondaryChange: (value: string) => void;
   onMultiLevelChange?: (values: Record<string, string>) => void;
   onWeekdayChange: (weekday: string) => void;
 }
 
+// TMDB 热门的一级选项与时间窗二级选项（电影/电视剧共用）
+export const TMDB_HOT_PRIMARY = 'tmdb-hot';
+export const TMDB_HOT_WINDOW_OPTIONS: SelectorOption[] = [
+  { label: '今日', value: 'day' },
+  { label: '本周', value: 'week' },
+];
+
 const DoubanSelector: React.FC<DoubanSelectorProps> = ({
   type,
   primarySelection,
   secondarySelection,
+  showTmdbHot = false,
   onPrimaryChange,
   onSecondaryChange,
   onMultiLevelChange,
@@ -53,6 +62,9 @@ const DoubanSelector: React.FC<DoubanSelectorProps> = ({
     { label: '最新电影', value: '最新' },
     { label: '豆瓣高分', value: '豆瓣高分' },
     { label: '冷门佳片', value: '冷门佳片' },
+    ...(showTmdbHot
+      ? [{ label: 'TMDB热门', value: TMDB_HOT_PRIMARY }]
+      : []),
   ];
 
   // 电影的二级选择器选项
@@ -68,6 +80,9 @@ const DoubanSelector: React.FC<DoubanSelectorProps> = ({
   const tvPrimaryOptions: SelectorOption[] = [
     { label: '全部', value: '全部' },
     { label: '最近热门', value: '最近热门' },
+    ...(showTmdbHot
+      ? [{ label: 'TMDB热门', value: TMDB_HOT_PRIMARY }]
+      : []),
   ];
 
   // 电视剧二级选择器选项
@@ -269,7 +284,13 @@ const DoubanSelector: React.FC<DoubanSelectorProps> = ({
     let activeIndex = -1;
     let options: SelectorOption[] = [];
 
-    if (type === 'movie') {
+    if (primarySelection === TMDB_HOT_PRIMARY) {
+      // TMDB 热门模式下二级是时间窗选项，不是豆瓣地区/类型
+      activeIndex = TMDB_HOT_WINDOW_OPTIONS.findIndex(
+        (opt) => opt.value === secondarySelection
+      );
+      options = TMDB_HOT_WINDOW_OPTIONS;
+    } else if (type === 'movie') {
       activeIndex = movieSecondaryOptions.findIndex(
         (opt) => opt.value === secondarySelection
       );
@@ -295,7 +316,7 @@ const DoubanSelector: React.FC<DoubanSelectorProps> = ({
       );
       return cleanup;
     }
-  }, [secondarySelection]);
+  }, [secondarySelection, primarySelection]);
 
   // 渲染胶囊式选择器
   const renderCapsuleSelector = (
@@ -371,8 +392,22 @@ const DoubanSelector: React.FC<DoubanSelectorProps> = ({
             </div>
           </div>
 
-          {/* 二级选择器 - 只在非"全部"时显示 */}
-          {primarySelection !== '全部' ? (
+          {/* 二级选择器 - TMDB 热门显示时间窗，其余非"全部"时显示地区 */}
+          {primarySelection === TMDB_HOT_PRIMARY ? (
+            <div className='flex flex-col sm:flex-row sm:items-center gap-2'>
+              <span className='text-xs sm:text-sm font-medium text-gray-600 dark:text-gray-400 min-w-[48px]'>
+                榜单
+              </span>
+              <div className='overflow-x-auto'>
+                {renderCapsuleSelector(
+                  TMDB_HOT_WINDOW_OPTIONS,
+                  secondarySelection || TMDB_HOT_WINDOW_OPTIONS[0].value,
+                  onSecondaryChange,
+                  false
+                )}
+              </div>
+            </div>
+          ) : primarySelection !== '全部' ? (
             <div className='flex flex-col sm:flex-row sm:items-center gap-2'>
               <span className='text-xs sm:text-sm font-medium text-gray-600 dark:text-gray-400 min-w-[48px]'>
                 地区
@@ -422,8 +457,22 @@ const DoubanSelector: React.FC<DoubanSelectorProps> = ({
             </div>
           </div>
 
-          {/* 二级选择器 - 只在选中"最近热门"时显示，选中"全部"时显示多级选择器 */}
-          {(primarySelection || tvPrimaryOptions[1].value) === '最近热门' ? (
+          {/* 二级选择器 - TMDB 热门显示时间窗；"最近热门"显示类型；"全部"显示多级选择器 */}
+          {primarySelection === TMDB_HOT_PRIMARY ? (
+            <div className='flex flex-col sm:flex-row sm:items-center gap-2'>
+              <span className='text-xs sm:text-sm font-medium text-gray-600 dark:text-gray-400 min-w-[48px]'>
+                榜单
+              </span>
+              <div className='overflow-x-auto'>
+                {renderCapsuleSelector(
+                  TMDB_HOT_WINDOW_OPTIONS,
+                  secondarySelection || TMDB_HOT_WINDOW_OPTIONS[0].value,
+                  onSecondaryChange,
+                  false
+                )}
+              </div>
+            </div>
+          ) : (primarySelection || tvPrimaryOptions[1].value) === '最近热门' ? (
             <div className='flex flex-col sm:flex-row sm:items-center gap-2'>
               <span className='text-xs sm:text-sm font-medium text-gray-600 dark:text-gray-400 min-w-[48px]'>
                 类型

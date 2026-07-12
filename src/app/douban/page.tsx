@@ -12,11 +12,12 @@ import {
   getDoubanList,
   getDoubanRecommends,
 } from '@/lib/douban.client';
+import { fetchTMDBHot } from '@/lib/tmdb.client';
 import { DoubanItem, DoubanResult } from '@/lib/types';
 
 import DoubanCardSkeleton from '@/components/DoubanCardSkeleton';
 import DoubanCustomSelector from '@/components/DoubanCustomSelector';
-import DoubanSelector from '@/components/DoubanSelector';
+import DoubanSelector, { TMDB_HOT_PRIMARY } from '@/components/DoubanSelector';
 import PageLayout from '@/components/PageLayout';
 import VideoCard from '@/components/VideoCard';
 
@@ -98,6 +99,15 @@ function DoubanPageClient() {
     if (runtimeConfig?.CUSTOM_CATEGORIES?.length > 0) {
       setCustomCategories(runtimeConfig.CUSTOM_CATEGORIES);
     }
+  }, []);
+
+  // 站点是否配置了 TMDB API Key（控制 TMDB 热门入口显隐）
+  const [tmdbEnabled, setTmdbEnabled] = useState(false);
+  useEffect(() => {
+    fetch('/api/server-config')
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => setTmdbEnabled(Boolean(data?.TMDBEnabled)))
+      .catch(() => setTmdbEnabled(false));
   }, []);
 
   // 同步最新参数值到 ref
@@ -360,6 +370,16 @@ function DoubanPageClient() {
             ? (multiLevelValues.label as string)
             : '',
         });
+      } else if (
+        primarySelection === TMDB_HOT_PRIMARY &&
+        (type === 'movie' || type === 'tv')
+      ) {
+        data = await fetchTMDBHot({
+          kind: type,
+          window: secondarySelection === 'week' ? 'week' : 'day',
+          pageLimit: 25,
+          pageStart: 0,
+        });
       } else if (primarySelection === '全部') {
         data = await getDoubanRecommends({
           kind: type === 'show' ? 'tv' : (type as 'tv' | 'movie'),
@@ -404,12 +424,15 @@ function DoubanPageClient() {
       }
     } catch (err) {
       console.error(err);
-      setLoadError(
-        type === 'anime' && primarySelection === '每日放送'
-          ? 'Bangumi 暂时无法读取，请稍后再试。'
-          : '内容加载失败，请稍后再试。'
-      );
-      setLoading(false); // 发生错误时总是停止loading状态
+      // 与 success path 一致做快照比对：过期请求的失败不应覆盖新选择的状态
+      if (isSnapshotEqual(requestSnapshot, { ...currentParamsRef.current })) {
+        setLoadError(
+          type === 'anime' && primarySelection === '每日放送'
+            ? 'Bangumi 暂时无法读取，请稍后再试。'
+            : '内容加载失败，请稍后再试。'
+        );
+        setLoading(false); // 发生错误时总是停止loading状态
+      }
     }
   }, [
     type,
@@ -519,6 +542,16 @@ function DoubanPageClient() {
               label: multiLevelValues.label
                 ? (multiLevelValues.label as string)
                 : '',
+            });
+          } else if (
+            primarySelection === TMDB_HOT_PRIMARY &&
+            (type === 'movie' || type === 'tv')
+          ) {
+            data = await fetchTMDBHot({
+              kind: type,
+              window: secondarySelection === 'week' ? 'week' : 'day',
+              pageLimit: 25,
+              pageStart: currentPage * 25,
             });
           } else if (primarySelection === '全部') {
             data = await getDoubanRecommends({
@@ -686,6 +719,14 @@ function DoubanPageClient() {
             } else if (type === 'show') {
               setSecondarySelection('show');
             }
+          } else if (value === TMDB_HOT_PRIMARY) {
+            // 进入 TMDB 热门：二级切为时间窗默认值
+            setPrimarySelection(value);
+            setSecondarySelection('day');
+          } else if (primarySelection === TMDB_HOT_PRIMARY) {
+            // 离开 TMDB 热门：二级恢复该类型的默认值，避免残留 day/week
+            setPrimarySelection(value);
+            setSecondarySelection(type === 'tv' ? 'tv' : '全部');
           } else {
             setPrimarySelection(value);
           }
@@ -772,6 +813,9 @@ function DoubanPageClient() {
     if (type === 'anime' && primarySelection === '每日放送') {
       return '来自 Bangumi 番组计划的精选内容';
     }
+    if (primarySelection === TMDB_HOT_PRIMARY) {
+      return '来自 TMDB 的热门内容';
+    }
     return '来自豆瓣的精选内容';
   };
 
@@ -806,6 +850,7 @@ function DoubanPageClient() {
                 type={type as 'movie' | 'tv' | 'show' | 'anime'}
                 primarySelection={primarySelection}
                 secondarySelection={secondarySelection}
+                showTmdbHot={tmdbEnabled && (type === 'movie' || type === 'tv')}
                 onPrimaryChange={handlePrimaryChange}
                 onSecondaryChange={handleSecondaryChange}
                 onMultiLevelChange={handleMultiLevelChange}
@@ -843,13 +888,33 @@ function DoubanPageClient() {
                   doubanData.map((item, index) => (
                     <div key={`${item.title}-${index}`} className='w-full'>
                       <VideoCard
-                        from='douban'
+                        from={
+                          primarySelection === TMDB_HOT_PRIMARY
+                            ? 'tmdb'
+                            : 'douban'
+                        }
                         title={item.title}
                         poster={item.poster}
-                        douban_id={Number(item.id)}
+                        douban_id={
+                          primarySelection === TMDB_HOT_PRIMARY
+                            ? undefined
+                            : Number(item.id)
+                        }
+                        tmdb_id={
+                          primarySelection === TMDB_HOT_PRIMARY
+                            ? Number(item.id)
+                            : undefined
+                        }
                         rate={item.rate}
                         year={item.year}
-                        type={type === 'movie' ? 'movie' : ''} // 电影类型严格控制，tv 不控
+                        // 电影类型严格控制，tv 不控；TMDB 榜单的 kind 精确可知，直接传递
+                        type={
+                          type === 'movie'
+                            ? 'movie'
+                            : primarySelection === TMDB_HOT_PRIMARY
+                            ? 'tv'
+                            : ''
+                        }
                         isBangumi={
                           type === 'anime' && primarySelection === '每日放送'
                         }

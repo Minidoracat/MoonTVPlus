@@ -9283,7 +9283,11 @@ function PlayPageClient() {
           const currentTime = artPlayerRef.current?.currentTime || 0;
           const duration = artPlayerRef.current?.duration || 0;
 
-          if (shouldBlockSuspiciousAutoNext(currentTime, duration)) {
+          // 短剧单集常不足90秒，跳过防广告误判（与上游 duanju 特例一致）
+          if (
+            searchParams.get('duanju') !== '1' &&
+            shouldBlockSuspiciousAutoNext(currentTime, duration)
+          ) {
             console.warn('[PlayPage] Blocked suspicious early auto-next', {
               currentTime,
               duration,

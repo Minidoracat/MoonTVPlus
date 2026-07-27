@@ -2967,7 +2967,7 @@ function PlayPageClient() {
   const refreshXiaoyaUrl = async (
     preferredHls?: any,
     preferredVideo?: HTMLVideoElement,
-    isScheduled: boolean = false
+    isScheduled = false
   ) => {
     // 防抖：距离上次刷新不足3秒则不刷新
     const now = Date.now();

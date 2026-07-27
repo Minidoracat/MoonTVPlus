@@ -138,8 +138,13 @@ async function runMigrations(client) {
 }
 
 async function ensureDefaultAdmin(client) {
-  const username = process.env.USERNAME || 'admin';
-  const password = process.env.PASSWORD || '123456789';
+  const username = process.env.USERNAME;
+  const password = process.env.PASSWORD;
+  if (!username || !password) {
+    throw new Error(
+      '❌ USERNAME 与 PASSWORD 环境变量必须设置，拒绝以默认凭证创建 owner 账号'
+    );
+  }
   const passwordHash = hashPassword(password);
 
   const existingUser = await client.execute({

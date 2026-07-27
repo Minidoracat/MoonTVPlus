@@ -33,13 +33,14 @@ import {
   saveFavorite,
   subscribeToDataUpdates,
 } from '@/lib/db.client';
+import { getBangumiSubjectUrl } from '@/lib/bangumi.client';
 import { isNetdiskSource } from '@/lib/netdisk/source';
 import {
   base58Decode,
   clearBangumiImageFallbackCacheIfFailed,
+  ensureBangumiImagePrimaryProbed,
   getBangumiImageFallbackUrl,
   getDoubanImageFallbackUrl,
-  markBangumiImageFallbackActive,
   processImageUrl,
   tryApplyBangumiImageFallback,
   tryApplyDoubanImageFallback,
@@ -94,6 +95,7 @@ export interface VideoCardProps {
     episodes_titles?: string[];
   };
   onBeforeNavigate?: () => void;
+  isDuanju?: boolean; // 短剧标识，用于播放页跳过"上次播放到"提示
 }
 
 export type VideoCardHandle = {
@@ -134,6 +136,7 @@ const VideoCard = forwardRef<VideoCardHandle, VideoCardProps>(
       totalTime,
       cmsData,
       onBeforeNavigate,
+      isDuanju,
     }: VideoCardProps,
     ref
   ) {
@@ -223,44 +226,24 @@ const VideoCard = forwardRef<VideoCardHandle, VideoCardProps>(
       setDisplayPoster(processedPoster);
     }, [processedPoster]);
 
-    const bangumiImageTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(
-      null
-    );
-
+    // 主源图片域主页探测：失败写 sticky 后切备源海报（替代原 5s 强制降级）
     useEffect(() => {
-      if (bangumiImageTimeoutRef.current) {
-        clearTimeout(bangumiImageTimeoutRef.current);
-        bangumiImageTimeoutRef.current = null;
-      }
-
       if (!actualPoster) return;
 
-      const bangumiFallbackPoster = getBangumiImageFallbackUrl(actualPoster);
-      if (!bangumiFallbackPoster || displayPoster === bangumiFallbackPoster) {
-        return;
-      }
-
-      bangumiImageTimeoutRef.current = setTimeout(() => {
-        markBangumiImageFallbackActive();
-        setDisplayPoster((current) =>
-          current === bangumiFallbackPoster ? current : bangumiFallbackPoster
-        );
-      }, 5000);
+      let cancelled = false;
+      void (async () => {
+        const reachable = await ensureBangumiImagePrimaryProbed();
+        if (cancelled || reachable) return;
+        const bangumiFallbackPoster = getBangumiImageFallbackUrl(actualPoster);
+        if (bangumiFallbackPoster) {
+          setDisplayPoster(bangumiFallbackPoster);
+        }
+      })();
 
       return () => {
-        if (bangumiImageTimeoutRef.current) {
-          clearTimeout(bangumiImageTimeoutRef.current);
-          bangumiImageTimeoutRef.current = null;
-        }
+        cancelled = true;
       };
-    }, [actualPoster, displayPoster]);
-
-    const clearBangumiImageTimeout = useCallback(() => {
-      if (bangumiImageTimeoutRef.current) {
-        clearTimeout(bangumiImageTimeoutRef.current);
-        bangumiImageTimeoutRef.current = null;
-      }
-    }, []);
+    }, [actualPoster]);
 
     useImperativeHandle(ref, () => ({
       setEpisodes: (eps?: number) => setDynamicEpisodes(eps),
@@ -437,7 +420,7 @@ const VideoCard = forwardRef<VideoCardHandle, VideoCardProps>(
           isAggregate ? '&prefer=true' : ''
         }${
           actualQuery ? `&stitle=${encodeURIComponent(actualQuery.trim())}` : ''
-        }${actualSearchType ? `&stype=${actualSearchType}` : ''}`;
+        }${actualSearchType ? `&stype=${actualSearchType}` : ''}${isDuanju ? '&duanju=1' : ''}`;
 
         if (isCurrentlyOnPlayPage) {
           // 在 play 页面内，添加 _reload 参数强制刷新
@@ -460,6 +443,7 @@ const VideoCard = forwardRef<VideoCardHandle, VideoCardProps>(
       actualQuery,
       actualSearchType,
       onBeforeNavigate,
+      isDuanju,
     ]);
 
     const handleClick = useCallback(() => {
@@ -517,7 +501,7 @@ const VideoCard = forwardRef<VideoCardHandle, VideoCardProps>(
           isAggregate ? '&prefer=true' : ''
         }${
           actualQuery ? `&stitle=${encodeURIComponent(actualQuery.trim())}` : ''
-        }${actualSearchType ? `&stype=${actualSearchType}` : ''}`;
+        }${actualSearchType ? `&stype=${actualSearchType}` : ''}${isDuanju ? '&duanju=1' : ''}`;
         window.open(url, '_blank');
       }
     }, [
@@ -532,6 +516,7 @@ const VideoCard = forwardRef<VideoCardHandle, VideoCardProps>(
       actualQuery,
       actualSearchType,
       onBeforeNavigate,
+      isDuanju,
     ]);
 
     // 检查搜索结果的收藏状态
@@ -840,7 +825,7 @@ const VideoCard = forwardRef<VideoCardHandle, VideoCardProps>(
           icon: <Link size={20} />,
           onClick: () => {
             const url = isBangumi
-              ? `https://bgm.tv/subject/${actualDoubanId.toString()}`
+              ? getBangumiSubjectUrl(actualDoubanId.toString())
               : `https://movie.douban.com/subject/${actualDoubanId.toString()}`;
             window.open(url, '_blank', 'noopener,noreferrer');
           },
@@ -1021,7 +1006,6 @@ const VideoCard = forwardRef<VideoCardHandle, VideoCardProps>(
                 loading='lazy'
                 onLoadingComplete={() => {
                   setIsLoading(true);
-                  clearBangumiImageTimeout();
                 }}
                 onClick={(e) => {
                   e.stopPropagation();
@@ -1039,7 +1023,6 @@ const VideoCard = forwardRef<VideoCardHandle, VideoCardProps>(
                     doubanFallbackPoster &&
                     tryApplyDoubanImageFallback(img, actualPoster)
                   ) {
-                    clearBangumiImageTimeout();
                     setDisplayPoster(doubanFallbackPoster);
                     return;
                   }
@@ -1050,7 +1033,6 @@ const VideoCard = forwardRef<VideoCardHandle, VideoCardProps>(
                     bangumiFallbackPoster &&
                     tryApplyBangumiImageFallback(img, actualPoster)
                   ) {
-                    clearBangumiImageTimeout();
                     setDisplayPoster(bangumiFallbackPoster);
                     return;
                   }
@@ -1058,7 +1040,6 @@ const VideoCard = forwardRef<VideoCardHandle, VideoCardProps>(
                   if (
                     clearBangumiImageFallbackCacheIfFailed(img, actualPoster)
                   ) {
-                    clearBangumiImageTimeout();
                     setDisplayPoster(processedPoster);
                     return;
                   }
@@ -1460,7 +1441,7 @@ const VideoCard = forwardRef<VideoCardHandle, VideoCardProps>(
                 <a
                   href={
                     isBangumi
-                      ? `https://bgm.tv/subject/${actualDoubanId.toString()}`
+                      ? getBangumiSubjectUrl(actualDoubanId.toString())
                       : `https://movie.douban.com/subject/${actualDoubanId.toString()}`
                   }
                   target='_blank'

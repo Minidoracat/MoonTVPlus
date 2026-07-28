@@ -11,13 +11,17 @@ import {
   getDoubanCategories,
   getDoubanList,
   getDoubanRecommends,
+  NETFLIX_MOVIE_RECOMMEND_PARAMS,
 } from '@/lib/douban.client';
 import { fetchTMDBHot } from '@/lib/tmdb.client';
 import { DoubanItem, DoubanResult } from '@/lib/types';
 
 import DoubanCardSkeleton from '@/components/DoubanCardSkeleton';
 import DoubanCustomSelector from '@/components/DoubanCustomSelector';
-import DoubanSelector, { TMDB_HOT_PRIMARY } from '@/components/DoubanSelector';
+import DoubanSelector, {
+  NETFLIX_PRIMARY,
+  TMDB_HOT_PRIMARY,
+} from '@/components/DoubanSelector';
 import PageLayout from '@/components/PageLayout';
 import VideoCard from '@/components/VideoCard';
 
@@ -380,6 +384,12 @@ function DoubanPageClient() {
           pageLimit: 25,
           pageStart: 0,
         });
+      } else if (primarySelection === NETFLIX_PRIMARY && type === 'movie') {
+        data = await getDoubanRecommends({
+          ...NETFLIX_MOVIE_RECOMMEND_PARAMS,
+          pageLimit: 25,
+          pageStart: 0,
+        });
       } else if (primarySelection === '全部') {
         data = await getDoubanRecommends({
           kind: type === 'show' ? 'tv' : (type as 'tv' | 'movie'),
@@ -550,6 +560,12 @@ function DoubanPageClient() {
             data = await fetchTMDBHot({
               kind: type,
               window: secondarySelection === 'week' ? 'week' : 'day',
+              pageLimit: 25,
+              pageStart: currentPage * 25,
+            });
+          } else if (primarySelection === NETFLIX_PRIMARY && type === 'movie') {
+            data = await getDoubanRecommends({
+              ...NETFLIX_MOVIE_RECOMMEND_PARAMS,
               pageLimit: 25,
               pageStart: currentPage * 25,
             });
@@ -815,6 +831,9 @@ function DoubanPageClient() {
     }
     if (primarySelection === TMDB_HOT_PRIMARY) {
       return '来自 TMDB 的热门内容';
+    }
+    if (primarySelection === NETFLIX_PRIMARY) {
+      return '来自豆瓣的 Netflix 热门内容';
     }
     return '来自豆瓣的精选内容';
   };

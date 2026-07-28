@@ -511,6 +511,23 @@ interface DoubanRecommendsParams {
   sort?: string;
 }
 
+// Netflix 热门（电影）的固定请求参数：platform 走 tags 自由字符串，豆瓣认英文原名
+// 所有字段必须显式给值：direct 路径用模板字符串拼 query（见下方），undefined 会变成字面
+// "undefined" 并被后端塞进 tags；proxy 路径下 category 若为 undefined，selected_categories
+// 会从 {"类型":""} 变成 {}。Required<Omit<...>> 由编译器守住这条不变式。
+export const NETFLIX_MOVIE_RECOMMEND_PARAMS: Required<
+  Omit<DoubanRecommendsParams, 'pageLimit' | 'pageStart'>
+> = {
+  kind: 'movie',
+  category: '',
+  format: '',
+  region: '',
+  year: '',
+  label: '',
+  platform: 'Netflix',
+  sort: 'U',
+};
+
 export async function getDoubanRecommends(
   params: DoubanRecommendsParams
 ): Promise<DoubanResult> {

@@ -30,6 +30,11 @@ export const TMDB_HOT_WINDOW_OPTIONS: SelectorOption[] = [
   { label: '本周', value: 'week' },
 ];
 
+// Netflix 热门的一级选项（仅电影，固定近期热度排序，无二级选项）
+// 加 -hot 后缀是为了与 MultiLevelSelector 平台筛选栏的 'netflix' 区分：两者语义不同，
+// 会同时出现在电影页，同名容易让人误以为是同一个状态
+export const NETFLIX_PRIMARY = 'netflix-hot';
+
 const DoubanSelector: React.FC<DoubanSelectorProps> = ({
   type,
   primarySelection,
@@ -62,6 +67,7 @@ const DoubanSelector: React.FC<DoubanSelectorProps> = ({
     { label: '最新电影', value: '最新' },
     { label: '豆瓣高分', value: '豆瓣高分' },
     { label: '冷门佳片', value: '冷门佳片' },
+    { label: 'Netflix', value: NETFLIX_PRIMARY },
     ...(showTmdbHot
       ? [{ label: 'TMDB热门', value: TMDB_HOT_PRIMARY }]
       : []),
@@ -281,6 +287,9 @@ const DoubanSelector: React.FC<DoubanSelectorProps> = ({
 
   // 监听副选择器变化
   useEffect(() => {
+    // Netflix 不渲染二级选择器，容器与 refs 都不存在，直接跳过
+    if (primarySelection === NETFLIX_PRIMARY) return;
+
     let activeIndex = -1;
     let options: SelectorOption[] = [];
 
@@ -392,7 +401,7 @@ const DoubanSelector: React.FC<DoubanSelectorProps> = ({
             </div>
           </div>
 
-          {/* 二级选择器 - TMDB 热门显示时间窗，其余非"全部"时显示地区 */}
+          {/* 二级选择器 - TMDB 热门显示时间窗；Netflix 无二级；其余非"全部"时显示地区 */}
           {primarySelection === TMDB_HOT_PRIMARY ? (
             <div className='flex flex-col sm:flex-row sm:items-center gap-2'>
               <span className='text-xs sm:text-sm font-medium text-gray-600 dark:text-gray-400 min-w-[48px]'>
@@ -407,7 +416,8 @@ const DoubanSelector: React.FC<DoubanSelectorProps> = ({
                 )}
               </div>
             </div>
-          ) : primarySelection !== '全部' ? (
+          ) : primarySelection === NETFLIX_PRIMARY ? null : primarySelection !==
+            '全部' ? (
             <div className='flex flex-col sm:flex-row sm:items-center gap-2'>
               <span className='text-xs sm:text-sm font-medium text-gray-600 dark:text-gray-400 min-w-[48px]'>
                 地区

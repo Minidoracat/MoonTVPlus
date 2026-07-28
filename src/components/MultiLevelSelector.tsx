@@ -236,7 +236,20 @@ const MultiLevelSelector: React.FC<MultiLevelSelectorProps> = ({
 
     switch (contentType) {
       case 'movie':
-        return baseOptions; // 电影不需要平台选项
+        // 实测 movie/recommend 各 tag 的 total（2026-07-28）：
+        // Netflix / BBC / NHK 均为 500（500 是接口返回上限，实际 ≥500）、NBC 209、HBO 199、CBS 42
+        // 已剔除（结果太少，占一个 chip 不划算）：tvN 19、湖南卫视 17、腾讯视频 14、优酷 12、爱奇艺 6
+        // 豆瓣几乎只对剧集/综艺标注国内平台，电影平台清单与 tv 不同是数据现实，不是遗漏
+        // 重测：curl 'https://m.douban.com/rexxar/api/v2/movie/recommend?refresh=0&start=0&count=1&selected_categories=%7B%7D&uncollect=false&score_range=0,10&tags=<TAG>&sort=U' -H 'User-Agent: Mozilla/5.0' -H 'Referer: https://movie.douban.com/'
+        return [
+          ...baseOptions,
+          { label: 'Netflix', value: 'netflix' },
+          { label: 'HBO', value: 'hbo' },
+          { label: 'BBC', value: 'bbc' },
+          { label: 'NHK', value: 'nhk' },
+          { label: 'CBS', value: 'cbs' },
+          { label: 'NBC', value: 'nbc' },
+        ];
       case 'tv':
       case 'anime-tv':
       case 'show':
@@ -305,8 +318,9 @@ const MultiLevelSelector: React.FC<MultiLevelSelectorProps> = ({
       label: '年代',
       options: yearOptions,
     },
-    // 只在电视剧和综艺时显示平台选项
-    ...(contentType === 'tv' ||
+    // 只在电影、电视剧、综艺和番剧时显示平台选项
+    ...(contentType === 'movie' ||
+      contentType === 'tv' ||
       contentType === 'show' ||
       contentType === 'anime-tv'
       ? [

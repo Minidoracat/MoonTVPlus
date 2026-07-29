@@ -323,6 +323,8 @@ export interface DoubanItem {
   poster: string;
   rate: string;
   year: string;
+  query?: string; // 搜索资源站用的片名，与展示名不同时才需要（如带季号的剧集）
+  rank?: number; // 外部榜单名次（Netflix 官方 Top 10），由资料源给出而非阵列下标
 }
 
 export interface DoubanResult {

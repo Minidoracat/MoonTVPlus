@@ -21,10 +21,10 @@ import React, {
   useEffect,
   useImperativeHandle,
   useMemo,
-  useRef,
   useState,
 } from 'react';
 
+import { getBangumiSubjectUrl } from '@/lib/bangumi.client';
 import {
   deleteFavorite,
   deletePlayRecord,
@@ -33,8 +33,8 @@ import {
   saveFavorite,
   subscribeToDataUpdates,
 } from '@/lib/db.client';
-import { getBangumiSubjectUrl } from '@/lib/bangumi.client';
 import { isNetdiskSource } from '@/lib/netdisk/source';
+import type { TMDBVideoItem } from '@/lib/tmdb.client';
 import {
   base58Decode,
   clearBangumiImageFallbackCacheIfFailed,
@@ -53,7 +53,6 @@ import { ImagePlaceholder } from '@/components/ImagePlaceholder';
 import ImageViewer from '@/components/ImageViewer';
 import MobileActionSheet from '@/components/MobileActionSheet';
 import TrailerPickerDialog from '@/components/TrailerPickerDialog';
-import type { TMDBVideoItem } from '@/lib/tmdb.client';
 
 export interface VideoCardProps {
   id?: string;
@@ -86,6 +85,7 @@ export interface VideoCardProps {
   isUpcoming?: boolean; // 是否为即将上映
   seasonNumber?: number; // 季度编号
   seasonName?: string; // 季度名称
+  rank?: number; // 榜单名次（Netflix 官方 Top 10 等外部榜单）
   orientation?: 'vertical' | 'horizontal'; // 卡片方向
   playTime?: number; // 当前播放时间（秒）
   totalTime?: number; // 总时长（秒）
@@ -131,6 +131,7 @@ const VideoCard = forwardRef<VideoCardHandle, VideoCardProps>(
       isUpcoming = false,
       seasonNumber,
       seasonName,
+      rank,
       orientation = 'vertical',
       playTime,
       totalTime,
@@ -1260,6 +1261,28 @@ const VideoCard = forwardRef<VideoCardHandle, VideoCardProps>(
                 S{seasonNumber}
               </div>
             )}
+
+            {/* 榜单名次徽章：与 S{n} 季度徽章共用左上角座标，
+                本页（榜单卡）不传 seasonNumber 所以不撞版。
+                用三元式而非 && ：rank 若为 0 会把字面 0 渲染进 DOM */}
+            {rank ? (
+              <div
+                className='absolute top-2 left-2 bg-red-600/90 text-white text-xs font-bold px-2 py-1 rounded backdrop-blur-sm shadow-sm transition-all duration-300 ease-out group-hover:opacity-90'
+                style={
+                  {
+                    WebkitUserSelect: 'none',
+                    userSelect: 'none',
+                    WebkitTouchCallout: 'none',
+                  } as React.CSSProperties
+                }
+                onContextMenu={(e) => {
+                  e.preventDefault();
+                  return false;
+                }}
+              >
+                #{rank}
+              </div>
+            ) : null}
 
             {/* 徽章 */}
             {config.showRating && rate && (

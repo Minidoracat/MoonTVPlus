@@ -528,6 +528,21 @@ export const NETFLIX_MOVIE_RECOMMEND_PARAMS: Required<
   sort: 'U',
 };
 
+// Netflix 热门（剧集）：与电影版同一条豆瓣 recommend 路径，只差 kind/format。
+// Required<Omit<...>> 的不变式同上，不可用 spread 覆盖部分栏位。
+export const NETFLIX_TV_RECOMMEND_PARAMS: Required<
+  Omit<DoubanRecommendsParams, 'pageLimit' | 'pageStart'>
+> = {
+  kind: 'tv',
+  category: '',
+  format: '电视剧',
+  region: '',
+  year: '',
+  label: '',
+  platform: 'Netflix',
+  sort: 'U',
+};
+
 export async function getDoubanRecommends(
   params: DoubanRecommendsParams
 ): Promise<DoubanResult> {

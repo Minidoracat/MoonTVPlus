@@ -4,6 +4,11 @@
 
 import React, { useEffect, useRef, useState } from 'react';
 
+import {
+  NETFLIX_TOP10_DEFAULT_REGION,
+  NETFLIX_TOP10_REGIONS,
+} from '@/lib/netflix.client';
+
 import MultiLevelSelector from './MultiLevelSelector';
 import WeekdaySelector from './WeekdaySelector';
 
@@ -17,6 +22,8 @@ interface DoubanSelectorProps {
   primarySelection?: string;
   secondarySelection?: string;
   showTmdbHot?: boolean;
+  netflixWeeks?: string[]; // 官方周榜可选周次，由 /api/netflix/top10 回传
+  netflixRegions?: string[]; // 实际有资料的地区；各国榜没抓成时只剩两个全球榜
   onPrimaryChange: (value: string) => void;
   onSecondaryChange: (value: string) => void;
   onMultiLevelChange?: (values: Record<string, string>) => void;
@@ -30,16 +37,55 @@ export const TMDB_HOT_WINDOW_OPTIONS: SelectorOption[] = [
   { label: '本周', value: 'week' },
 ];
 
-// Netflix 热门的一级选项（仅电影，固定近期热度排序，无二级选项）
+// Netflix 一级选项（电影页与剧集页共用）。二级是资料源：豆瓣热度 / 官方周榜。
 // 加 -hot 后缀是为了与 MultiLevelSelector 平台筛选栏的 'netflix' 区分：两者语义不同，
 // 会同时出现在电影页，同名容易让人误以为是同一个状态
 export const NETFLIX_PRIMARY = 'netflix-hot';
+
+// Netflix 二级：资料源 +（官方周榜时）地区、周次。
+// 三个维度编码进 secondarySelection 一个字串，而不是在 douban/page 新增两个 state：
+// 那样得同步 currentParamsRef、isSnapshotEqual 与三处依赖阵列共 5 个点，
+// 漏一处就会写入过期资料。
+// 注意：Netflix 模式下 secondarySelection 不是单纯字串，一律走 parse/build 收口，
+// 不可在别处直接做 `secondarySelection === '全部'` 之类的字串比对。
+export const NETFLIX_SOURCE_DOUBAN = 'douban-hot';
+export const NETFLIX_SOURCE_OFFICIAL = 'official-top10';
+
+export const NETFLIX_SOURCE_OPTIONS: SelectorOption[] = [
+  { label: '豆瓣热度', value: NETFLIX_SOURCE_DOUBAN },
+  { label: '官方周榜', value: NETFLIX_SOURCE_OFFICIAL },
+];
+
+export function parseNetflixSecondary(value?: string) {
+  const [source, region, week] = (value || '').split(':');
+  return {
+    // 非法/残留值（如切换分类时留下的 '全部'）一律按豆瓣热度处理
+    source:
+      source === NETFLIX_SOURCE_OFFICIAL
+        ? NETFLIX_SOURCE_OFFICIAL
+        : NETFLIX_SOURCE_DOUBAN,
+    region: region || NETFLIX_TOP10_DEFAULT_REGION,
+    week: week || '', // 空 = 最新一周，由服务端解析成实际周次
+  };
+}
+
+export function buildNetflixSecondary(
+  source: string,
+  region: string,
+  week: string
+) {
+  return source === NETFLIX_SOURCE_OFFICIAL
+    ? `${NETFLIX_SOURCE_OFFICIAL}:${region}:${week}`
+    : NETFLIX_SOURCE_DOUBAN;
+}
 
 const DoubanSelector: React.FC<DoubanSelectorProps> = ({
   type,
   primarySelection,
   secondarySelection,
   showTmdbHot = false,
+  netflixWeeks = [],
+  netflixRegions = [],
   onPrimaryChange,
   onSecondaryChange,
   onMultiLevelChange,
@@ -86,6 +132,7 @@ const DoubanSelector: React.FC<DoubanSelectorProps> = ({
   const tvPrimaryOptions: SelectorOption[] = [
     { label: '全部', value: '全部' },
     { label: '最近热门', value: '最近热门' },
+    { label: 'Netflix', value: NETFLIX_PRIMARY },
     ...(showTmdbHot
       ? [{ label: 'TMDB热门', value: TMDB_HOT_PRIMARY }]
       : []),
@@ -287,13 +334,16 @@ const DoubanSelector: React.FC<DoubanSelectorProps> = ({
 
   // 监听副选择器变化
   useEffect(() => {
-    // Netflix 不渲染二级选择器，容器与 refs 都不存在，直接跳过
-    if (primarySelection === NETFLIX_PRIMARY) return;
-
     let activeIndex = -1;
     let options: SelectorOption[] = [];
 
-    if (primarySelection === TMDB_HOT_PRIMARY) {
+    if (primarySelection === NETFLIX_PRIMARY) {
+      // Netflix 二级是资料源胶囊；地区/周次走原生 select，不参与指示器
+      options = NETFLIX_SOURCE_OPTIONS;
+      activeIndex = options.findIndex(
+        (opt) => opt.value === parseNetflixSecondary(secondarySelection).source
+      );
+    } else if (primarySelection === TMDB_HOT_PRIMARY) {
       // TMDB 热门模式下二级是时间窗选项，不是豆瓣地区/类型
       activeIndex = TMDB_HOT_WINDOW_OPTIONS.findIndex(
         (opt) => opt.value === secondarySelection
@@ -325,7 +375,8 @@ const DoubanSelector: React.FC<DoubanSelectorProps> = ({
       );
       return cleanup;
     }
-  }, [secondarySelection, primarySelection]);
+    // showTmdbHot 会决定 Netflix「榜单」列渲不渲染，翻转时指示器要重算
+  }, [secondarySelection, primarySelection, showTmdbHot]);
 
   // 渲染胶囊式选择器
   const renderCapsuleSelector = (
@@ -381,6 +432,96 @@ const DoubanSelector: React.FC<DoubanSelectorProps> = ({
     );
   };
 
+  // 原生 select 免掉第三组 ref/indicator state；265 个周次原生元件完全撑得住
+  const netflixSelectClass =
+    'rounded-full bg-gray-200/60 dark:bg-gray-700/60 backdrop-blur-sm px-2 py-1 sm:px-4 sm:py-2 text-xs sm:text-sm font-medium text-gray-900 dark:text-gray-100 outline-none cursor-pointer';
+
+  const renderNetflixSecondary = () => {
+    const { source, region, week } = parseNetflixSecondary(secondarySelection);
+    // ponytail: 265 项做 O(n×年数) 过滤，够用；资料量再涨才需要预分组
+    const years = Array.from(new Set(netflixWeeks.map((w) => w.slice(0, 4))));
+
+    return (
+      <>
+        {/* 无 TMDB Key 时官方周榜没有海报与中文名，只剩「豆瓣热度」一个选项，
+            渲染成单选项切换器徒增困惑，整列不渲染 */}
+        {showTmdbHot && (
+          <div className='flex flex-col sm:flex-row sm:items-center gap-2'>
+            <span className='text-xs sm:text-sm font-medium text-gray-600 dark:text-gray-400 min-w-[48px]'>
+              榜单
+            </span>
+            <div className='overflow-x-auto'>
+              {renderCapsuleSelector(
+                NETFLIX_SOURCE_OPTIONS,
+                source,
+                (value) =>
+                  onSecondaryChange(buildNetflixSecondary(value, region, week)),
+                false
+              )}
+            </div>
+          </div>
+        )}
+
+        {source === NETFLIX_SOURCE_OFFICIAL && (
+          <div className='flex flex-col sm:flex-row sm:items-center gap-2'>
+            <span className='text-xs sm:text-sm font-medium text-gray-600 dark:text-gray-400 min-w-[48px]'>
+              地区
+            </span>
+            <div className='flex items-center gap-2 flex-wrap'>
+              <select
+                aria-label='地区'
+                value={region}
+                onChange={(e) =>
+                  // 切地区时把周次重设为最新：不同地区的资料覆盖不完全一致
+                  onSecondaryChange(
+                    buildNetflixSecondary(source, e.target.value, '')
+                  )
+                }
+                className={netflixSelectClass}
+              >
+                {/* 只列出实际有资料的地区：各国榜抓取失败或 COUNTRIES=off 时，
+                    选单自动收敛成两个全球榜，不会留下点了必空的选项。
+                    regions 尚未回来时先全列，避免首屏少一半选项 */}
+                {NETFLIX_TOP10_REGIONS.filter(
+                  (opt) =>
+                    netflixRegions.length === 0 ||
+                    netflixRegions.includes(opt.value)
+                ).map((opt) => (
+                  <option key={opt.value} value={opt.value}>
+                    {opt.label}
+                  </option>
+                ))}
+              </select>
+              <select
+                aria-label='周次'
+                value={week}
+                onChange={(e) =>
+                  onSecondaryChange(
+                    buildNetflixSecondary(source, region, e.target.value)
+                  )
+                }
+                className={netflixSelectClass}
+              >
+                <option value=''>最新一周</option>
+                {years.map((year) => (
+                  <optgroup key={year} label={year}>
+                    {netflixWeeks
+                      .filter((w) => w.startsWith(year))
+                      .map((w) => (
+                        <option key={w} value={w}>
+                          {w}
+                        </option>
+                      ))}
+                  </optgroup>
+                ))}
+              </select>
+            </div>
+          </div>
+        )}
+      </>
+    );
+  };
+
   return (
     <div className='space-y-4 sm:space-y-6'>
       {/* 电影类型 - 显示两级选择器 */}
@@ -401,7 +542,7 @@ const DoubanSelector: React.FC<DoubanSelectorProps> = ({
             </div>
           </div>
 
-          {/* 二级选择器 - TMDB 热门显示时间窗；Netflix 无二级；其余非"全部"时显示地区 */}
+          {/* 二级选择器 - TMDB 热门显示时间窗；Netflix 显示榜单来源；其余非"全部"时显示地区 */}
           {primarySelection === TMDB_HOT_PRIMARY ? (
             <div className='flex flex-col sm:flex-row sm:items-center gap-2'>
               <span className='text-xs sm:text-sm font-medium text-gray-600 dark:text-gray-400 min-w-[48px]'>
@@ -416,8 +557,9 @@ const DoubanSelector: React.FC<DoubanSelectorProps> = ({
                 )}
               </div>
             </div>
-          ) : primarySelection === NETFLIX_PRIMARY ? null : primarySelection !==
-            '全部' ? (
+          ) : primarySelection === NETFLIX_PRIMARY ? (
+            renderNetflixSecondary()
+          ) : primarySelection !== '全部' ? (
             <div className='flex flex-col sm:flex-row sm:items-center gap-2'>
               <span className='text-xs sm:text-sm font-medium text-gray-600 dark:text-gray-400 min-w-[48px]'>
                 地区
@@ -467,8 +609,10 @@ const DoubanSelector: React.FC<DoubanSelectorProps> = ({
             </div>
           </div>
 
-          {/* 二级选择器 - TMDB 热门显示时间窗；"最近热门"显示类型；"全部"显示多级选择器 */}
-          {primarySelection === TMDB_HOT_PRIMARY ? (
+          {/* 二级选择器 - Netflix 显示榜单来源；TMDB 热门显示时间窗；"最近热门"显示类型；"全部"显示多级选择器 */}
+          {primarySelection === NETFLIX_PRIMARY ? (
+            renderNetflixSecondary()
+          ) : primarySelection === TMDB_HOT_PRIMARY ? (
             <div className='flex flex-col sm:flex-row sm:items-center gap-2'>
               <span className='text-xs sm:text-sm font-medium text-gray-600 dark:text-gray-400 min-w-[48px]'>
                 榜单

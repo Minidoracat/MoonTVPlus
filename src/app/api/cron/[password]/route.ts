@@ -20,6 +20,7 @@ import {
   setLastGlobalLiveRefreshTime,
 } from '@/lib/live';
 import { MangaChapter, MangaShelfItem } from '@/lib/manga.types';
+import { refreshNetflixTop10 } from '@/lib/netflix-top10';
 import { startOpenListRefresh } from '@/lib/openlist-refresh';
 import { getSuwayomiConfig, loginWithSimpleAuth, SuwayomiClient } from '@/lib/suwayomi.client';
 import { SearchResult } from '@/lib/types';
@@ -236,6 +237,7 @@ async function cronJob() {
     refreshOpenList(),
     refreshRecordAndFavorites(),
     checkAnimeSubscriptions(),
+    refreshNetflixTop10(), // 自我 gate：距上次检查不足 6 小时直接 return；内部已 try/catch
   ]);
 }
 

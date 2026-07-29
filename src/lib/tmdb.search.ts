@@ -72,7 +72,10 @@ export async function searchTMDB(
   query: string,
   proxy?: string,
   year?: number,
-  reverseProxyBaseUrl?: string
+  reverseProxyBaseUrl?: string,
+  // 已知类型时走 typed endpoint（search/movie|tv）：multi 会引进 person 与同名异型别误配。
+  // 不传 = 维持原本的 multi 行为（既有 caller 全部不传）。
+  kind?: 'movie' | 'tv'
 ): Promise<{ code: number; result: TMDBSearchResult | null }> {
   try {
     const actualKey = getNextApiKey(apiKey);
@@ -81,8 +84,8 @@ export async function searchTMDB(
     }
 
     const baseUrl = reverseProxyBaseUrl || DEFAULT_TMDB_BASE_URL;
-    // 使用 multi search 同时搜索电影和电视剧
-    let url = `${baseUrl}/3/search/multi?api_key=${actualKey}&language=zh-CN&query=${encodeURIComponent(query)}&page=1`;
+    // 未指定 kind 时用 multi search 同时搜索电影和电视剧
+    let url = `${baseUrl}/3/search/${kind || 'multi'}?api_key=${actualKey}&language=zh-CN&query=${encodeURIComponent(query)}&page=1`;
 
     // 如果提供了年份，添加到搜索参数中
     if (year) {
@@ -100,9 +103,12 @@ export async function searchTMDB(
     const data: TMDBSearchResponse = await response.json() as TMDBSearchResponse;
 
     // 过滤出电影和电视剧，取第一个结果
-    const validResults = data.results.filter(
-      (item) => item.media_type === 'movie' || item.media_type === 'tv'
-    );
+    const validResults = kind
+      ? // typed endpoint 不回 media_type，补上以维持回传形状一致
+        (data.results || []).map((item) => ({ ...item, media_type: kind }))
+      : data.results.filter(
+          (item) => item.media_type === 'movie' || item.media_type === 'tv'
+        );
 
     if (validResults.length === 0) {
       return { code: 404, result: null };

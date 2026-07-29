@@ -12,14 +12,20 @@ import {
   getDoubanList,
   getDoubanRecommends,
   NETFLIX_MOVIE_RECOMMEND_PARAMS,
+  NETFLIX_TV_RECOMMEND_PARAMS,
 } from '@/lib/douban.client';
+import { fetchNetflixTop10 } from '@/lib/netflix.client';
 import { fetchTMDBHot } from '@/lib/tmdb.client';
 import { DoubanItem, DoubanResult } from '@/lib/types';
 
 import DoubanCardSkeleton from '@/components/DoubanCardSkeleton';
 import DoubanCustomSelector from '@/components/DoubanCustomSelector';
 import DoubanSelector, {
+  buildNetflixSecondary,
   NETFLIX_PRIMARY,
+  NETFLIX_SOURCE_DOUBAN,
+  NETFLIX_SOURCE_OFFICIAL,
+  parseNetflixSecondary,
   TMDB_HOT_PRIMARY,
 } from '@/components/DoubanSelector';
 import PageLayout from '@/components/PageLayout';
@@ -96,6 +102,20 @@ function DoubanPageClient() {
     }
     return '';
   });
+
+  // 官方周榜可选周次，只驱动下拉；不进 snapshot 比对（它不是请求参数）
+  const [netflixWeeks, setNetflixWeeks] = useState<string[]>([]);
+  // 实际有资料的地区，驱动地区下拉收敛；各国榜没抓成时只剩两个全球榜
+  const [netflixRegions, setNetflixRegions] = useState<string[]>([]);
+  // 冷启动：后端正在背景抓取官方榜，空清单不是「没有内容」而是「还没好」
+  const [netflixPending, setNetflixPending] = useState(false);
+
+  // 由 primary/secondary 直接推导，不新增 state
+  const isNetflixOfficial =
+    primarySelection === NETFLIX_PRIMARY &&
+    (type === 'movie' || type === 'tv') &&
+    parseNetflixSecondary(secondarySelection).source ===
+      NETFLIX_SOURCE_OFFICIAL;
 
   // 获取自定义分类数据
   useEffect(() => {
@@ -384,12 +404,42 @@ function DoubanPageClient() {
           pageLimit: 25,
           pageStart: 0,
         });
-      } else if (primarySelection === NETFLIX_PRIMARY && type === 'movie') {
-        data = await getDoubanRecommends({
-          ...NETFLIX_MOVIE_RECOMMEND_PARAMS,
-          pageLimit: 25,
-          pageStart: 0,
-        });
+      } else if (
+        primarySelection === NETFLIX_PRIMARY &&
+        (type === 'movie' || type === 'tv')
+      ) {
+        const { source, region, week } =
+          parseNetflixSecondary(secondarySelection);
+        if (source === NETFLIX_SOURCE_OFFICIAL) {
+          const res = await fetchNetflixTop10({
+            region,
+            kind: type === 'tv' ? 'tv' : 'films',
+            week,
+          });
+          // 周次/地区清单只驱动下拉，过期回应覆盖它无害
+          if (res.weeks.length > 0) setNetflixWeeks(res.weeks);
+          if (res.regions && res.regions.length > 0) {
+            setNetflixRegions(res.regions);
+            // 各国榜没抓成时地区选单会收缩，但已选中的地区还留在 secondarySelection，
+            // 画面看起来切到全球榜、请求仍送旧地区并回空。改选第一个可用地区重新载入。
+            if (!res.regions.includes(region)) {
+              setSecondarySelection(
+                buildNetflixSecondary(source, res.regions[0], '')
+              );
+              return;
+            }
+          }
+          setNetflixPending(Boolean(res.pending));
+          data = res;
+        } else {
+          data = await getDoubanRecommends({
+            ...(type === 'tv'
+              ? NETFLIX_TV_RECOMMEND_PARAMS
+              : NETFLIX_MOVIE_RECOMMEND_PARAMS),
+            pageLimit: 25,
+            pageStart: 0,
+          });
+        }
       } else if (primarySelection === '全部') {
         data = await getDoubanRecommends({
           kind: type === 'show' ? 'tv' : (type as 'tv' | 'movie'),
@@ -422,7 +472,9 @@ function DoubanPageClient() {
 
         if (isSnapshotEqual(requestSnapshot, currentSnapshot)) {
           setDoubanData(data.list);
-          setHasMore(data.list.length !== 0);
+          // 官方周榜固定 10 条无分页：直接收敛，否则 hasMore 会短暂为 true，
+          // 触发一次首屏预取的空转与转圈闪烁
+          setHasMore(!isNetflixOfficial && data.list.length !== 0);
           setLoadError('');
           setLoading(false);
         } else {
@@ -563,12 +615,23 @@ function DoubanPageClient() {
               pageLimit: 25,
               pageStart: currentPage * 25,
             });
-          } else if (primarySelection === NETFLIX_PRIMARY && type === 'movie') {
-            data = await getDoubanRecommends({
-              ...NETFLIX_MOVIE_RECOMMEND_PARAMS,
-              pageLimit: 25,
-              pageStart: currentPage * 25,
-            });
+          } else if (
+            primarySelection === NETFLIX_PRIMARY &&
+            (type === 'movie' || type === 'tv')
+          ) {
+            const { source } = parseNetflixSecondary(secondarySelection);
+            data =
+              source === NETFLIX_SOURCE_OFFICIAL
+                ? // 官方周榜固定 10 条无分页：与 anime「每日放送」一样回空清单，
+                  // 让下面的 setHasMore(list.length !== 0) 自然收敛成 false
+                  { code: 200, message: 'success', list: [] }
+                : await getDoubanRecommends({
+                    ...(type === 'tv'
+                      ? NETFLIX_TV_RECOMMEND_PARAMS
+                      : NETFLIX_MOVIE_RECOMMEND_PARAMS),
+                    pageLimit: 25,
+                    pageStart: currentPage * 25,
+                  });
           } else if (primarySelection === '全部') {
             data = await getDoubanRecommends({
               kind: type === 'show' ? 'tv' : (type as 'tv' | 'movie'),
@@ -739,8 +802,16 @@ function DoubanPageClient() {
             // 进入 TMDB 热门：二级切为时间窗默认值
             setPrimarySelection(value);
             setSecondarySelection('day');
-          } else if (primarySelection === TMDB_HOT_PRIMARY) {
-            // 离开 TMDB 热门：二级恢复该类型的默认值，避免残留 day/week
+          } else if (value === NETFLIX_PRIMARY) {
+            // 进入 Netflix：二级切为资料源默认值（保持现状 = 豆瓣近期热度）
+            setPrimarySelection(value);
+            setSecondarySelection(NETFLIX_SOURCE_DOUBAN);
+          } else if (
+            primarySelection === TMDB_HOT_PRIMARY ||
+            primarySelection === NETFLIX_PRIMARY
+          ) {
+            // 离开 TMDB/Netflix：二级恢复该类型的默认值，否则残留的
+            // day / official-top10:TW: 会被 getRequestParams 当成豆瓣分类的 type 送出去
             setPrimarySelection(value);
             setSecondarySelection(type === 'tv' ? 'tv' : '全部');
           } else {
@@ -833,7 +904,9 @@ function DoubanPageClient() {
       return '来自 TMDB 的热门内容';
     }
     if (primarySelection === NETFLIX_PRIMARY) {
-      return '来自豆瓣的 Netflix 热门内容';
+      return isNetflixOfficial
+        ? '来自 Netflix 官方 Top 10 周榜'
+        : '来自豆瓣的 Netflix 热门内容';
     }
     return '来自豆瓣的精选内容';
   };
@@ -870,6 +943,8 @@ function DoubanPageClient() {
                 primarySelection={primarySelection}
                 secondarySelection={secondarySelection}
                 showTmdbHot={tmdbEnabled && (type === 'movie' || type === 'tv')}
+                netflixWeeks={netflixWeeks}
+                netflixRegions={netflixRegions}
                 onPrimaryChange={handlePrimaryChange}
                 onSecondaryChange={handleSecondaryChange}
                 onMultiLevelChange={handleMultiLevelChange}
@@ -904,42 +979,40 @@ function DoubanPageClient() {
                     <DoubanCardSkeleton key={index} />
                   ))
                 : // 显示实际数据
-                  doubanData.map((item, index) => (
-                    <div key={`${item.title}-${index}`} className='w-full'>
-                      <VideoCard
-                        from={
-                          primarySelection === TMDB_HOT_PRIMARY
-                            ? 'tmdb'
-                            : 'douban'
-                        }
-                        title={item.title}
-                        poster={item.poster}
-                        douban_id={
-                          primarySelection === TMDB_HOT_PRIMARY
-                            ? undefined
-                            : Number(item.id)
-                        }
-                        tmdb_id={
-                          primarySelection === TMDB_HOT_PRIMARY
-                            ? Number(item.id)
-                            : undefined
-                        }
-                        rate={item.rate}
-                        year={item.year}
-                        // 电影类型严格控制，tv 不控；TMDB 榜单的 kind 精确可知，直接传递
-                        type={
-                          type === 'movie'
-                            ? 'movie'
-                            : primarySelection === TMDB_HOT_PRIMARY
-                            ? 'tv'
-                            : ''
-                        }
-                        isBangumi={
-                          type === 'anime' && primarySelection === '每日放送'
-                        }
-                      />
-                    </div>
-                  ))}
+                  doubanData.map((item, index) => {
+                    // Netflix 官方周榜的条目同样来自 TMDB，走与 TMDB 热门一致的卡片路径
+                    const useTmdbCard =
+                      primarySelection === TMDB_HOT_PRIMARY ||
+                      isNetflixOfficial;
+                    return (
+                      <div key={`${item.title}-${index}`} className='w-full'>
+                        <VideoCard
+                          from={useTmdbCard ? 'tmdb' : 'douban'}
+                          // 官方周榜的 list 已按 rank 1~10 排序且不丢列，名次 = 下标+1
+                          rank={isNetflixOfficial ? item.rank : undefined}
+                          title={item.title}
+                          query={item.query}
+                          poster={item.poster}
+                          douban_id={useTmdbCard ? undefined : Number(item.id)}
+                          // 失配项的 id 是空字串，Number('') 为 0，会传出假的 tmdb_id
+                          tmdb_id={
+                            useTmdbCard
+                              ? Number(item.id) || undefined
+                              : undefined
+                          }
+                          rate={item.rate}
+                          year={item.year}
+                          // 电影类型严格控制，tv 不控；TMDB 榜单的 kind 精确可知，直接传递
+                          type={
+                            type === 'movie' ? 'movie' : useTmdbCard ? 'tv' : ''
+                          }
+                          isBangumi={
+                            type === 'anime' && primarySelection === '每日放送'
+                          }
+                        />
+                      </div>
+                    );
+                  })}
             </div>
           )}
 
@@ -971,7 +1044,11 @@ function DoubanPageClient() {
 
           {/* 空状态 */}
           {!loading && !loadError && doubanData.length === 0 && (
-            <div className='text-center text-gray-500 py-8'>暂无相关内容</div>
+            <div className='text-center text-gray-500 py-8'>
+              {isNetflixOfficial && netflixPending
+                ? '正在获取 Netflix 官方榜单，首次载入需要一点时间，请稍后重新整理'
+                : '暂无相关内容'}
+            </div>
           )}
         </div>
       </div>

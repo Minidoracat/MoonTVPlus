@@ -1,4 +1,9 @@
 .env
+node_modules
+.next
+.open-next
+.git
+
 .env*.local
 public/screenshot1.png
 public/screenshot2.png

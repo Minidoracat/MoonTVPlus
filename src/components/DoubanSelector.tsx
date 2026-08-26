@@ -28,6 +28,9 @@ interface DoubanSelectorProps {
   onSecondaryChange: (value: string) => void;
   onMultiLevelChange?: (values: Record<string, string>) => void;
   onWeekdayChange: (weekday: string) => void;
+  /** 「每日放送」的展示视图：卡片网格 / 时刻表时间轴 */
+  viewMode?: 'grid' | 'schedule';
+  onViewModeChange?: (viewMode: 'grid' | 'schedule') => void;
 }
 
 // TMDB 热门的一级选项与时间窗二级选项（电影/电视剧共用）
@@ -90,6 +93,8 @@ const DoubanSelector: React.FC<DoubanSelectorProps> = ({
   onSecondaryChange,
   onMultiLevelChange,
   onWeekdayChange,
+  viewMode = 'grid',
+  onViewModeChange,
 }) => {
   // 为不同的选择器创建独立的refs和状态
   const primaryContainerRef = useRef<HTMLDivElement>(null);
@@ -167,6 +172,12 @@ const DoubanSelector: React.FC<DoubanSelectorProps> = ({
     { label: '每日放送', value: '每日放送' },
     { label: '番剧', value: '番剧' },
     { label: '剧场版', value: '剧场版' },
+  ];
+
+  // 「每日放送」视图切换选项
+  const viewOptions: SelectorOption[] = [
+    { label: '卡片', value: 'grid' },
+    { label: '时刻表', value: 'schedule' },
   ];
 
   // 处理多级选择器变化
@@ -377,6 +388,21 @@ const DoubanSelector: React.FC<DoubanSelectorProps> = ({
     }
     // showTmdbHot 会决定 Netflix「榜单」列渲不渲染，翻转时指示器要重算
   }, [secondarySelection, primarySelection, showTmdbHot]);
+
+  // 监听「每日放送」视图切换（卡片/时刻表）——
+  // 视图胶囊复用副选择器的滑动指示器，需要单独定位
+  useEffect(() => {
+    const activeIndex = viewOptions.findIndex(
+      (opt) => opt.value === viewMode
+    );
+    const cleanup = updateIndicatorPosition(
+      activeIndex,
+      secondaryContainerRef,
+      secondaryButtonRefs,
+      setSecondaryIndicatorStyle
+    );
+    return cleanup;
+  }, [viewMode, primarySelection]);
 
   // 渲染胶囊式选择器
   const renderCapsuleSelector = (
@@ -677,13 +703,30 @@ const DoubanSelector: React.FC<DoubanSelectorProps> = ({
 
           {/* 筛选部分 - 根据一级选择器显示不同内容 */}
           {(primarySelection || animePrimaryOptions[0].value) === '每日放送' ? (
-            // 每日放送分类下显示星期选择器
-            <div className='flex flex-col sm:flex-row sm:items-center gap-2'>
-              <span className='text-xs sm:text-sm font-medium text-gray-600 dark:text-gray-400 min-w-[48px]'>
-                星期
-              </span>
-              <div className='overflow-x-auto'>
-                <WeekdaySelector onWeekdayChange={onWeekdayChange} />
+            // 每日放送分类下：视图切换 + 星期选择器（两种视图共用，控制当天内容）
+            <div className='space-y-3 sm:space-y-4'>
+              <div className='flex flex-col sm:flex-row sm:items-center gap-2'>
+                <span className='text-xs sm:text-sm font-medium text-gray-600 dark:text-gray-400 min-w-[48px]'>
+                  视图
+                </span>
+                <div className='overflow-x-auto'>
+                  {renderCapsuleSelector(
+                    viewOptions,
+                    viewMode,
+                    (value) =>
+                      onViewModeChange?.(value === 'schedule' ? 'schedule' : 'grid'),
+                    false
+                  )}
+                </div>
+              </div>
+
+              <div className='flex flex-col sm:flex-row sm:items-center gap-2'>
+                <span className='text-xs sm:text-sm font-medium text-gray-600 dark:text-gray-400 min-w-[48px]'>
+                  星期
+                </span>
+                <div className='overflow-x-auto'>
+                  <WeekdaySelector onWeekdayChange={onWeekdayChange} />
+                </div>
               </div>
             </div>
           ) : (

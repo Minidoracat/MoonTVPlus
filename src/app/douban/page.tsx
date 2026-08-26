@@ -18,6 +18,7 @@ import { fetchNetflixTop10 } from '@/lib/netflix.client';
 import { fetchTMDBHot } from '@/lib/tmdb.client';
 import { DoubanItem, DoubanResult } from '@/lib/types';
 
+import BangumiScheduleTimeline from '@/components/BangumiScheduleTimeline';
 import DoubanCardSkeleton from '@/components/DoubanCardSkeleton';
 import DoubanCustomSelector from '@/components/DoubanCustomSelector';
 import DoubanSelector, {
@@ -116,6 +117,9 @@ function DoubanPageClient() {
     (type === 'movie' || type === 'tv') &&
     parseNetflixSecondary(secondarySelection).source ===
       NETFLIX_SOURCE_OFFICIAL;
+
+  // 每日放送视图模式：grid(卡片) / schedule(时刻表)
+  const [viewMode, setViewMode] = useState<'grid' | 'schedule'>('grid');
 
   // 获取自定义分类数据
   useEffect(() => {
@@ -920,6 +924,12 @@ function DoubanPageClient() {
     return activePath;
   };
 
+  // 是否为时刻表视图（每日放送 + 已切换）
+  const isScheduleView =
+    type === 'anime' &&
+    primarySelection === '每日放送' &&
+    viewMode === 'schedule';
+
   return (
     <PageLayout activePath={getActivePath()}>
       <div className='px-4 sm:px-10 py-4 sm:py-8 overflow-visible'>
@@ -949,6 +959,8 @@ function DoubanPageClient() {
                 onSecondaryChange={handleSecondaryChange}
                 onMultiLevelChange={handleMultiLevelChange}
                 onWeekdayChange={handleWeekdayChange}
+                viewMode={viewMode}
+                onViewModeChange={setViewMode}
               />
             </div>
           ) : (
@@ -966,12 +978,15 @@ function DoubanPageClient() {
 
         {/* 内容展示区域 */}
         <div ref={contentRef} className='max-w-[95%] mx-auto mt-8 overflow-visible'>
-          {/* 内容网格 */}
-          {loadError && !loading ? (
+          {/* 时刻表视图（每日放送） */}
+          {isScheduleView ? (
+            <BangumiScheduleTimeline weekday={selectedWeekday} />
+          ) : loadError && !loading ? (
             <div className='rounded-2xl border border-yellow-500/30 bg-yellow-500/10 px-5 py-4 text-sm text-yellow-700 dark:text-yellow-200'>
               {loadError}
             </div>
           ) : (
+            /* 内容网格 */
             <div className='justify-start grid grid-cols-3 gap-x-2 gap-y-12 px-0 sm:px-2 sm:grid-cols-[repeat(auto-fill,minmax(160px,1fr))] sm:gap-x-8 sm:gap-y-20'>
               {loading || !selectorsReady
                 ? // 显示骨架屏
@@ -1009,6 +1024,7 @@ function DoubanPageClient() {
                           isBangumi={
                             type === 'anime' && primarySelection === '每日放送'
                           }
+                          isAnime={type === 'anime'}
                         />
                       </div>
                     );
@@ -1017,7 +1033,7 @@ function DoubanPageClient() {
           )}
 
           {/* 加载更多指示器 */}
-          {hasMore && !loading && (
+          {!isScheduleView && hasMore && !loading && (
             <div
               ref={(el) => {
                 if (el && el.offsetParent !== null) {
@@ -1038,12 +1054,12 @@ function DoubanPageClient() {
           )}
 
           {/* 没有更多数据提示 */}
-          {!hasMore && doubanData.length > 0 && (
+          {!isScheduleView && !hasMore && doubanData.length > 0 && (
             <div className='text-center text-gray-500 py-8'>已加载全部内容</div>
           )}
 
           {/* 空状态 */}
-          {!loading && !loadError && doubanData.length === 0 && (
+          {!isScheduleView && !loading && !loadError && doubanData.length === 0 && (
             <div className='text-center text-gray-500 py-8'>
               {isNetflixOfficial && netflixPending
                 ? '正在获取 Netflix 官方榜单，首次载入需要一点时间，请稍后重新整理'

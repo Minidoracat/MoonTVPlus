@@ -29,6 +29,7 @@ export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
   const query = searchParams.get('q');
   const includeSpecialSources = searchParams.get('special') === '1';
+  const privateOnly = searchParams.get('privateOnly') === '1';
 
   if (!query) {
     const cacheTime = await getCacheTime();
@@ -46,7 +47,9 @@ export async function GET(request: NextRequest) {
   }
 
   const config = await getConfig();
-  const apiSites = await getAvailableApiSites(authInfo.username, includeSpecialSources);
+  const apiSites = privateOnly
+    ? []
+    : await getAvailableApiSites(authInfo.username, includeSpecialSources);
   const [canAccessOpenList, canAccessEmby] = await Promise.all([
     hasFeaturePermission(authInfo.username, 'private_library'),
     hasFeaturePermission(authInfo.username, 'emby'),
@@ -186,13 +189,13 @@ export async function GET(request: NextRequest) {
   const aliasMode =
     searchParams.get('aliasMode') === 'person' ? 'person' : 'title';
   const queriesPromise: Promise<string[]> =
-    searchParams.get('alias') === '1'
+    !privateOnly && searchParams.get('alias') === '1'
       ? resolveTitleAliases(query, aliasMode).then((aliases) => {
           if (aliases.length > 0) {
             resolvedAliases = aliases;
             console.log('[Search] 片名别名扩展:', query, '->', aliases);
           }
-          // 传统接口一次性返回、无法分批补发：人物模式只搜前 5 部代表作，
+          // 传统接口一次性返回、无法分批补发：人物模式只搜前 5 个代表作，
           // 否则串行几十个关键词必撞 20s 站点超时反而拿不到结果
           return [query, ...aliases.slice(0, 5)];
         })
@@ -213,7 +216,7 @@ export async function GET(request: NextRequest) {
     })
   );
 
-  const scriptSummaries = await listEnabledSourceScripts();
+  const scriptSummaries = privateOnly ? [] : await listEnabledSourceScripts();
   const scriptPromises = scriptSummaries.map((script) =>
     Promise.race([
       (async () => {

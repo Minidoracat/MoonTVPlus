@@ -49,24 +49,49 @@
 - `src/lib/title-alias.ts` — 別名解析 + `searchFromApiWithQueries`（多關鍵詞去重合併；**不修改** `searchFromApi` 本身）
 
 **修改的上游檔案**
-- `src/app/api/search/route.ts` — `alias=1` 參數、`queriesPromise` 並行解析、回應加 `aliases` 欄位、改呼叫 `searchFromApiWithQueries`
-- `src/app/api/search/ws/route.ts` — 同上 + SSE `aliases` 事件（在 start 事件後、站點搜尋前發送）
+- `src/app/api/search/route.ts` — `alias=1` 參數、`queriesPromise` 並行解析、回應加 `aliases` 欄位、改呼叫 `searchFromApiWithQueries`。v225 起 `privateOnly=1` 時強制跳過別名解析（別名只 fan-out 公開 CMS）。
+- `src/app/api/search/ws/route.ts` — 同上 + SSE `aliases` 事件；完成事件必須走本地 `maybeEmitComplete()`（設 `streamClosed`），不可退回上游分散的 `maybeComplete`。
 - `src/app/search/page.tsx` — 請求帶 `&alias=1`、`searchAliases` state/ref、
-  `titleContainsQuery` 精確搜尋過濾接受別名命中、`SearchCachePayload` 加選用 `aliases` 欄位
+  `titleContainsQuery` 精確搜尋過濾接受別名命中、`SearchCachePayload` 加選用 `aliases` 欄位；
+  片名/人物模式切換與上游「高级」面板、`privateOnly=1` 並存。只搜私人影庫時不送 alias。
 - `src/components/UserMenu.tsx` — 通用設置區「三地片名搜索」開關（state / 載入 / handler / UI / 重置）
+
+## 4. 點選影片先開詳情
+
+- `src/components/VideoCard.tsx` — 非 live 的 `handleClick` 開 `DetailPanel`，海報 `pointerEvents: none` 交給外層。
+  合上游時保留此行為，同時接受圖片層 `overflow-hidden rounded-lg`（避免來源角標被裁切）。
+
+## 5. Netflix / TMDB 熱門與官方 Top 10
+
+- 新增：`src/app/api/netflix/top10/route.ts`、`src/lib/netflix-top10.ts`、`src/app/api/tmdb/hot/route.ts`
+- `src/components/DoubanSelector.tsx` — `NETFLIX_PRIMARY` / `TMDB_HOT_PRIMARY`；v225 再加 `viewMode=grid|schedule`
+- `src/app/douban/page.tsx` — Netflix 官方周榜卡片走 TMDB 路徑；時刻表與 loadError/pending 空狀態並存
+- `src/lib/tmdb.client.ts` — 保留 `getTMDBHotList` / `fetchTMDBHot`，接受上游 `safeFetch` 與可設定圖片域名
+
+## 6. 播放器客製
+
+- iOS PWA PiP fallback / 網頁全螢幕：`src/lib/ios-pwa.ts`、`PwaSafariPrompt`、`play/page.tsx` 的 `disablePictureInPicture`
+- 來源廣告結束不自動跳集：`src/lib/playback-auto-next.ts`；短劇 `duanju=1` 例外
+- v225 同時保留上游鴻蒙原生 HLS / `crossOrigin: 'anonymous'`
+
+## 7. 其他必須鎖住
+
+- `scripts/init-turso.js`：未設 USERNAME/PASSWORD 時拒絕建立 owner
+- Cloudflare：可接受 `src/lib/cloudflare-shims/opencc-js.ts` 檔案，但 **不要** 在 `next.config.js` 把 server `opencc-js` alias 成 identity，否則人物跨字形 alias 退化
 
 ## 設定鍵一覽（localStorage）
 
 | Key | 功能 | 預設 |
 |---|---|---|
 | `interfaceTraditionalChinese` | 繁體中文介面 | 無值時依系統語系自動判斷 |
-| `crossRegionTitleSearch` | 三地片名搜尋 | `false` |
+| `crossRegionTitleSearch` | 三地片名搜尋 | `true`（未設或非 `'false'` 即開） |
 | `searchTraditionalToSimplified` | 搜尋繁轉簡（上游既有，繁體介面啟用時連動開啟） | `false` |
 
 ## 上游同步流程
 
 ```bash
 git fetch upstream
-git merge upstream/main   # rerere 已啟用，重複衝突會自動套用先前解法
-pnpm typecheck && pnpm lint
+git merge --no-ff upstream/main   # 保留既有 v223/v224 merge boundary；rerere 已啟用
+pnpm typecheck && pnpm test -- src/lib/title-alias.test.ts src/lib/search-title-match.test.ts src/components/DoubanSelector.test.ts src/lib/tmdb.client.test.ts src/lib/netflix-top10.test.ts src/lib/playback-auto-next.test.ts --runInBand
 ```
+

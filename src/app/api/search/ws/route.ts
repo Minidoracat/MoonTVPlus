@@ -29,6 +29,7 @@ export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
   const query = searchParams.get('q');
   const includeSpecialSources = searchParams.get('special') === '1';
+  const privateOnly = searchParams.get('privateOnly') === '1';
 
   if (!query) {
     return new Response(
@@ -43,7 +44,9 @@ export async function GET(request: NextRequest) {
   }
 
   const config = await getConfig();
-  const apiSites = await getAvailableApiSites(authInfo.username, includeSpecialSources);
+  const apiSites = privateOnly
+    ? []
+    : await getAvailableApiSites(authInfo.username, includeSpecialSources);
   const [canAccessOpenList, canAccessEmby] = await Promise.all([
     hasFeaturePermission(authInfo.username, 'private_library'),
     hasFeaturePermission(authInfo.username, 'emby'),
@@ -53,7 +56,7 @@ export async function GET(request: NextRequest) {
   const aliasMode =
     searchParams.get('aliasMode') === 'person' ? 'person' : 'title';
   const queriesPromise: Promise<string[]> =
-    searchParams.get('alias') === '1'
+    !privateOnly && searchParams.get('alias') === '1'
       ? resolveTitleAliases(query, aliasMode).then((aliases) => {
           if (aliases.length > 0) {
             console.log('[Search WS] 片名别名扩展:', query, '->', aliases);
@@ -91,7 +94,7 @@ export async function GET(request: NextRequest) {
     config.EmbyConfig.Sources.length > 0 &&
     config.EmbyConfig.Sources.some(s => s.enabled && s.ServerURL)
   );
-  const enabledScripts = await listEnabledSourceScripts();
+  const enabledScripts = privateOnly ? [] : await listEnabledSourceScripts();
 
   // 共享状态
   let streamClosed = false;
@@ -130,8 +133,7 @@ export async function GET(request: NextRequest) {
         }
       }
 
-      const totalSourceCount =
-        sortedApiSites.length + (hasOpenList ? 1 : 0) + embySourcesCount + enabledScripts.length;
+      const totalSourceCount = sortedApiSites.length + (hasOpenList ? 1 : 0) + embySourcesCount + enabledScripts.length;
 
       // 发送开始事件
       const startEvent = `data: ${JSON.stringify({
@@ -161,7 +163,7 @@ export async function GET(request: NextRequest) {
           timestamp: Date.now()
         })}\n\n`;
         if (safeEnqueue(encoder.encode(completeEvent))) {
-          // 只有在成功发送完成事件后才关闭流
+          streamClosed = true;
           try {
             controller.close();
           } catch (error) {
@@ -169,6 +171,10 @@ export async function GET(request: NextRequest) {
           }
         }
       };
+      if (totalSourceCount === 0) {
+        maybeEmitComplete();
+        return;
+      }
 
       // 搜索 Emby（如果配置了）- 异步带超时，支持多源
       if (hasEmby) {

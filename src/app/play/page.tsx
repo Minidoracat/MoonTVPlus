@@ -1022,7 +1022,7 @@ function PlayPageClient() {
           setDanmakuLoading(true);
 
           // 转换弹幕格式
-          let danmakuData = convertDanmakuFormat(cachedData.comments);
+          let danmakuData = await convertDanmakuFormat(cachedData.comments);
 
           // 手动应用过滤规则
           const filterConfig = danmakuFilterConfigRef.current;
@@ -5802,7 +5802,7 @@ function PlayPageClient() {
       }
 
       // 转换弹幕格式
-      let danmakuData = convertDanmakuFormat(comments);
+      let danmakuData = await convertDanmakuFormat(comments);
 
       // 手动应用过滤规则（因为缓存的弹幕不会经过播放器的 filter 函数）
       const filterConfig = danmakuFilterConfigRef.current;
@@ -6035,7 +6035,7 @@ function PlayPageClient() {
       }
 
       // 转换弹幕格式
-      let danmakuData = convertDanmakuFormat(comments);
+      let danmakuData = await convertDanmakuFormat(comments);
 
       // 应用过滤规则
       const filterConfig = danmakuFilterConfigRef.current;
@@ -6281,7 +6281,7 @@ function PlayPageClient() {
         setDanmakuLoading(true);
 
         // 转换弹幕格式
-        let danmakuData = convertDanmakuFormat(cachedData.comments);
+        let danmakuData = await convertDanmakuFormat(cachedData.comments);
 
         // 手动应用过滤规则
         const filterConfig = danmakuFilterConfigRef.current;

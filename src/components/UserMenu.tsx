@@ -2189,7 +2189,12 @@ export const UserMenu: React.FC = () => {
     setDoubanImageProxyUrl(defaultDoubanImageProxyUrl);
     setDoubanImageProxyTypeBackup('server');
     setDoubanImageProxyUrlBackup('');
-    setTmdbImageBaseUrl('https://image.tmdb.org');
+    const defaultTmdbImageBaseUrl =
+      (typeof window !== 'undefined' &&
+        ((window as any).RUNTIME_CONFIG?.TMDB_IMAGE_BASE_URL as string)) ||
+      'https://image.tmdb.org';
+    setTmdbImageBaseUrl(defaultTmdbImageBaseUrl);
+    setDanmakuMaxCount(5000);
     setBufferStrategy('medium');
     setNextEpisodePreCache(true);
     setNextEpisodeDanmakuPreload(true);
@@ -2227,7 +2232,7 @@ export const UserMenu: React.FC = () => {
       localStorage.setItem('doubanImageProxyUrl', defaultDoubanImageProxyUrl);
       localStorage.setItem('doubanImageProxyTypeBackup', 'server');
       localStorage.setItem('doubanImageProxyUrlBackup', '');
-      localStorage.setItem('tmdbImageBaseUrl', 'https://image.tmdb.org');
+      localStorage.removeItem('tmdbImageBaseUrl');
       localStorage.setItem('bufferStrategy', 'medium');
       localStorage.setItem('nextEpisodePreCache', 'true');
       localStorage.setItem('nextEpisodeDanmakuPreload', 'true');

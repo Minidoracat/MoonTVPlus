@@ -1,8 +1,8 @@
-/* 繁简转换 —— 独立客户端模块。
+/* 繁简转换 —— 客户端弹幕路径。
  *
- * 服务端 bundle 不应包含 opencc-js（其字典约 1.9MB，会撑爆 Cloudflare Worker）。
- * 使用动态 import，不要静态 import；也不要把 server 端 opencc-js alias 成 identity，
- * 否则 title-alias 的跨字形正規化会失效。
+ * title-alias 服务端仍会动态载入 opencc-js，所以 Cloudflare Worker 仍可能含字典。
+ * 这里只用动态 import，且仅在使用者开启弹幕繁简时才加载。
+ * 不要在 isEdgeBuild 区块把 opencc-js alias 成 identity（会伤到 client 繁中）。
  */
 
 type OpenCCConverter = (text: string) => string;
@@ -10,10 +10,6 @@ type OpenCCConverter = (text: string) => string;
 let danmakuConverter: OpenCCConverter | null = null;
 let danmakuConverterPromise: Promise<OpenCCConverter | null> | null = null;
 
-/**
- * 加载繁简转换器（from: hk → to: cn）。同一进程只加载一次。
- * 仅客户端可调用；服务端（SSR）下 window 未定义时由调用方自行保护。
- */
 export function loadTraditionalToSimplifiedConverter(): Promise<OpenCCConverter | null> {
   if (danmakuConverter) return Promise.resolve(danmakuConverter);
   if (!danmakuConverterPromise) {
@@ -33,24 +29,13 @@ export function loadTraditionalToSimplifiedConverter(): Promise<OpenCCConverter 
   return danmakuConverterPromise;
 }
 
-// 客户端加载时预热转换器（服务端 SSR 时 window 未定义，无副作用）
-if (typeof window !== 'undefined') {
-  void loadTraditionalToSimplifiedConverter();
-}
-
-export function convertDanmakuText(text: string): string {
-  if (
-    typeof window === 'undefined' ||
-    localStorage.getItem('danmakuTraditionalToSimplified') !== 'true'
-  ) {
-    return text;
-  }
-
-  // 转换器尚未就绪时原样返回（预热后通常已加载完成）
-  if (!danmakuConverter) return text;
-
+export function convertDanmakuText(
+  text: string,
+  converter: OpenCCConverter | null = danmakuConverter
+): string {
+  if (!converter) return text;
   try {
-    return danmakuConverter(text);
+    return converter(text);
   } catch (error) {
     console.error('弹幕繁简转换失败:', error);
     return text;

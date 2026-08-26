@@ -115,9 +115,9 @@
 ## 7. 其他必須鎖住
 
 - `scripts/init-turso.js`：未設 USERNAME/PASSWORD 時拒絕建立 owner
-- Cloudflare：可接受 `src/lib/cloudflare-shims/opencc-js.ts` 檔案，但 **不要** 在 `next.config.js` 把 `opencc-js` alias 成 identity。
-  若日後真要加回，必須 `isEdgeBuild && isServer`：現有 edge alias 區塊（`next.config.js` `if (isEdgeBuild)`）對 client 也生效，會把本機繁中用的 client `import('opencc-js')` 換成空轉換。
-  2026-08-27 用 `NEXT_PUBLIC_STORAGE_TYPE=localstorage pnpm build:cloudflare` 驗過：`.open-next/server-functions/default/handler.mjs` raw 15.13MB／gzip 3.40MB，無 `HKVariants`／`TWPhrases` 字典字串。本機實際部署是 Docker＋Kvrocks，不是 CF；若真要上 Cloudflare 需再驗 Worker 體積。
+- Cloudflare：不要在 `next.config.js` 的 `isEdgeBuild` 区块把 `opencc-js` alias 成 identity（该区块对 client 也生效，会弄坏繁中）。
+  若真要压 Worker 体量，只准 `isEdgeBuild && isServer`，并接受 title-alias 跨字形在 CF 上退化。
+  2026-08-27 `localstorage` CF build：`.open-next/server-functions/default/handler.mjs` gzip 3.40MB；字典不在 handler，而在 sibling server chunks（`㑯 㑔` 可命中，约 2×1.1MB）。来源是 title-alias 服务端动态 import，不是弹幕模块。本机部署是 Docker＋Kvrocks；若上 CF 需再验整包体积。
 
 ## 設定鍵一覽（localStorage）
 

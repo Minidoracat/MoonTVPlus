@@ -18,6 +18,11 @@ import type {
   DanmakuSearchResponse,
   DanmakuSettings,
 } from './types';
+import {
+  convertDanmakuText,
+  loadTraditionalToSimplifiedConverter,
+} from './traditional-to-simplified';
+
 
 // 初始化弹幕模块（清理过期缓存）
 let _cacheCleanupInitialized = false;
@@ -227,19 +232,24 @@ export async function getDanmakuByUrl(url: string): Promise<DanmakuComment[]> {
   }
 }
 
-// opencc-js 繁简转换逻辑已拆到独立客户端文件，避免服务端 bundle 内联其字典
-import { convertDanmakuText } from './traditional-to-simplified';
-
 // 将 danmu_api 的弹幕格式转换为 artplayer-plugin-danmuku 格式
-export function convertDanmakuFormat(
+export async function convertDanmakuFormat(
   comments: DanmakuComment[]
-): Array<{
-  text: string;
-  time: number;
-  color: string;
-  border: boolean;
-  mode: number;
-}> {
+): Promise<
+  Array<{
+    text: string;
+    time: number;
+    color: string;
+    border: boolean;
+    mode: number;
+  }>
+> {
+  const converter =
+    typeof window !== 'undefined' &&
+    localStorage.getItem('danmakuTraditionalToSimplified') === 'true'
+      ? await loadTraditionalToSimplifiedConverter()
+      : null;
+
   return comments.map((comment) => {
     // 解析弹幕属性: "时间,类型,字体,颜色,时间戳,弹幕池,用户Hash,弹幕ID"
     const parts = comment.p.split(',');
@@ -256,7 +266,7 @@ export function convertDanmakuFormat(
     else if (type === 4) mode = 2; // 底部
 
     return {
-      text: convertDanmakuText(comment.m),
+      text: convertDanmakuText(comment.m, converter),
       time,
       color,
       border: false,

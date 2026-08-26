@@ -150,9 +150,9 @@ const createNextConfig = (phase) => {
               ),
             }
           : {}),
-        // 不把 server 端 opencc-js alias 成 identity shim：
-        // title-alias 的人物/片名跨字形正規化依賴真實 t2s/s2t。
-        // Cloudflare Worker bundle 若因此超限，再另做 server-safe converter。
+        // 不要在這個 isEdgeBuild 區塊加 opencc-js identity alias：
+        // 此區塊對 client 也生效，會弄壞 TraditionalChineseProvider / title-alias。
+        // 若 Worker 體積真的超限，只准加在 isEdgeBuild && isServer。
       };
       config.externals = (config.externals || []).filter((external) => {
         return !(

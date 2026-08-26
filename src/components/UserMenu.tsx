@@ -2195,6 +2195,7 @@ export const UserMenu: React.FC = () => {
       'https://image.tmdb.org';
     setTmdbImageBaseUrl(defaultTmdbImageBaseUrl);
     setDanmakuMaxCount(5000);
+    setDanmakuHeatmapDisabled(false);
     setBufferStrategy('medium');
     setNextEpisodePreCache(true);
     setNextEpisodeDanmakuPreload(true);

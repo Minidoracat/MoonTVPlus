@@ -669,9 +669,9 @@ function TVPlayClient() {
           0,
           timeRef.current.current - TV_DANMAKU_SEEK_WINDOW - 1
         );
-        setDanmakuItems(
-          (await convertDanmakuFormat(comments)).slice(0, TV_DANMAKU_MAX_ITEMS)
-        );
+        const danmakuData = await convertDanmakuFormat(comments);
+        if (!alive) return;
+        setDanmakuItems(danmakuData.slice(0, TV_DANMAKU_MAX_ITEMS));
       } catch {
         if (alive) setDanmakuItems([]);
       }

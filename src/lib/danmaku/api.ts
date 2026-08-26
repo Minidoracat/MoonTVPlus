@@ -9,6 +9,10 @@ import {
   getDanmakuFromCache,
   saveDanmakuToCache,
 } from './cache';
+import {
+  convertDanmakuText,
+  loadTraditionalToSimplifiedConverter,
+} from './traditional-to-simplified';
 import type {
   DanmakuComment,
   DanmakuCommentsResponse,
@@ -18,10 +22,6 @@ import type {
   DanmakuSearchResponse,
   DanmakuSettings,
 } from './types';
-import {
-  convertDanmakuText,
-  loadTraditionalToSimplifiedConverter,
-} from './traditional-to-simplified';
 
 
 // 初始化弹幕模块（清理过期缓存）

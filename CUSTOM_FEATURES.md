@@ -6,6 +6,24 @@
 >
 > 所有客製 commit 統一使用 `feat(custom):` 前綴，可用 `git log --grep="(custom)"` 列出。
 
+合併衝突先看本檔，不要只看 `docs/local-customizations.md`。PWA 五檔與繁中／別名同等優先。
+
+**衝突熱檔（先留客製區塊，再吃上游其餘改動）**
+
+| 檔案 | 必留客製 |
+|---|---|
+| `src/app/play/page.tsx` | iOS PWA PiP／`disablePictureInPicture`、廣告誤跳集、豆瓣失敗 TMDB 補資料；同時留鴻蒙 HLS、`crossOrigin` |
+| `src/app/web-live/page.tsx` | PWA Safari fallback |
+| `src/app/globals.css` | PWA／mobile 控制列 safe-area |
+| `src/lib/ios-pwa.ts` | 整檔本地 |
+| `src/components/PwaSafariPrompt.tsx` | 整檔本地 |
+| `src/app/search/page.tsx`、`src/app/api/search/route.ts`、`src/app/api/search/ws/route.ts` | alias／人物模式；`privateOnly` 不送 alias |
+| `src/components/UserMenu.tsx` | 繁中開關、三地片名（恢復預設 = 開） |
+| `src/app/layout.tsx` | `<TraditionalChineseProvider />` |
+| `src/components/VideoCard.tsx` | 點擊先開詳情 |
+| `src/app/douban/page.tsx`、`src/components/DoubanSelector.tsx` | Netflix／TMDB 榜；同時留時刻表 |
+| `next.config.js` | **不要**把 server `opencc-js` alias 成 identity |
+
 ## 1. 全站繁體中文介面
 
 簡體 → 台灣正體（OpenCC `cn→twp`，含台灣用語轉換）的全站即時轉換，
@@ -70,9 +88,29 @@
 
 ## 6. 播放器客製
 
-- iOS PWA PiP fallback / 網頁全螢幕：`src/lib/ios-pwa.ts`、`PwaSafariPrompt`、`play/page.tsx` 的 `disablePictureInPicture`
-- 來源廣告結束不自動跳集：`src/lib/playback-auto-next.ts`；短劇 `duanju=1` 例外
-- v225 同時保留上游鴻蒙原生 HLS / `crossOrigin: 'anonymous'`
+### iOS PWA 控制列與 PiP fallback
+
+- 功能 commit：`3b8509cc Improve iOS PWA player controls`（後續還有網頁全螢幕修正）
+- Safari 網頁模式可 PiP；iOS 加到主畫面的 PWA 不支援 programmatic PiP，改顯示「用 Safari 開啟／分享／複製連結」
+- PWA／mobile 控制列 safe-area，避免右下角全螢幕鈕被圓角擋住
+
+**檔案（衝突時優先留本地，再整合上游）**
+- `src/lib/ios-pwa.ts`
+- `src/components/PwaSafariPrompt.tsx`
+- `src/app/play/page.tsx` — `disablePictureInPicture: !supportsProgrammaticPiP`、`<PwaSafariPrompt />`
+- `src/app/web-live/page.tsx`
+- `src/app/globals.css`
+
+**同步後必查**
+- `/play` Safari 網頁模式 PiP 可用
+- `/play` iOS PWA 不顯示會報錯的 PiP 鈕，有 Safari fallback
+- `/web-live` 同樣套用 PWA fallback
+- 手機 PWA 右下角全螢幕鈕可點
+
+### 廣告誤跳集
+
+- `src/lib/playback-auto-next.ts`；短劇 `duanju=1` 例外
+- v225 同時保留上游鴻蒙原生 HLS／`crossOrigin: 'anonymous'`
 
 ## 7. 其他必須鎖住
 

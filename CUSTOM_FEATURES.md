@@ -119,6 +119,7 @@
   若日後真要加回，必須 `isEdgeBuild && isServer`：現有 edge alias 區塊（`next.config.js` `if (isEdgeBuild)`）對 client 也生效，會把本機繁中用的 client `import('opencc-js')` 換成空轉換。
   2026-08-27 用 `NEXT_PUBLIC_STORAGE_TYPE=localstorage pnpm build:cloudflare` 驗過：`.open-next/server-functions/default/handler.mjs` raw 15.13MB／gzip 3.40MB，無 `HKVariants`／`TWPhrases` 字典字串。本機實際部署是 Docker＋Kvrocks，不是 CF；若真要上 Cloudflare 需再驗 Worker 體積。
 
+## 設定鍵一覽（localStorage）
 
 | Key | 功能 | 預設 |
 |---|---|---|

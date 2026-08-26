@@ -1164,11 +1164,13 @@ function SearchPageClient() {
         setExactSearch(savedExactSearch === 'true');
       }
 
-      const savedPrivateLibraryOnly = localStorage.getItem(
-        'searchPrivateLibraryOnly'
-      );
-      if (savedPrivateLibraryOnly !== null) {
-        setPrivateLibraryOnly(savedPrivateLibraryOnly === 'true');
+      if (hasPrivateLibrary) {
+        const savedPrivateLibraryOnly = localStorage.getItem(
+          'searchPrivateLibraryOnly'
+        );
+        if (savedPrivateLibraryOnly !== null) {
+          setPrivateLibraryOnly(savedPrivateLibraryOnly === 'true');
+        }
       }
       privateLibraryOnlyLoadedRef.current = true;
       setPrivateLibraryOnlyReady(true);

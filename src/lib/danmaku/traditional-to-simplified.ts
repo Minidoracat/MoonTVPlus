@@ -1,15 +1,11 @@
 /* 繁简转换 —— 独立客户端模块。
  *
  * 服务端 bundle 不应包含 opencc-js（其字典约 1.9MB，会撑爆 Cloudflare Worker）。
- * opencc-js 只在客户端加载（本文件 + search 页面复用），服务端打包 danmaku/api.ts
- * 或 search 路由时不应把本文件的 opencc-js 动态 import 内联进 worker。
+ * 使用动态 import，不要静态 import；也不要把 server 端 opencc-js alias 成 identity，
+ * 否则 title-alias 的跨字形正規化会失效。
  */
 
 type OpenCCConverter = (text: string) => string;
-
-// opencc-js 静态导入。server 构建下由 next.config.js 的 alias 指向 shim，
-// 避免把 ~1.9MB 字典内联进 Cloudflare Worker；client 构建用真库做繁简转换。
-import { Converter } from 'opencc-js';
 
 let danmakuConverter: OpenCCConverter | null = null;
 let danmakuConverterPromise: Promise<OpenCCConverter | null> | null = null;
@@ -21,14 +17,15 @@ let danmakuConverterPromise: Promise<OpenCCConverter | null> | null = null;
 export function loadTraditionalToSimplifiedConverter(): Promise<OpenCCConverter | null> {
   if (danmakuConverter) return Promise.resolve(danmakuConverter);
   if (!danmakuConverterPromise) {
-    danmakuConverterPromise = Promise.resolve()
-      .then(() => {
-        // 静态导入的 Converter 已可用；包一层 Promise 保持返回签名一致
-        danmakuConverter = Converter({ from: 'hk', to: 'cn' });
+    danmakuConverterPromise = import('opencc-js')
+      .then((module) => {
+        const OpenCC = module.default || module;
+        danmakuConverter = OpenCC.Converter({ from: 'hk', to: 'cn' });
         return danmakuConverter;
       })
       .catch((error) => {
         console.error('初始化繁简转换器失败:', error);
+        danmakuConverterPromise = null;
         danmakuConverter = null;
         return null;
       });

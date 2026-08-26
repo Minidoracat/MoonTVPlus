@@ -2204,7 +2204,7 @@ export const UserMenu: React.FC = () => {
     setHomeModules(defaultHomeModules);
     setDanmakuTraditionalToSimplified(false);
     setSearchTraditionalToSimplified(false);
-    setCrossRegionTitleSearch(false);
+    setCrossRegionTitleSearch(true);
 
     if (typeof window !== 'undefined') {
       localStorage.setItem('defaultAggregateSearch', JSON.stringify(true));

@@ -744,6 +744,14 @@ ${fields}
       );
     }
     const known = await this.getSources();
+    // getSources() 內部會再 resolve 一次設定。若在這兩次之間 cache 被清空
+    // 且 DB 故障，第二份 snapshot 會是降級的（sourceIds 為空＝不限制），
+    // 而 known 仍是全部來源 —— 那就會放行原本被停用的來源。再驗一次。
+    if (isConfigDegraded()) {
+      throw new MangaSourceForbiddenError(
+        '无法读取来源限制设置，已暂时拒绝访问'
+      );
+    }
     const matched = known.find((item) => item.id === sourceId);
     if (!matched) {
       throw new MangaSourceForbiddenError();

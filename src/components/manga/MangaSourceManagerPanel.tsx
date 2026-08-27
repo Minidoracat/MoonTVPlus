@@ -238,9 +238,15 @@ export default function MangaSourceManagerPanel({
     } catch (err) {
       setError(`測試失敗：${(err as Error).message}`);
     } finally {
-      if (single) markBusy(targets, false);
-      setBulkBusy(null);
-      setProgress(null);
+      if (single) {
+        markBusy(targets, false);
+      } else {
+        // 只有批量路徑設過這兩個狀態。單一測試若也清，會把同時進行的
+        // 批量測試守衛清掉，讓「測試全部／全部啟用／全部停用」在批量途中
+        // 變成可點，導致重複掃描與互斥寫入並發。
+        setBulkBusy(null);
+        setProgress(null);
+      }
     }
   };
 
@@ -272,6 +278,11 @@ export default function MangaSourceManagerPanel({
 
   const enabledCount = sources.filter((item) => item.enabled).length;
   const testing = bulkBusy === 'test';
+  /**
+   * 任一測試／批量動作進行中。批量按鈕要連「單一列測試進行中」都禁用，
+   * 否則單測途中可觸發批量掃描，兩者互斥寫入並發。
+   */
+  const anyBusy = bulkBusy !== null || busyIds.size > 0;
 
   if (!suwayomiEnabled) {
     return (
@@ -297,9 +308,9 @@ export default function MangaSourceManagerPanel({
           <button
             type='button'
             onClick={() => runTest()}
-            disabled={!!bulkBusy || sources.length === 0}
+            disabled={anyBusy || sources.length === 0}
             className={`inline-flex min-h-11 items-center gap-2 rounded-lg px-3 text-sm font-medium transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 dark:focus:ring-offset-gray-900 ${
-              bulkBusy || sources.length === 0
+              anyBusy || sources.length === 0
                 ? 'cursor-not-allowed bg-gray-200 text-gray-500 dark:bg-gray-700 dark:text-gray-400'
                 : 'cursor-pointer bg-blue-600 text-white hover:bg-blue-700'
             }`}
@@ -315,9 +326,9 @@ export default function MangaSourceManagerPanel({
           <button
             type='button'
             onClick={() => runTest(selectedVisible)}
-            disabled={!!bulkBusy || selectedVisible.length === 0}
+            disabled={anyBusy || selectedVisible.length === 0}
             className={`inline-flex min-h-11 items-center gap-2 rounded-lg px-3 text-sm font-medium transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 dark:focus:ring-offset-gray-900 ${
-              bulkBusy || selectedVisible.length === 0
+              anyBusy || selectedVisible.length === 0
                 ? 'cursor-not-allowed bg-gray-200 text-gray-500 dark:bg-gray-700 dark:text-gray-400'
                 : 'cursor-pointer bg-sky-600 text-white hover:bg-sky-700'
             }`}
@@ -327,7 +338,7 @@ export default function MangaSourceManagerPanel({
           <button
             type='button'
             onClick={() => bulkToggle('enable_all')}
-            disabled={!!bulkBusy}
+            disabled={anyBusy}
             className='min-h-11 cursor-pointer rounded-lg border border-gray-300 px-3 text-sm font-medium text-gray-700 transition-colors duration-200 hover:border-green-500 hover:text-green-700 focus:outline-none focus:ring-2 focus:ring-green-500 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:text-gray-200'
           >
             全部啟用
@@ -335,7 +346,7 @@ export default function MangaSourceManagerPanel({
           <button
             type='button'
             onClick={() => bulkToggle('disable_all')}
-            disabled={!!bulkBusy}
+            disabled={anyBusy}
             className='min-h-11 cursor-pointer rounded-lg border border-gray-300 px-3 text-sm font-medium text-gray-700 transition-colors duration-200 hover:border-red-500 hover:text-red-700 focus:outline-none focus:ring-2 focus:ring-red-500 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:text-gray-200'
           >
             全部停用

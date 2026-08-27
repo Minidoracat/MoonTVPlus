@@ -57,8 +57,10 @@ async function requireAdmin(
 const DISABLE_ALL_SENTINEL = '__none__';
 
 /**
- * SourceIds 為空代表「不限制」，所以停用單一來源時必須先把目前可用清單
- * 具體化，再移除該項；否則寫回空陣列會變成「全部開放」。
+ * 目前被允許的來源集合。
+ *
+ * `SourceIds` 為空代表「不限制」，所以停用單一來源時必須先把可用清單具體化，
+ * 再移除該項；否則寫回空陣列會變成「全部開放」。
  */
 function computeEnabledIds(
   allIds: string[],
@@ -68,12 +70,32 @@ function computeEnabledIds(
   return new Set(list.filter((id) => allIds.includes(id)));
 }
 
-function serializeAllowList(allIds: string[], enabled: Set<string>): string[] {
-  // 全開時寫回空陣列，保持與「未設定」語意一致，也讓之後新增的來源預設可用
-  if (allIds.length > 0 && allIds.every((id) => enabled.has(id))) return [];
+/**
+ * 把 enabled 集合序列化回 `SourceIds`。
+ *
+ * `allIds` 只是「Suwayomi 這一瞬間回報的來源」，不等於「所有存在的來源」——
+ * 上游重啟或擴充套件重載期間會成功回應但只列出部分來源。因此：
+ * - `unknownConfigured`（白名單裡但當下沒回報的項）必須原封保留，
+ *   否則單按一個開關就會把看不到的白名單項靜默刪掉。
+ * - 判定「全開」時也要把這些項算進去，否則會誤寫 `[]`＝不限制。
+ */
+function serializeAllowList(
+  allIds: string[],
+  enabled: Set<string>,
+  unknownConfigured: string[]
+): string[] {
+  // 有看不到的白名單項時，絕不可能是「全開」——保留限制
+  if (
+    unknownConfigured.length === 0 &&
+    allIds.length > 0 &&
+    allIds.every((id) => enabled.has(id))
+  ) {
+    return [];
+  }
+  const kept = [...unknownConfigured, ...allIds.filter((id) => enabled.has(id))];
   // 全停：空陣列會被當成不限制，必須用哨兵
-  if (enabled.size === 0) return [DISABLE_ALL_SENTINEL];
-  return allIds.filter((id) => enabled.has(id));
+  if (kept.length === 0) return [DISABLE_ALL_SENTINEL];
+  return kept;
 }
 
 export async function GET(request: NextRequest) {
@@ -172,6 +194,14 @@ export async function POST(request: NextRequest) {
     }
 
     const config = await getConfig();
+    // 降級可能在上面的檢查之後才發生（getSourcesForAdmin 期間有等待）：
+    // 再確認一次，否則會把臨時預設設定整份寫回 DB
+    if (isConfigDegraded()) {
+      return NextResponse.json(
+        { error: '当前无法读取管理配置，暂时不能修改来源开关' },
+        { status: 503 }
+      );
+    }
     if (!config.SuwayomiConfig) {
       return NextResponse.json(
         { error: '请先在上方完成 Suwayomi 配置' },
@@ -179,7 +209,22 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const enabled = computeEnabledIds(allIds, config.SuwayomiConfig.SourceIds);
+    // allIds 是 Suwayomi 這一瞬間回報的清單。若它是空的，我們無從判斷任何
+    // 來源狀態，寫入只會毀掉現有白名單（例如誤判成全開）。
+    if (allIds.length === 0) {
+      return NextResponse.json(
+        { error: '暂时无法取得来源列表，请稍后再试' },
+        { status: 503 }
+      );
+    }
+
+    const configured = config.SuwayomiConfig.SourceIds || [];
+    // 白名單裡但當下沒回報的項（上游部分列出時會發生）——原封保留，
+    // 不可因為「看不到」就從白名單刪掉
+    const unknownConfigured = configured.filter(
+      (id) => id !== DISABLE_ALL_SENTINEL && !allIds.includes(id)
+    );
+    const enabled = computeEnabledIds(allIds, configured);
 
     if (action === 'enable_all') {
       allIds.forEach((id) => enabled.add(id));
@@ -194,7 +239,12 @@ export async function POST(request: NextRequest) {
       else enabled.delete(sourceId);
     }
 
-    config.SuwayomiConfig.SourceIds = serializeAllowList(allIds, enabled);
+    config.SuwayomiConfig.SourceIds = serializeAllowList(
+      allIds,
+      enabled,
+      // 「全部停用」的語意就是全關，不保留看不到的項
+      action === 'disable_all' ? [] : unknownConfigured
+    );
     await db.saveAdminConfig(config);
 
     return NextResponse.json({

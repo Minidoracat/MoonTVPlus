@@ -440,6 +440,8 @@ export async function getConfig(): Promise<AdminConfig> {
       console.log('localStorage 模式：从环境变量初始化配置');
       const adminConfig = await getInitConfig('');
       cachedConfig = configSelfCheck(adminConfig);
+      // localstorage 模式的設定來自環境變數，永遠是「已知」的政策
+      configIsDegraded = false;
       configInitPromise = null;
       return cachedConfig;
     }
@@ -1204,6 +1206,11 @@ export async function resetConfig() {
     originConfig.ConfigSubscribtion
   );
   cachedConfig = adminConfig;
+  // 這是明確寫入的真實設定，解除降級狀態。
+  // 少了這行，若先前 DB 故障把旗標設成 true，之後 resetConfig 會設好
+  // cachedConfig 但旗標仍殘留，導致 assertSourceAllowed 永久 fail closed
+  // （漫畫功能全面 403），且沒有任何路徑會把它清掉。
+  configIsDegraded = false;
   await db.saveAdminConfig(adminConfig);
 
   return;

@@ -136,3 +136,50 @@ git merge --no-ff upstream/main   # 保留既有 v223/v224 merge boundary；rere
 pnpm typecheck && pnpm test -- src/lib/title-alias.test.ts src/lib/search-title-match.test.ts src/components/DoubanSelector.test.ts src/lib/tmdb.client.test.ts src/lib/netflix-top10.test.ts src/lib/playback-auto-next.test.ts --runInBand
 ```
 
+
+## 本機開發：用 host Node 取代每次 docker rebuild
+
+`docker compose up -d --build moontvplus-core` 約需 190 秒。單純改 app 程式碼
+不需要走這條 —— 本專案的容器就只是 `node:24-alpine` + `node start.js`（見
+`Dockerfile`），沒有系統依賴，所以 app 本體可以直接在 host 上跑 `pnpm dev`
+（HMR，存檔即生效）。
+
+需要留在容器裡的只有兩個非 Node 的 daemon：**Suwayomi**（JVM）與
+**Kvrocks**（C++/RocksDB）。
+
+### 一次性設定
+
+1. `docker-compose.yml` 已把 kvrocks 綁到 `127.0.0.1:6666`（只 loopback）。
+2. host 需要能解析 compose 的服務名，加到 `/etc/hosts`：
+
+   ```
+   127.0.0.1 suwayomi moontvplus-kvrocks
+   ```
+
+   **為什麼需要**：admin 設定裡存的 `SuwayomiConfig.ServerURL` 是
+   `http://suwayomi:4567`（容器內名稱），而 `resolveSuwayomiConfig()` 讓
+   admin 設定**優先於環境變數**，所以光覆寫 `SUWAYOMI_URL` 無效。
+   長期方案是把 admin 設定改成 `127.0.0.1:4567`；hosts 只是免改設定的權宜做法。
+   少了這步，`/api/manga/*` 會回 500 `fetch failed`。
+
+### 啟動
+
+```bash
+docker compose up -d moontvplus-kvrocks          # 只要 DB
+PORT=3200 OFFLINE_DOWNLOAD_DIR=/tmp/moontv-dl pnpm dev
+```
+
+dev server 在 `:3200`，與 `:3100` 的 production 容器共用同一份 kvrocks 與
+Suwayomi 資料，兩邊可並存。
+
+### 仍然必須跑 docker build 的情況
+
+| 情況 | 原因 |
+|---|---|
+| 改 `next.config.js` | 設定只在 build 時生效 |
+| 驗證 service worker / PWA | `next.config.js` 在 `isDevelopment` 時直接 `return nextConfig`，**完全跳過 `withPWA`**。SW、`runtimeCaching`、`/api/` 的 `NetworkOnly` 規則在 dev 模式下不存在，只能用 production build 驗 |
+| 依賴變更（`package.json` / lockfile） | 需重建 image layer |
+| 發佈前最終驗證 | 確認 image 與 host 行為對等 |
+
+其餘（API 授權與 403 邊界、UI 行為、GraphQL 互動）在 dev 模式驗證與
+production 等價。

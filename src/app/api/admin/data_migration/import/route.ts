@@ -106,6 +106,38 @@ export async function POST(req: NextRequest) {
         ]))))
       : {};
 
+    // 漫画来源授权（SourceIds 白名单 / DisabledSourceIds 黑名单）由
+    // /api/admin/manga-sources 专责维护。今天之前导出的备份没有
+    // DisabledSourceIds 栏位，若整份覆盖，现役黑名单会被清成 undefined，
+    // 读取端折成 []＝「没有任何停用」→ 先前一颗颗停用的来源（含成人源）
+    // 全部静默重新开放，而 setCachedConfig 让它立即生效、且没有任何提示。
+    //
+    // 必须在 clearAllData() 之前读：之后读到的是已被清空的值，
+    // 那样 ??= 永远落到 []，等于没有保留。
+    // 讀取失敗不可降級成空陣列：那會在破壞性匯入前把現役白／黑名單清掉。
+    // 這是授權設定，必須 fail closed —— 讀不到就中止整個匯入。
+    let preservedSourceAuth: {
+      SourceIds?: string[];
+      DisabledSourceIds?: string[];
+    };
+    try {
+      const currentConfig = await db.getAdminConfig();
+      preservedSourceAuth = {
+        SourceIds: currentConfig?.SuwayomiConfig?.SourceIds,
+        DisabledSourceIds: currentConfig?.SuwayomiConfig?.DisabledSourceIds,
+      };
+    } catch (error) {
+      console.error('读取现有来源授权设置失败，已中止导入:', error);
+      clearProgress(username, 'import');
+      return NextResponse.json(
+        {
+          error:
+            '无法读取现有的漫画来源授权设置，已中止导入以避免静默解除来源限制。请稍后重试。',
+        },
+        { status: 503 }
+      );
+    }
+
     // 开始导入数据 - 先清空现有数据
     updateProgress(username, 'import', 'clearing', 0, 1, '正在清空现有数据...');
     await db.clearAllData();
@@ -118,6 +150,17 @@ export async function POST(req: NextRequest) {
     console.log(`已清除 ${existingUsers.users.length} 个现有V2用户`);
 
     // 导入管理员配置
+    //
+    // 用 ??= ：只在备份「缺少」该栏位时保留导入前的值；
+    // 备份若真的带了黑名单，仍以备份为准（那是使用者的明确意图）。
+    const incomingConfig = importData.data.adminConfig;
+    if (incomingConfig?.SuwayomiConfig) {
+      incomingConfig.SuwayomiConfig.SourceIds ??=
+        preservedSourceAuth.SourceIds ?? [];
+      incomingConfig.SuwayomiConfig.DisabledSourceIds ??=
+        preservedSourceAuth.DisabledSourceIds ?? [];
+    }
+
     importData.data.adminConfig = configSelfCheck(importData.data.adminConfig);
     await db.saveAdminConfig(importData.data.adminConfig);
     await setCachedConfig(importData.data.adminConfig);

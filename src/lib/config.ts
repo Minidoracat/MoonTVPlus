@@ -897,9 +897,28 @@ export function configSelfCheck(adminConfig: AdminConfig): AdminConfig {
   if (adminConfig.SuwayomiConfig.DefaultLang === undefined) {
     adminConfig.SuwayomiConfig.DefaultLang = 'zh';
   }
-  if (!Array.isArray(adminConfig.SuwayomiConfig.SourceIds)) {
-    adminConfig.SuwayomiConfig.SourceIds = [];
-  }
+  // 兩份清單都必須正規化成 string[]。
+  //
+  // 白名單非陣列會被清成 [] ＝「不限制」（fail open 方向），
+  // 黑名單若是字串則 `'2499286'.includes('2')` 會變成子字串比對（亂擋或漏擋），
+  // 元素若是 number 則 `includes('123')` 對 123 為 false（黑名單 fail open）。
+  // 手改或匯入異質備份都可能造成，所以在這裡收斂。
+  const normalizeIds = (value: unknown): string[] =>
+    Array.isArray(value)
+      ? value
+          .map((item) =>
+            typeof item === 'string' || typeof item === 'number'
+              ? String(item).trim()
+              : ''
+          )
+          .filter(Boolean)
+      : [];
+  adminConfig.SuwayomiConfig.SourceIds = normalizeIds(
+    adminConfig.SuwayomiConfig.SourceIds
+  );
+  adminConfig.SuwayomiConfig.DisabledSourceIds = normalizeIds(
+    adminConfig.SuwayomiConfig.DisabledSourceIds
+  );
   if (
     adminConfig.SuwayomiConfig.MaxSources === undefined ||
     Number.isNaN(adminConfig.SuwayomiConfig.MaxSources)

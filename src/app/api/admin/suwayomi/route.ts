@@ -51,7 +51,13 @@ export async function POST(request: NextRequest) {
       password: Password,
     });
 
-    const sources = await client.getSources((DefaultLang || 'zh').trim() || 'zh');
+    // 用不套政策的版本：這是「測試這台 Suwayomi 通不通」的診斷動作。
+    // getSources() 會套目前儲存設定的白／黑名單，並在設定讀取降級時
+    // fail closed —— 兩者都會讓管理員在最需要診斷時測不了連線，
+    // 而且會用舊 server 的 SourceIds 去過濾新 server 的來源，誤報 0 個。
+    const sources = await client.getSourcesForAdmin(
+      (DefaultLang || 'zh').trim() || 'zh'
+    );
 
     return NextResponse.json({
       success: true,

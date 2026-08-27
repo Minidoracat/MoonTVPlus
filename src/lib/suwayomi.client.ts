@@ -4,6 +4,7 @@ import { createHash } from 'crypto';
 
 import { getConfig, isDegradedConfigObject } from './config';
 import {
+  isMangaSourceAllowed,
   MANGA_DISABLE_ALL_SENTINEL,
   MangaChapter,
   MangaDetail,
@@ -396,13 +397,16 @@ export class SuwayomiClient {
         '无法读取来源限制设置，已暂时拒绝访问'
       );
     }
-    // 政策必須進 key：快取值已套用當時的 SourceIds，若 key 只有 server/lang，
+    // 政策必須進 key：快取值已套用當時的兩份清單，若 key 只有 server/lang，
     // 管理員停用來源後最長 TTL 內仍會回舊清單，等於用 TTL 延後授權撤銷。
-    // 政策一變 key 就變 → 立即 miss → 重新以當前政策抓取。
-    const policy = [
-      [...resolved.sourceIds].sort().join(','),
-      [...resolved.disabledSourceIds].sort().join(','),
-    ].join('|');
+    //
+    // 用 JSON.stringify 而非 join：分隔字元會撞。
+    // `allow=['1','2']` 與 `allow=['1,2']` 在 join(',') 下都是 '1,2'，
+    // 較寬的政策先進快取後，較窄的政策會命中它 → 授權繞過。
+    const policy = JSON.stringify([
+      [...resolved.sourceIds].sort(),
+      [...resolved.disabledSourceIds].sort(),
+    ]);
     // lang 不可正規化成 defaultLang：fetchSources 只在 lang 有值時過濾，
     // 若把 undefined 併入 'zh' 的 key，未過濾的完整清單會被當成 zh 清單回出去
     // （反向則會讓 assertSourceAllowed 誤拒合法的非 zh 來源）。
@@ -524,18 +528,17 @@ ${fields}
     }
 
     const filtered = nodes.filter((item) => !lang || item.lang === lang);
-    // 允許條件：（白名單為空 或 在白名單內）且 不在黑名單內。
-    // 黑名單先判，讓「明確停用」永遠勝過「白名單包含」。
+    // 判斷一律走 isMangaSourceAllowed（與 admin 面板共用同一份），
+    // 不要在這裡另寫一份布林邏輯 —— 兩份會漂移。
     const scoped = unscoped
       ? filtered
-      : filtered.filter((item) => {
-          const id = String(item.id);
-          if (resolved.disabledSourceIds.includes(id)) return false;
-          if (resolved.sourceIds.length > 0 && !resolved.sourceIds.includes(id)) {
-            return false;
-          }
-          return true;
-        });
+      : filtered.filter((item) =>
+          isMangaSourceAllowed(
+            String(item.id),
+            resolved.sourceIds,
+            resolved.disabledSourceIds
+          )
+        );
 
     return scoped.map((item) => ({
       id: String(item.id),
@@ -591,20 +594,32 @@ ${fields}
     try {
       return (await this.getSources(resolved.defaultLang)).slice(0, resolved.maxSources);
     } catch (error) {
+      // fail-closed 的授權錯誤絕不可被 fallback 吞掉 ——
+      // 否則「政策不可信」或「剛被停用」會被降級成「來源清單暫時取不到」，
+      // 然後用較舊的快照把被停用的來源放行。
+      if (error instanceof MangaSourceForbiddenError) {
+        throw error;
+      }
       if (resolved.sourceIds.length === 0) {
         throw error;
       }
-      // Fallback 直接用白名單，所以必須自己扣掉黑名單與哨兵 ——
-      // 否則 getSources() 暫時失敗時，被停用的來源會被送去搜尋，繞過停用。
-      const usable = resolved.sourceIds.filter(
+      // 重新解析政策：上面的 resolved 可能已經過期（管理員剛改了黑名單），
+      // 用舊快照組清單就等於用舊政策授權。
+      const fresh = await resolveSuwayomiConfig(this.options);
+      if (!fresh.policyKnown) {
+        throw new MangaSourceForbiddenError(
+          '无法读取来源限制设置，已暂时拒绝访问'
+        );
+      }
+      const usable = fresh.sourceIds.filter(
         (id) =>
           id !== MANGA_DISABLE_ALL_SENTINEL &&
-          !resolved.disabledSourceIds.includes(id)
+          isMangaSourceAllowed(id, fresh.sourceIds, fresh.disabledSourceIds)
       );
       if (usable.length === 0) {
         throw new MangaSourceForbiddenError();
       }
-      return usable.slice(0, resolved.maxSources).map((id) => ({
+      return usable.slice(0, fresh.maxSources).map((id) => ({
         id,
         displayName: id,
         name: id,

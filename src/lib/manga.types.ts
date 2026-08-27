@@ -11,6 +11,26 @@
  */
 export const MANGA_DISABLE_ALL_SENTINEL = '__none__';
 
+/**
+ * 某來源是否被允許。**唯一的判斷來源**。
+ *
+ * 語意：（白名單為空 或 id ∈ 白名單）且 id ∉ 黑名單。
+ * 黑名單先判，讓「明確停用」永遠勝過「白名單包含」。
+ *
+ * 寫入端（admin 面板顯示 enabled）與讀取端（fetchSources 過濾）必須用同一份，
+ * 否則只改一邊就會出現「面板顯示已停用、使用者卻仍讀得到」——
+ * 那是這套機制最惡的失效模式。
+ */
+export function isMangaSourceAllowed(
+  id: string,
+  allowList: readonly string[],
+  blockList: readonly string[]
+): boolean {
+  if (blockList.includes(id)) return false;
+  if (allowList.length > 0 && !allowList.includes(id)) return false;
+  return true;
+}
+
 export type MangaContentWarning = 'SAFE' | 'MIXED' | 'NSFW';
 
 export interface MangaSource {

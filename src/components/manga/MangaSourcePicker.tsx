@@ -146,7 +146,13 @@ export default function MangaSourcePicker({
             const Icon = CATEGORY_ICON[getMangaSourceCategory(source)];
             const active = source.id === value;
             // 推薦頁看「熱門」能力：這個 picker 選的是要瀏覽哪一顆的熱門／最新，
-            // 用搜尋的燈號會誤導（有來源搜不到但熱門正常）
+            // 用搜尋的燈號會誤導（有來源搜不到但熱門正常）。
+            //
+            // health 刻意傳 undefined 而不是 fallback：本機被動量測
+            // （manga-source-health）只由**搜尋** fan-out 累積，量的是搜尋
+            // 能力 —— 拿它當「熱門」的退路正是 capability 參數要防的混用
+            // （包子漫画搜尋逾時但熱門 647ms 正常，fallback 會錯標成逾時）。
+            // 沒被管理員測過的來源在這裡不顯示燈號，是正確的缺席。
             const status = formatMangaSourceStatus(
               probe?.[source.id],
               undefined,

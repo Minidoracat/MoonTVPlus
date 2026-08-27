@@ -81,6 +81,7 @@ export default function MangaReadPage() {
   const returnTo = searchParams.get('returnTo') || '/manga';
 
   const [pages, setPages] = useState<string[]>([]);
+  const [pagesError, setPagesError] = useState('');
   const [activePage, setActivePage] = useState(0);
   const [readMode, setReadMode] = useState<ReadMode>('vertical');
   const [scaleMode, setScaleMode] = useState<ScaleMode>('fit');
@@ -196,10 +197,20 @@ export default function MangaReadPage() {
 
   useEffect(() => {
     if (!chapterId) return;
+    setPagesError('');
     fetch(`/api/manga/pages?chapterId=${encodeURIComponent(chapterId)}`)
-      .then((res) => res.json())
-      .then((data) => setPages(data.pages || []))
-      .catch(() => setPages([]));
+      .then(async (res) => {
+        const data = await res.json();
+        // 403（來源被管理員停用）若吞成空陣列，畫面會永遠停在 skeleton
+        if (!res.ok) throw new Error(data?.error || '无法载入章节内容');
+        setPages(data.pages || []);
+      })
+      .catch((err) => {
+        setPages([]);
+        setPagesError(
+          err instanceof Error ? err.message : '无法载入章节内容'
+        );
+      });
   }, [chapterId]);
 
   useEffect(() => {
@@ -889,7 +900,21 @@ export default function MangaReadPage() {
           </div>
         )}
 
-        {pages.length === 0 && <MangaReadSkeleton readMode={readMode} pageGap={pageGap} />}
+        {pagesError ? (
+          <div className='px-4 py-16 text-center'>
+            <p className='text-sm text-white/90'>{pagesError}</p>
+            <Link
+              href={returnTo}
+              className='mt-4 inline-flex min-h-11 items-center rounded-2xl bg-sky-600 px-4 text-sm font-medium text-white transition-colors duration-200 hover:bg-sky-500'
+            >
+              返回
+            </Link>
+          </div>
+        ) : (
+          pages.length === 0 && (
+            <MangaReadSkeleton readMode={readMode} pageGap={pageGap} />
+          )
+        )}
 
         {pages.length === 0 ? (
           null

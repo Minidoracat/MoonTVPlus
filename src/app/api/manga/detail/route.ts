@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 
 import { suwayomiClient } from '@/lib/suwayomi.client';
 
-import { getAuthorizedUsername } from '../_utils';
+import { getAuthorizedUsername, mangaErrorResponse } from '../_utils';
 
 export const runtime = 'nodejs';
 
@@ -32,6 +32,6 @@ export async function GET(request: NextRequest) {
 
     return NextResponse.json(detail);
   } catch (error) {
-    return NextResponse.json({ error: (error as Error).message }, { status: 500 });
+    return mangaErrorResponse(error);
   }
 }

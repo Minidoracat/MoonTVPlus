@@ -10,14 +10,16 @@ export async function GET(request: NextRequest) {
   const username = await getAuthorizedUsername(request);
   if (username instanceof NextResponse) return username;
 
-  try {
-    const chapterId = new URL(request.url).searchParams.get('chapterId')?.trim();
-    if (!chapterId) {
-      return NextResponse.json({ error: '缺少 chapterId' }, { status: 400 });
-    }
+  const { searchParams } = new URL(request.url);
+  const sourceId = searchParams.get('sourceId')?.trim();
 
-    const pages = await suwayomiClient.getChapterPages(chapterId);
-    return NextResponse.json({ pages });
+  if (!sourceId) {
+    return NextResponse.json({ filters: [] });
+  }
+
+  try {
+    const filters = await suwayomiClient.getSourceFilters(sourceId);
+    return NextResponse.json({ filters });
   } catch (error) {
     return mangaErrorResponse(error);
   }

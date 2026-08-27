@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 
+import { parseMangaSourceIds } from '@/lib/manga-search-params';
 import { suwayomiClient } from '@/lib/suwayomi.client';
 
 import { getAuthorizedUsername } from '../../_utils';
@@ -16,7 +17,7 @@ export async function GET(request: NextRequest) {
 
   const { searchParams } = new URL(request.url);
   const q = searchParams.get('q')?.trim();
-  const sourceId = searchParams.get('sourceId')?.trim() || undefined;
+  const sourceIds = parseMangaSourceIds(searchParams);
   const page = Number(searchParams.get('page') || '1');
 
   if (!q) {
@@ -38,7 +39,7 @@ export async function GET(request: NextRequest) {
       };
 
       try {
-        const sources = await suwayomiClient.getSearchSources(sourceId);
+        const sources = await suwayomiClient.getSearchSources(sourceIds);
         let completedSources = 0;
         let totalResults = 0;
         const failedSources: Array<{ sourceId: string; sourceName: string; error: string }> = [];
@@ -47,6 +48,7 @@ export async function GET(request: NextRequest) {
 
         await Promise.all(
           sources.map(async (source) => {
+            const startedAt = Date.now();
             try {
               const result = await suwayomiClient.searchMangaSource(q, source, page);
               completedSources += 1;
@@ -58,6 +60,7 @@ export async function GET(request: NextRequest) {
                 results: result.results,
                 completedSources,
                 totalSources: sources.length,
+                elapsedMs: Date.now() - startedAt,
               });
             } catch (error) {
               const message = error instanceof Error ? error.message : '未知错误';
@@ -73,6 +76,7 @@ export async function GET(request: NextRequest) {
                 ...failure,
                 completedSources,
                 totalSources: sources.length,
+                elapsedMs: Date.now() - startedAt,
               });
             }
           })
@@ -84,6 +88,8 @@ export async function GET(request: NextRequest) {
           totalSources: sources.length,
           totalResults,
           failedSources,
+          // 全部來源都失敗時，前端不應顯示成「沒有結果」
+          allFailed: sources.length > 0 && failedSources.length === sources.length,
         });
       } catch (error) {
         send({

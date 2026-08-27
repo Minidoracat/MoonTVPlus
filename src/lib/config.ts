@@ -77,6 +77,11 @@ export const API_CONFIG = {
 // 在模块加载时根据环境决定配置来源
 let cachedConfig: AdminConfig;
 let configInitPromise: Promise<AdminConfig> | null = null;
+/**
+ * 目前 `cachedConfig` 是否為「讀不到真实设定时的临时默认值」。
+ * 授权判断必须区分「管理员刻意不限制」与「我们不知道限制是什么」。
+ */
+let configIsDegraded = false;
 
 // 从配置文件补充管理员配置
 export function refineConfig(adminConfig: AdminConfig): AdminConfig {
@@ -455,12 +460,19 @@ export async function getConfig(): Promise<AdminConfig> {
         // 数据库读取失败，使用默认配置但不保存，避免覆盖数据库
         console.warn('数据库读取失败，使用临时默认配置（不会保存到数据库）');
         adminConfig = await getInitConfig('');
+        // 这份配置是「读不到真实设定时的临时默认值」，不代表管理员的意图。
+        // 授权判断（例如漫画来源白名单 SourceIds）若把它当成真实设定，
+        // 会在存储层故障时 fail open —— 因此标记为降级并且不长期缓存。
+        configIsDegraded = true;
       } else {
         // 数据库中确实没有配置，首次初始化并保存
         console.log('首次初始化配置');
         adminConfig = await getInitConfig('');
         await db.saveAdminConfig(adminConfig);
+        configIsDegraded = false;
       }
+    } else {
+      configIsDegraded = false;
     }
 
     // 检查是否有旧格式Emby配置需要迁移
@@ -470,7 +482,12 @@ export async function getConfig(): Promise<AdminConfig> {
       !adminConfig.EmbyConfig.Sources;
 
     adminConfig = configSelfCheck(adminConfig);
-    cachedConfig = adminConfig;
+    // 降级配置不写入长期缓存：否则一次短暂的 DB 故障会让整个进程
+    // 在剩余生命周期内都用临时默认值（SourceIds 为空 = 不限制）。
+    // 不缓存 = 下次请求会重新尝试读 DB，恢复后自动回到真实设定。
+    if (!configIsDegraded) {
+      cachedConfig = adminConfig;
+    }
 
     // 如果进行了Emby配置迁移，保存到数据库
     if (!dbReadFailed && needsEmbyMigration) {
@@ -508,7 +525,9 @@ export async function getConfig(): Promise<AdminConfig> {
 
     // 清除初始化 Promise
     configInitPromise = null;
-    return cachedConfig;
+    // 一律回傳這次算出來的設定；降級時只是不寫進 module cache，
+    // 不能回傳 cachedConfig（那在首次 DB 故障時是 undefined）。
+    return adminConfig;
   })();
 
   return configInitPromise;
@@ -1272,9 +1291,22 @@ export async function getAvailableApiSites(
 
 export async function setCachedConfig(config: AdminConfig) {
   cachedConfig = config;
+  // 显式写入的是真实设定，降级状态解除
+  configIsDegraded = false;
 }
 
 export async function clearConfigCache() {
   cachedConfig = null as any;
   configInitPromise = null;
+  configIsDegraded = false;
+}
+
+/**
+ * 目前生效的设定是否为「读不到真实设定时的临时默认值」。
+ *
+ * 授权判断必须用这个来区分「管理员刻意不限制」与「我们不知道限制是什么」，
+ * 否则存储层故障会让白名单（例如漫画 SourceIds）fail open。
+ */
+export function isConfigDegraded(): boolean {
+  return configIsDegraded;
 }

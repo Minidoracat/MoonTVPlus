@@ -1,26 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server';
 
-import { getAuthorizedUsername } from '../_utils';
-import { getSuwayomiConfig, loginWithSimpleAuth } from '@/lib/suwayomi.client';
+import { getAuthorizedUsername, mangaErrorResponse } from '../_utils';
+import { resolveMangaImageUrl } from '@/lib/manga-image-path';
+import {
+  getSuwayomiConfig,
+  loginWithSimpleAuth,
+  suwayomiClient,
+} from '@/lib/suwayomi.client';
 
 export const runtime = 'nodejs';
 
-function resolveUpstreamUrl(serverBaseUrl: string, pathOrUrl: string): string {
-  if (/^https?:\/\//i.test(pathOrUrl)) {
-    const target = new URL(pathOrUrl);
-    const base = new URL(serverBaseUrl);
-    if (target.origin !== base.origin) {
-      throw new Error('不允许代理非当前 Suwayomi 服务的地址');
-    }
-    return target.toString();
-  }
-
-  if (!pathOrUrl.startsWith('/')) {
-    pathOrUrl = `/${pathOrUrl}`;
-  }
-
-  return `${serverBaseUrl}${pathOrUrl}`;
-}
 
 export async function GET(request: NextRequest) {
   const username = await getAuthorizedUsername(request);
@@ -33,7 +22,13 @@ export async function GET(request: NextRequest) {
     }
 
     const config = await getSuwayomiConfig();
-    const upstreamUrl = resolveUpstreamUrl(config.serverBaseUrl, pathOrUrl);
+    const { url: upstreamUrl, mangaId } = resolveMangaImageUrl(
+      config.serverBaseUrl,
+      pathOrUrl
+    );
+    // path 裡的 mangaId 是客戶端給的，必須反查真正的來源再驗白名單，
+    // 否則被停用來源的封面／內頁仍可直接讀出
+    await suwayomiClient.assertMangaAllowed(mangaId);
     const buildHeaders = async (
       forceRelogin: boolean
     ): Promise<HeadersInit | undefined> => {
@@ -56,16 +51,26 @@ export async function GET(request: NextRequest) {
       return undefined;
     };
 
+    // redirect: 'manual' —— 上游若把請求導向別處，不可帶著管理員憑證跟過去
     let response = await fetch(upstreamUrl, {
       headers: await buildHeaders(false),
       cache: 'no-store',
+      redirect: 'manual',
     });
 
     if (response.status === 401 && config.authMode === 'simple_login') {
       response = await fetch(upstreamUrl, {
         headers: await buildHeaders(true),
         cache: 'no-store',
+        redirect: 'manual',
       });
+    }
+
+    if (response.status >= 300 && response.status < 400) {
+      return NextResponse.json(
+        { error: '不允许跟随上游重定向' },
+        { status: 502 }
+      );
     }
 
     if (!response.ok) {
@@ -75,20 +80,36 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    const headers = new Headers();
     const contentType = response.headers.get('content-type');
-    const cacheControl = response.headers.get('cache-control');
-    if (contentType) headers.set('content-type', contentType);
-    headers.set('cache-control', cacheControl || 'public, max-age=300');
+    // 白名單已限定路徑，這裡再確認回應真的是圖片，
+    // 避免上游改版後把 JSON／HTML 當圖片轉出去。
+    //
+    // 明確排除 SVG：它是可執行腳本的圖片型別，而本專案的登入 cookie 是
+    // httpOnly: false，一個能執行腳本的同源回應等於可竊取 session。
+    // Suwayomi 的封面／內頁都是點陣圖，拒絕 SVG 不影響正常功能。
+    const mime = (contentType || '').split(';')[0].trim().toLowerCase();
+    if (!mime || !mime.startsWith('image/') || mime === 'image/svg+xml') {
+      return NextResponse.json(
+        { error: '上游返回的不是受支持的图片内容' },
+        { status: 502 }
+      );
+    }
+
+    const headers = new Headers();
+    headers.set('content-type', mime);
+    // 禁止瀏覽器 MIME sniffing：即使上游標成 image/*，內容若像 HTML
+    // 也不可被當成文件執行
+    headers.set('x-content-type-options', 'nosniff');
+    // 這個回應是「經過使用者權限 + SourceIds 授權」才產生的，不可進共享快取：
+    // 反向代理／CDN 會在請求進到本 route 前直接回快取，讓未授權使用者
+    // 或來源被停用後仍能取得內容。也不轉送上游的 public cache 指示。
+    headers.set('cache-control', 'private, no-store');
 
     return new NextResponse(response.body, {
       status: 200,
       headers,
     });
   } catch (error) {
-    return NextResponse.json(
-      { error: error instanceof Error ? error.message : '图片代理失败' },
-      { status: 500 }
-    );
+    return mangaErrorResponse(error);
   }
 }

@@ -5,9 +5,15 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { startTransition, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { deleteMangaShelf, getAllMangaShelf, saveMangaShelf } from '@/lib/db.client';
+import {
+  readMangaSourceHealth,
+  recordMangaSourceHealth,
+  type MangaSourceHealth,
+} from '@/lib/manga-source-health';
 import { MangaSearchItem, MangaShelfItem, MangaSource } from '@/lib/manga.types';
 
 import MangaCard from '@/components/MangaCard';
+import MangaSourceMultiPicker from '@/components/manga/MangaSourceMultiPicker';
 
 const MANGA_SEARCH_STATE_KEY = 'manga_search_state';
 
@@ -30,7 +36,7 @@ export default function MangaSearchPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const urlQuery = searchParams.get('q')?.trim() || '';
-  const urlSourceId = searchParams.get('sourceId') || '';
+  const urlSourceId = searchParams.get('sourceIds') || searchParams.get('sourceId') || '';
 
   const [query, setQuery] = useState('');
   const [sources, setSources] = useState<MangaSource[]>([]);
@@ -45,12 +51,26 @@ export default function MangaSearchPage() {
   const restoredRef = useRef(false);
   const forceNextUrlSearchRef = useRef(false);
   const eventSourceRef = useRef<EventSource | null>(null);
-  const currentSearchKeyRef = useRef('');
+  /**
+   * 每次搜尋單調遞增。不可用 `sourceId::query` 當識別：對同一組條件
+   * 重新搜尋時新舊 generation 的 key 相同，舊流殘留的 message/error
+   * 會通過檢查，把新搜尋誤報成「連線中斷」並關掉新流。
+   */
+  const searchGenerationRef = useRef(0);
   const pendingResultsRef = useRef<MangaSearchItem[]>([]);
   const flushTimerRef = useRef<number | null>(null);
   const [totalSources, setTotalSources] = useState(0);
   const [completedSources, setCompletedSources] = useState(0);
   const [useFluidSearch, setUseFluidSearch] = useState(true);
+  const [sourceHealth, setSourceHealth] = useState<Record<string, MangaSourceHealth>>({});
+  const pendingHealthRef = useRef<
+    Array<{ sourceId: string; elapsedMs?: number; failed: boolean }>
+  >([]);
+  const [maxSources, setMaxSources] = useState<number | undefined>(undefined);
+
+  useEffect(() => {
+    setSourceHealth(readMangaSourceHealth());
+  }, []);
 
   const getCacheKey = useCallback((keyword: string, selectedSourceId: string) => {
     return `manga_search_cache_${selectedSourceId || 'all'}_${keyword.trim()}`;
@@ -157,7 +177,12 @@ export default function MangaSearchPage() {
 
     fetch('/api/manga/sources')
       .then((res) => res.json())
-      .then((data) => setSources(data.sources || []))
+      .then((data) => {
+        setSources(data.sources || []);
+        if (typeof data.maxSources === 'number' && data.maxSources > 0) {
+          setMaxSources(data.maxSources);
+        }
+      })
       .catch(() => undefined);
 
     getAllMangaShelf().then(setShelf).catch(() => undefined);
@@ -173,12 +198,15 @@ export default function MangaSearchPage() {
       const trimmedQuery = keyword.trim();
       if (!trimmedQuery) return;
       const normalizedSourceId = selectedSourceId || '';
-      const searchKey = `${normalizedSourceId}::${trimmedQuery}`;
       const forceRefresh = options?.forceRefresh === true;
 
       closeEventSource();
       clearPendingResults();
-      currentSearchKeyRef.current = searchKey;
+      searchGenerationRef.current += 1;
+      const generation = searchGenerationRef.current;
+      // 上一輪被中斷時殘留的量測不可帶到這次：recordMangaSourceHealth
+      // 會用當下時間當 measuredAt，等於把舊資料的 TTL 續命
+      pendingHealthRef.current = [];
 
       setLoading(true);
       setError('');
@@ -204,14 +232,17 @@ export default function MangaSearchPage() {
       setUseFluidSearch((prev) => (prev === currentFluidSearch ? prev : currentFluidSearch));
 
       const params = new URLSearchParams({ q: trimmedQuery });
-      if (normalizedSourceId) params.set('sourceId', normalizedSourceId);
+      if (normalizedSourceId) params.set('sourceIds', normalizedSourceId);
 
       if (currentFluidSearch) {
+        // complete 時我們會主動 closeEventSource()，那會觸發 onerror；
+        // 用這個旗標區分「正常結束」與「連線真的斷了」。
+        let streamFinished = false;
         const es = new EventSource(`/api/manga/search/ws?${params.toString()}`);
         eventSourceRef.current = es;
 
         es.onmessage = (event) => {
-          if (!event.data || currentSearchKeyRef.current !== searchKey) return;
+          if (!event.data || searchGenerationRef.current !== generation) return;
           try {
             const payload = JSON.parse(event.data);
             switch (payload.type) {
@@ -221,20 +252,52 @@ export default function MangaSearchPage() {
                 break;
               case 'source_result':
                 setCompletedSources((prev) => Math.max(prev + 1, payload.completedSources || 0));
+                pendingHealthRef.current.push({
+                  sourceId: String(payload.sourceId || ''),
+                  elapsedMs:
+                    typeof payload.elapsedMs === 'number' ? payload.elapsedMs : undefined,
+                  failed: false,
+                });
                 if (Array.isArray(payload.results) && payload.results.length > 0) {
                   appendBufferedResults(payload.results as MangaSearchItem[]);
                 }
                 break;
               case 'source_error':
                 setCompletedSources((prev) => Math.max(prev + 1, payload.completedSources || 0));
+                pendingHealthRef.current.push({
+                  sourceId: String(payload.sourceId || ''),
+                  failed: true,
+                });
                 break;
               case 'error':
+                streamFinished = true;
                 setError(payload.error || '搜索失败');
                 setLoading(false);
+                // 這一輪已結束，殘留量測不可留到下一次搜尋才落盤
+                pendingHealthRef.current = [];
                 closeEventSource();
                 break;
               case 'complete': {
+                streamFinished = true;
                 setCompletedSources(payload.completedSources || payload.totalSources || 0);
+                if (payload.allFailed) {
+                  const first = Array.isArray(payload.failedSources)
+                    ? payload.failedSources[0]
+                    : undefined;
+                  setError(
+                    first
+                      ? `所有来源都失败了，例如「${first.sourceName}」：${String(first.error).split('\n')[0].slice(0, 120)}`
+                      : '所有来源都搜索失败'
+                  );
+                }
+                if (pendingHealthRef.current.length > 0) {
+                  const measured = pendingHealthRef.current;
+                  pendingHealthRef.current = [];
+                  setSourceHealth(recordMangaSourceHealth(measured));
+                }
+                // 全滅時不可寫入快取／搜尋狀態：否則下次同條件會命中快取直接
+                // 提早返回，把「全部來源失敗」變成沒有錯誤的「沒有找到」
+                const cacheable = !payload.allFailed;
                 if (pendingResultsRef.current.length > 0) {
                   const toAppend = pendingResultsRef.current;
                   pendingResultsRef.current = [];
@@ -245,12 +308,14 @@ export default function MangaSearchPage() {
                   startTransition(() => {
                     setResults((prev) => {
                       const nextResults = prev.concat(toAppend);
-                      setCachedResults(trimmedQuery, normalizedSourceId, nextResults);
-                      saveSearchState({ query: trimmedQuery, sourceId: normalizedSourceId, results: nextResults });
+                      if (cacheable) {
+                        setCachedResults(trimmedQuery, normalizedSourceId, nextResults);
+                        saveSearchState({ query: trimmedQuery, sourceId: normalizedSourceId, results: nextResults });
+                      }
                       return nextResults;
                     });
                   });
-                } else {
+                } else if (cacheable) {
                   setResults((prev) => {
                     setCachedResults(trimmedQuery, normalizedSourceId, prev);
                     saveSearchState({ query: trimmedQuery, sourceId: normalizedSourceId, results: prev });
@@ -268,8 +333,10 @@ export default function MangaSearchPage() {
         };
 
         es.onerror = () => {
-          if (currentSearchKeyRef.current !== searchKey) return;
-          if (pendingResultsRef.current.length > 0) {
+          if (searchGenerationRef.current !== generation) return;
+          if (streamFinished) return;
+          const hadPartial = pendingResultsRef.current.length > 0;
+          if (hadPartial) {
             const toAppend = pendingResultsRef.current;
             pendingResultsRef.current = [];
             if (flushTimerRef.current) {
@@ -280,7 +347,11 @@ export default function MangaSearchPage() {
               setResults((prev) => prev.concat(toAppend));
             });
           }
+          // 連線層失敗（401、代理中斷、串流提前結束）不可偽裝成「沒有結果」
+          setError('搜索连接中断，结果可能不完整，请重试');
           setLoading(false);
+          // 中斷的量測丟棄，否則會在下一次成功搜尋時以新的 measuredAt 落盤
+          pendingHealthRef.current = [];
           closeEventSource();
         };
         return;
@@ -289,20 +360,37 @@ export default function MangaSearchPage() {
       try {
         const res = await fetch(`/api/manga/search?${params.toString()}`);
         const data = await res.json();
-        if (currentSearchKeyRef.current !== searchKey) return;
+        if (searchGenerationRef.current !== generation) return;
         if (!res.ok) throw new Error(data.error || '搜索失败');
         const nextResults = data.results || [];
+        if (data.allFailed) {
+          const first = Array.isArray(data.failedSources)
+            ? data.failedSources[0]
+            : undefined;
+          setError(
+            first
+              ? `所有来源都失败了，例如「${first.sourceName}」：${String(first.error).split('\n')[0].slice(0, 120)}`
+              : '所有来源都搜索失败'
+          );
+        }
+        // 非流式路徑同樣要累積來源健康度，否則關閉流式搜尋後速度標記永遠不更新
+        if (Array.isArray(data.measurements) && data.measurements.length > 0) {
+          setSourceHealth(recordMangaSourceHealth(data.measurements));
+        }
         setResults(nextResults);
-        setTotalSources(1);
-        setCompletedSources(1);
-        setCachedResults(trimmedQuery, normalizedSourceId, nextResults);
-        saveSearchState({ query: trimmedQuery, sourceId: normalizedSourceId, results: nextResults });
+        setTotalSources(data.attemptedSources || 1);
+        setCompletedSources(data.attemptedSources || 1);
+        // 同上：全滅不入快取，否則會被記成正常的空結果
+        if (!data.allFailed) {
+          setCachedResults(trimmedQuery, normalizedSourceId, nextResults);
+          saveSearchState({ query: trimmedQuery, sourceId: normalizedSourceId, results: nextResults });
+        }
       } catch (err) {
-        if (currentSearchKeyRef.current !== searchKey) return;
+        if (searchGenerationRef.current !== generation) return;
         setError((err as Error).message);
         setResults([]);
       } finally {
-        if (currentSearchKeyRef.current === searchKey) {
+        if (searchGenerationRef.current === generation) {
           setLoading(false);
         }
       }
@@ -421,18 +509,14 @@ export default function MangaSearchPage() {
               className='w-full rounded-2xl border border-gray-200 bg-gray-50 px-4 py-3 text-sm outline-none transition focus:border-sky-500 dark:border-gray-700 dark:bg-gray-900'
             />
           </div>
-          <select
-            value={sourceId}
-            onChange={(e) => setSourceId(e.target.value)}
-            className='rounded-2xl border border-gray-200 bg-gray-50 px-4 py-3 text-sm dark:border-gray-700 dark:bg-gray-900 lg:w-56'
-          >
-            <option value=''>全部来源</option>
-            {sources.map((source) => (
-              <option key={source.id} value={source.id}>
-                {source.displayName || source.name}
-              </option>
-            ))}
-          </select>
+          <MangaSourceMultiPicker
+            sources={sources}
+            value={sourceId ? sourceId.split(',').filter(Boolean) : []}
+            onChange={(ids) => setSourceId(ids.join(','))}
+            health={sourceHealth}
+            maxActive={maxSources}
+            className='lg:w-64'
+          />
           <button className='inline-flex items-center justify-center gap-2 rounded-2xl bg-sky-600 px-6 py-3 text-sm font-medium text-white transition hover:bg-sky-700 lg:w-32'>
             <Search className='h-4 w-4' /> 搜索
           </button>

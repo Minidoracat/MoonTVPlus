@@ -23,6 +23,7 @@
 | `src/components/VideoCard.tsx` | 點擊先開詳情 |
 | `src/app/douban/page.tsx`、`src/components/DoubanSelector.tsx` | Netflix／TMDB 榜；同時留時刻表 |
 | `next.config.js` | **不要**把 server `opencc-js` alias 成 identity |
+| `docker-compose.yml` | 保留 `moontv-shared`（MoonTV 建立、Suwayomi 以 external 加入）與 core 的 `networks` |
 
 ## 1. 全站繁體中文介面
 

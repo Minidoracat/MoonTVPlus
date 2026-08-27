@@ -195,11 +195,36 @@ const createNextConfig = (phase) => {
     return nextConfig;
   }
 
+  // next-pwa 的預設 runtimeCaching 會把 API 回應寫進瀏覽器 Cache Storage，
+  // 而 Workbox 只看 HTTP 200，完全不理 `Cache-Control: private, no-store`。
+  //
+  // 這對本站是授權繞過：漫畫 API 與圖片代理的回應是「經過登入與 SourceIds
+  // 授權」才產生的，一旦落進 SW 快取，就能在來源被停用、使用者登出、或換人
+  // 使用同一個 browser profile 之後，於請求抵達授權檢查前被重播出來。
+  //
+  // 只移除 `apis` 規則不夠：預設清單裡的副檔名規則（static-image-assets、
+  // static-data-assets 等）用 RegExp 比對**完整 URL**且排在 API 規則之前，
+  // 所以 `/api/manga/search?q=x.jpg` 仍會被當成靜態圖片快取。
+  // Workbox 依註冊順序比對，因此把 same-origin `/api/` 的 NetworkOnly
+  // 規則插在最前面，讓它一定先命中。
+  const pwaDefaultCaching = require('next-pwa/cache');
+  const runtimeCaching = [
+    {
+      urlPattern: ({ url }) =>
+        self.origin === url.origin && url.pathname.startsWith('/api/'),
+      handler: 'NetworkOnly',
+    },
+    ...pwaDefaultCaching.filter(
+      (entry) => entry?.options?.cacheName !== 'apis'
+    ),
+  ];
+
   const withPWA = require('next-pwa')({
     dest: 'public',
     register: true,
     skipWaiting: true,
     importScripts: ['/push-sw.js'],
+    runtimeCaching,
   });
 
   return withPWA(nextConfig);

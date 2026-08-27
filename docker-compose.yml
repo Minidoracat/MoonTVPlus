@@ -20,13 +20,24 @@ services:
       - ./data/downloads:/data
     depends_on:
       - moontvplus-kvrocks
+    networks:
+      - default
+      - moontv-shared
 
   moontvplus-kvrocks:
     image: apache/kvrocks:latest
     container_name: moontvplus-kvrocks
     restart: unless-stopped
+    # 只綁 loopback：讓 host 上的 `pnpm dev` 能連同一份資料，
+    # 免得每次改動都要 docker rebuild（~180s）才能驗證。
+    ports:
+      - "127.0.0.1:6666:6666"
     volumes:
       - moontvplus-kvrocks-data:/var/lib/kvrocks
 
 volumes:
   moontvplus-kvrocks-data:
+
+networks:
+  moontv-shared:
+    name: moontv-shared

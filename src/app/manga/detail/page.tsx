@@ -73,6 +73,7 @@ export default function MangaDetailPage() {
   const sourceId = searchParams.get('sourceId') || '';
   const returnTo = searchParams.get('returnTo') || '/manga';
   const [detail, setDetail] = useState<MangaDetail | null>(null);
+  const [detailError, setDetailError] = useState('');
   const [history, setHistory] = useState<Record<string, MangaReadRecord>>({});
   const [shelf, setShelf] = useState<Record<string, MangaShelfItem>>({});
   const [descOrder, setDescOrder] = useState(true);
@@ -95,10 +96,23 @@ export default function MangaDetailPage() {
       status: searchParams.get('status') || '',
     });
 
+    setDetailError('');
     fetch(`/api/manga/detail?${params.toString()}`)
-      .then((res) => res.json())
-      .then(setDetail)
-      .catch(() => undefined);
+      .then(async (res) => {
+        const data = await res.json();
+        // 403（來源被管理員停用）或其他錯誤不可當成 MangaDetail 塞進 state，
+        // 否則會顯示一個沒有章節、沒有標題的壞頁面。書架裡的舊項目就會走到這。
+        if (!res.ok) {
+          throw new Error(data?.error || '无法载入漫画详情');
+        }
+        setDetail(data);
+      })
+      .catch((err) => {
+        setDetail(null);
+        setDetailError(
+          err instanceof Error ? err.message : '无法载入漫画详情'
+        );
+      });
 
     getAllMangaReadRecords().then(setHistory).catch(() => undefined);
     getAllMangaShelf().then(setShelf).catch(() => undefined);
@@ -186,6 +200,20 @@ export default function MangaDetailPage() {
 
   const chapterHref = (chapter: MangaChapter) =>
     `/manga/read?mangaId=${mangaId}&sourceId=${sourceId}&chapterId=${chapter.id}&title=${encodeURIComponent(detail?.title || '')}&cover=${encodeURIComponent(detail?.cover || '')}&sourceName=${encodeURIComponent(detail?.sourceName || '')}&chapterName=${encodeURIComponent(chapter.name)}&returnTo=${encodeURIComponent(returnTo)}`;
+
+  if (detailError) {
+    return (
+      <div className='mx-auto max-w-2xl px-4 py-16 text-center'>
+        <p className='text-sm text-gray-700 dark:text-gray-200'>{detailError}</p>
+        <Link
+          href={returnTo}
+          className='mt-4 inline-flex min-h-11 items-center rounded-2xl bg-sky-600 px-4 text-sm font-medium text-white transition-colors duration-200 hover:bg-sky-500'
+        >
+          返回
+        </Link>
+      </div>
+    );
+  }
 
   if (!detail) return <MangaDetailSkeleton />;
 

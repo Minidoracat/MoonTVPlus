@@ -356,12 +356,15 @@ export default function MangaRecommendPage() {
                 )
                 .map((filter) => {
                   const current = filterSelections.find(
-                    (item) =>
+                    (
+                      item
+                    ): item is Extract<
+                      MangaFilterSelection,
+                      { kind: 'select' | 'sort' }
+                    > =>
                       item.position === filter.position &&
                       (item.kind === 'select' || item.kind === 'sort')
-                  ) as
-                    | Extract<MangaFilterSelection, { kind: 'select' | 'sort' }>
-                    | undefined;
+                  );
                   const selectId = `manga-filter-${filter.position}`;
                   return (
                     <div key={filter.position} className='space-y-1'>
@@ -466,34 +469,33 @@ export default function MangaRecommendPage() {
               )
               .map((filter) => {
                 const current = filterSelections.find(
-                  (item) =>
+                  (item): item is Extract<MangaFilterSelection, { kind: 'group' }> =>
                     item.position === filter.position && item.kind === 'group'
-                ) as Extract<MangaFilterSelection, { kind: 'group' }> | undefined;
+                );
                 return (
                   <MangaFilterGroupChips
                     key={filter.position}
                     name={filter.name}
                     options={filter.options}
                     selected={current?.positions ?? []}
-                    onToggle={(innerPosition, checked) => {
-                      // 在 updater 內用 prev 計算：快速連點時 props 的
-                      // selected 是上一次 render 的舊值，用它算會蓋掉前一次點擊
+                    onToggle={(innerPosition) => {
+                      // 方向（勾↔取消）也在 updater 內從 prev 判斷：
+                      // 若由 child 用 render-time 的 selected 算方向，
+                      // 「清除後立刻點選」那一下會被算成取消而被吞掉
                       setFilterSelections((prev) => {
                         const existing = prev.find(
-                          (item) =>
+                          (item): item is Extract<MangaFilterSelection, { kind: 'group' }> =>
                             item.position === filter.position &&
                             item.kind === 'group'
-                        ) as
-                          | Extract<MangaFilterSelection, { kind: 'group' }>
-                          | undefined;
+                        );
                         const currentPositions = existing?.positions ?? [];
-                        const nextPositions = checked
-                          ? currentPositions.includes(innerPosition)
-                            ? currentPositions
-                            : [...currentPositions, innerPosition]
-                          : currentPositions.filter(
+                        const nextPositions = currentPositions.includes(
+                          innerPosition
+                        )
+                          ? currentPositions.filter(
                               (item) => item !== innerPosition
-                            );
+                            )
+                          : [...currentPositions, innerPosition];
                         const rest = prev.filter(
                           (item) => item.position !== filter.position
                         );

@@ -1,7 +1,7 @@
 'use client';
 
 import { Check, ChevronDown, ChevronUp, Search } from 'lucide-react';
-import { useMemo, useState } from 'react';
+import { useId, useMemo, useState } from 'react';
 
 import type { MangaFilterGroupOption } from '@/lib/manga.types';
 
@@ -16,13 +16,14 @@ interface MangaFilterGroupChipsProps {
   /** 已勾選項的群組內原始 position */
   selected: number[];
   /**
-   * 單項勾選／取消。
+   * 單項切換意圖（勾↔取消由呼叫端決定）。
    *
-   * 刻意不是 `onChange(完整清單)`：那需要用 props 的 `selected` 計算新清單，
-   * 快速連點（拖選、雙擊）時第二次點擊讀到的還是**上一次 render 的舊值**，
-   * 會蓋掉第一次的選擇。呼叫端應在 setState updater 內用 prev 計算。
+   * 刻意**只傳 position、不傳方向**：方向若在這裡用 render-time 的
+   * `selected` 算出，同一 render 週期內的交錯操作（清除後立刻點選、
+   * 同一顆連點兩次）讀到的都是舊值 —— 清除後想選回的那一下會被算成
+   * 「取消」而被吞掉。呼叫端應在 setState updater 內用 prev 判斷方向。
    */
-  onToggle: (position: number, checked: boolean) => void;
+  onToggle: (position: number) => void;
   /** 清除此群組全部勾選 */
   onClear: () => void;
 }
@@ -48,6 +49,9 @@ export default function MangaFilterGroupChips({
   const [query, setQuery] = useState('');
 
   const selectedSet = useMemo(() => new Set(selected), [selected]);
+  // 群組標題與 chip 容器的 aria 關聯。useId 產生的 id 含冒號，
+  // 不能進 CSS selector，但作為 id 屬性與 aria-labelledby 合法
+  const labelId = useId();
 
   const visible = useMemo(() => {
     const keyword = query.trim().toLowerCase();
@@ -58,23 +62,30 @@ export default function MangaFilterGroupChips({
       );
     }
 
-    // 已選置頂（各自維持原順序），收合時只留前 COLLAPSED_COUNT 個
+    // 已選置頂（各自維持原順序）。收合時已選**永遠全部顯示**，
+    // 未選項只補到 COLLAPSED_COUNT —— 若把已選一起截斷，「已選 30」
+    // 但畫面只有 24 個全勾的 chip，看起來像選項只有這些且全被勾了，
+    // 而第 25 個之後的已選項要取消還得先展開。
     const picked = options.filter((option) => selectedSet.has(option.position));
     const rest = options.filter((option) => !selectedSet.has(option.position));
-    const ordered = [...picked, ...rest];
-    return expanded ? ordered : ordered.slice(0, COLLAPSED_COUNT);
+    if (expanded) return [...picked, ...rest];
+    return [
+      ...picked,
+      ...rest.slice(0, Math.max(0, COLLAPSED_COUNT - picked.length)),
+    ];
   }, [expanded, options, query, selectedSet]);
-
-  const toggle = (position: number) => {
-    onToggle(position, !selectedSet.has(position));
-  };
 
   const hiddenCount = options.length - COLLAPSED_COUNT;
 
   return (
     <div className='space-y-2'>
       <div className='flex flex-wrap items-center justify-between gap-2'>
-        <div className='text-xs text-gray-500 dark:text-gray-400'>{name}</div>
+        <div
+          id={labelId}
+          className='text-xs text-gray-500 dark:text-gray-400'
+        >
+          {name}
+        </div>
         {selected.length > 0 && (
           <div className='flex items-center gap-2 text-xs'>
             <span className='text-sky-600 dark:text-sky-400'>
@@ -107,7 +118,11 @@ export default function MangaFilterGroupChips({
         </div>
       )}
 
-      <div className='flex flex-wrap gap-2'>
+      <div
+        role='group'
+        aria-labelledby={labelId}
+        className='flex flex-wrap gap-2'
+      >
         {visible.map((option) => {
           const active = selectedSet.has(option.position);
           return (
@@ -116,7 +131,7 @@ export default function MangaFilterGroupChips({
               type='button'
               role='checkbox'
               aria-checked={active}
-              onClick={() => toggle(option.position)}
+              onClick={() => onToggle(option.position)}
               className={`inline-flex min-h-11 cursor-pointer items-center gap-1.5 rounded-full border px-3 text-sm transition-colors duration-200 ${
                 active
                   ? 'border-sky-500 bg-sky-50 text-sky-700 dark:bg-sky-950/40 dark:text-sky-300'

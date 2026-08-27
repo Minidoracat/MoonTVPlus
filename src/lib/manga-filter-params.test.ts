@@ -102,6 +102,15 @@ describe('parseMangaFilterSelections', () => {
     ).toBeNull();
   });
 
+
+  it('頂層條目超過上限整包拒絕', () => {
+    const entries = Array.from({ length: 51 }, (_, i) => ({
+      position: i,
+      kind: 'select',
+      index: 0,
+    }));
+    expect(parseMangaFilterSelections(JSON.stringify(entries))).toBeNull();
+  });
   it('一筆壞掉時整包拒絕，不做部分接受', () => {
     // 部分接受會讓「送了 3 個條件、實際只套 2 個」靜默發生，
     // 使用者看到的結果與選擇不符卻沒有任何錯誤

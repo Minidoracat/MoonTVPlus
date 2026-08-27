@@ -18,6 +18,15 @@ function readNumber(source: object, key: string): number | null {
 /** 單一群組內最多允許勾選幾項；防止惡意 payload 塞爆上游 */
 export const MAX_GROUP_SELECTIONS = 200;
 
+/**
+ * 頂層 filter 條目上限。
+ *
+ * 沒有這個上限時，實際的約束只剩 HTTP 請求行長度 —— 那是隱含防線，
+ * 改走 POST body 或放寬反向代理的 buffer 就消失了。實測來源最多 4 個
+ * filter（Komiic），50 已留足餘裕。
+ */
+export const MAX_FILTER_ENTRIES = 50;
+
 /** 回傳 null 代表格式無效（呼叫端應回 400），空陣列代表沒有帶 filters */
 export function parseMangaFilterSelections(
   raw: string | null
@@ -31,6 +40,7 @@ export function parseMangaFilterSelections(
     return null;
   }
   if (!Array.isArray(parsed)) return null;
+  if (parsed.length > MAX_FILTER_ENTRIES) return null;
 
   const out: MangaFilterSelection[] = [];
   for (const entry of parsed) {

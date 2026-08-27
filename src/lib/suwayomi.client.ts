@@ -4,6 +4,7 @@ import { createHash } from 'crypto';
 
 import { getConfig, isDegradedConfigObject } from './config';
 import {
+  MANGA_DISABLE_ALL_SENTINEL,
   MangaChapter,
   MangaDetail,
   MangaFilterSelection,
@@ -42,6 +43,8 @@ interface ResolvedSuwayomiConfig {
   password?: string;
   defaultLang: string;
   sourceIds: string[];
+  /** 明確停用的來源（黑名單）；與 sourceIds 是 AND 關係 */
+  disabledSourceIds: string[];
   maxSources: number;
   /**
    * admin 設定是否真的讀成功。false = 我們不知道 SourceIds 是什麼，
@@ -148,6 +151,7 @@ async function resolveSuwayomiConfig(options: SuwayomiClientOptions = {}): Promi
   let password = process.env.SUWAYOMI_PASSWORD || '';
   let defaultLang = process.env.SUWAYOMI_DEFAULT_LANG || 'zh';
   let sourceIds: string[] = [];
+  let disabledSourceIds: string[] = [];
   let maxSources = Number(process.env.SUWAYOMI_MAX_SOURCES || 10);
   // 「政策是否可信」與「政策是否為空」必須分開：
   // 空的 SourceIds 代表管理員刻意不限制，而讀取失敗代表我們不知道限制是什麼。
@@ -167,6 +171,8 @@ async function resolveSuwayomiConfig(options: SuwayomiClientOptions = {}): Promi
       password = config.SuwayomiConfig.Password || password;
       defaultLang = config.SuwayomiConfig.DefaultLang || defaultLang;
       sourceIds = config.SuwayomiConfig.SourceIds || sourceIds;
+      disabledSourceIds =
+        config.SuwayomiConfig.DisabledSourceIds || disabledSourceIds;
       maxSources = config.SuwayomiConfig.MaxSources || maxSources;
     }
   } catch {
@@ -200,6 +206,7 @@ async function resolveSuwayomiConfig(options: SuwayomiClientOptions = {}): Promi
     password: password || undefined,
     defaultLang,
     sourceIds,
+    disabledSourceIds,
     maxSources,
     policyKnown,
   };
@@ -392,7 +399,10 @@ export class SuwayomiClient {
     // 政策必須進 key：快取值已套用當時的 SourceIds，若 key 只有 server/lang，
     // 管理員停用來源後最長 TTL 內仍會回舊清單，等於用 TTL 延後授權撤銷。
     // 政策一變 key 就變 → 立即 miss → 重新以當前政策抓取。
-    const policy = [...resolved.sourceIds].sort().join(',');
+    const policy = [
+      [...resolved.sourceIds].sort().join(','),
+      [...resolved.disabledSourceIds].sort().join(','),
+    ].join('|');
     // lang 不可正規化成 defaultLang：fetchSources 只在 lang 有值時過濾，
     // 若把 undefined 併入 'zh' 的 key，未過濾的完整清單會被當成 zh 清單回出去
     // （反向則會讓 assertSourceAllowed 誤拒合法的非 zh 來源）。
@@ -514,10 +524,18 @@ ${fields}
     }
 
     const filtered = nodes.filter((item) => !lang || item.lang === lang);
-    const scoped =
-      !unscoped && resolved.sourceIds.length > 0
-        ? filtered.filter((item) => resolved.sourceIds.includes(String(item.id)))
-        : filtered;
+    // 允許條件：（白名單為空 或 在白名單內）且 不在黑名單內。
+    // 黑名單先判，讓「明確停用」永遠勝過「白名單包含」。
+    const scoped = unscoped
+      ? filtered
+      : filtered.filter((item) => {
+          const id = String(item.id);
+          if (resolved.disabledSourceIds.includes(id)) return false;
+          if (resolved.sourceIds.length > 0 && !resolved.sourceIds.includes(id)) {
+            return false;
+          }
+          return true;
+        });
 
     return scoped.map((item) => ({
       id: String(item.id),
@@ -576,7 +594,17 @@ ${fields}
       if (resolved.sourceIds.length === 0) {
         throw error;
       }
-      return resolved.sourceIds.slice(0, resolved.maxSources).map((id) => ({
+      // Fallback 直接用白名單，所以必須自己扣掉黑名單與哨兵 ——
+      // 否則 getSources() 暫時失敗時，被停用的來源會被送去搜尋，繞過停用。
+      const usable = resolved.sourceIds.filter(
+        (id) =>
+          id !== MANGA_DISABLE_ALL_SENTINEL &&
+          !resolved.disabledSourceIds.includes(id)
+      );
+      if (usable.length === 0) {
+        throw new MangaSourceForbiddenError();
+      }
+      return usable.slice(0, resolved.maxSources).map((id) => ({
         id,
         displayName: id,
         name: id,

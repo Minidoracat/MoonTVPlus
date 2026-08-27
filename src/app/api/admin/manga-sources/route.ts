@@ -3,8 +3,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 import { getAuthInfoFromCookie } from '@/lib/auth';
-import { getConfig, isConfigDegraded } from '@/lib/config';
+import { getConfig, isDegradedConfigObject } from '@/lib/config';
 import { db } from '@/lib/db';
+import { MANGA_DISABLE_ALL_SENTINEL } from '@/lib/manga.types';
 import { suwayomiClient } from '@/lib/suwayomi.client';
 
 export const runtime = 'nodejs';
@@ -51,55 +52,19 @@ async function requireAdmin(
 }
 
 /**
- * 「全部停用」用的哨兵值。
+ * 某個來源目前是否啟用。
  *
- * `SourceIds: []` 在全站語意是「不限制＝全開」，所以全停時不能寫回空陣列，
- * 否則管理員按「全部停用」會得到「全部開放」。寫入一個不可能對到任何來源的
- * 值，`getSources()` 的 `sourceIds.includes(id)` 過濾後自然是空清單＝全部拒絕。
- * Suwayomi 的 source id 是數字字串，不會與這個值相撞。
+ * 條件：（白名單為空 或 在白名單內）且 不在黑名單內。
+ * 與 `fetchSources` 的過濾邏輯必須一致。
  */
-const DISABLE_ALL_SENTINEL = '__none__';
-
-/**
- * 目前被允許的來源集合。
- *
- * `SourceIds` 為空代表「不限制」，所以停用單一來源時必須先把可用清單具體化，
- * 再移除該項；否則寫回空陣列會變成「全部開放」。
- */
-function computeEnabledIds(
-  allIds: string[],
-  configured: string[] | undefined
-): Set<string> {
-  const list = configured && configured.length > 0 ? configured : allIds;
-  return new Set(list.filter((id) => allIds.includes(id)));
-}
-
-/**
- * 把 enabled 集合序列化回 `SourceIds`。
- *
- * `allIds` 只是「Suwayomi 這一瞬間回報的來源」，不等於「所有存在的來源」——
- * 上游重啟或擴充套件重載期間會成功回應但只列出部分來源。因此：
- * - `unknownConfigured`（白名單裡但當下沒回報的項）必須原封保留，
- *   否則單按一個開關就會把看不到的白名單項靜默刪掉。
- * - 判定「全開」時也要把這些項算進去，否則會誤寫 `[]`＝不限制。
- */
-function serializeAllowList(
-  allIds: string[],
-  enabled: Set<string>,
-  unknownConfigured: string[]
-): string[] {
-  // 有看不到的白名單項時，絕不可能是「全開」——保留限制
-  if (
-    unknownConfigured.length === 0 &&
-    allIds.length > 0 &&
-    allIds.every((id) => enabled.has(id))
-  ) {
-    return [];
-  }
-  const kept = [...unknownConfigured, ...allIds.filter((id) => enabled.has(id))];
-  // 全停：空陣列會被當成不限制，必須用哨兵
-  if (kept.length === 0) return [DISABLE_ALL_SENTINEL];
-  return kept;
+function isSourceEnabled(
+  id: string,
+  allowList: string[],
+  blockList: string[]
+): boolean {
+  if (blockList.includes(id)) return false;
+  if (allowList.length > 0 && !allowList.includes(id)) return false;
+  return true;
 }
 
 export async function GET(request: NextRequest) {
@@ -111,13 +76,11 @@ export async function GET(request: NextRequest) {
     // 帶 lang=undefined 取全部語言，管理面板要能看到／啟用其他語言的來源
     const sources = await suwayomiClient.getSourcesForAdmin();
     const allIds = sources.map((item) => item.id);
-    const enabled = computeEnabledIds(
-      allIds,
-      config.SuwayomiConfig?.SourceIds
-    );
+    const allowList = config.SuwayomiConfig?.SourceIds || [];
+    const blockList = config.SuwayomiConfig?.DisabledSourceIds || [];
 
     return NextResponse.json({
-      restricted: (config.SuwayomiConfig?.SourceIds || []).length > 0,
+      restricted: allowList.length > 0 || blockList.length > 0,
       maxSources: config.SuwayomiConfig?.MaxSources || 10,
       sources: sources.map((item) => ({
         id: item.id,
@@ -125,7 +88,7 @@ export async function GET(request: NextRequest) {
         displayName: item.displayName,
         lang: item.lang,
         contentWarning: item.contentWarning,
-        enabled: enabled.has(item.id),
+        enabled: isSourceEnabled(item.id, allowList, blockList),
         probe: probeResults.get(item.id) || null,
       })),
     });
@@ -188,19 +151,11 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ results });
     }
 
-    // 以下是寫入設定的動作
-    if (isConfigDegraded()) {
-      // 讀不到真實設定時寫回去會覆蓋成臨時預設值
-      return NextResponse.json(
-        { error: '当前无法读取管理配置，暂时不能修改来源开关' },
-        { status: 503 }
-      );
-    }
-
+    // 以下是寫入設定的動作。
+    // 判斷綁在「即將寫回的那份設定物件」上，不讀全域旗標（會被並發請求翻掉）。
     const config = await getConfig();
-    // 降級可能在上面的檢查之後才發生（getSourcesForAdmin 期間有等待）：
-    // 再確認一次，否則會把臨時預設設定整份寫回 DB
-    if (isConfigDegraded()) {
+    if (isDegradedConfigObject(config)) {
+      // 這份是讀不到真實設定時的臨時預設值，寫回去會覆蓋掉真正的設定
       return NextResponse.json(
         { error: '当前无法读取管理配置，暂时不能修改来源开关' },
         { status: 503 }
@@ -222,38 +177,49 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const configured = config.SuwayomiConfig.SourceIds || [];
-    // 白名單裡但當下沒回報的項（上游部分列出時會發生）——原封保留，
-    // 不可因為「看不到」就從白名單刪掉
-    const unknownConfigured = configured.filter(
-      (id) => id !== DISABLE_ALL_SENTINEL && !allIds.includes(id)
-    );
-    const enabled = computeEnabledIds(allIds, configured);
+    const allowList = config.SuwayomiConfig.SourceIds || [];
+    const blockList = new Set(config.SuwayomiConfig.DisabledSourceIds || []);
 
     if (action === 'enable_all') {
-      allIds.forEach((id) => enabled.add(id));
+      // 全開＝白名單不限制、黑名單清空
+      config.SuwayomiConfig.SourceIds = [];
+      config.SuwayomiConfig.DisabledSourceIds = [];
     } else if (action === 'disable_all') {
-      enabled.clear();
+      // 全關無法用黑名單表達（那需要列出完整目錄），用白名單哨兵
+      config.SuwayomiConfig.SourceIds = [MANGA_DISABLE_ALL_SENTINEL];
+      config.SuwayomiConfig.DisabledSourceIds = [];
     } else {
       const sourceId = body.sourceId?.trim();
       if (!sourceId || !allIds.includes(sourceId)) {
         return NextResponse.json({ error: '来源不存在' }, { status: 400 });
       }
-      if (action === 'enable') enabled.add(sourceId);
-      else enabled.delete(sourceId);
+
+      // 單顆切換只動黑名單 —— 絕不把「目前回報的清單」具體化成白名單。
+      // 上游重啟／擴充套件重載期間只會列出部分來源，具體化會把所有當下
+      // 沒回報的來源一起意外停用。黑名單是減法，不需要知道完整目錄。
+      if (action === 'enable') {
+        blockList.delete(sourceId);
+        // 若原本是「全關哨兵」，啟用一顆就得改成明確白名單
+        if (allowList.includes(MANGA_DISABLE_ALL_SENTINEL)) {
+          config.SuwayomiConfig.SourceIds = [sourceId];
+        } else if (allowList.length > 0 && !allowList.includes(sourceId)) {
+          config.SuwayomiConfig.SourceIds = [...allowList, sourceId];
+        }
+      } else {
+        blockList.add(sourceId);
+      }
+      config.SuwayomiConfig.DisabledSourceIds = Array.from(blockList);
     }
 
-    config.SuwayomiConfig.SourceIds = serializeAllowList(
-      allIds,
-      enabled,
-      // 「全部停用」的語意就是全關，不保留看不到的項
-      action === 'disable_all' ? [] : unknownConfigured
-    );
     await db.saveAdminConfig(config);
 
+    const finalAllow = config.SuwayomiConfig.SourceIds || [];
+    const finalBlock = config.SuwayomiConfig.DisabledSourceIds || [];
     return NextResponse.json({
-      restricted: config.SuwayomiConfig.SourceIds.length > 0,
-      enabledIds: allIds.filter((id) => enabled.has(id)),
+      restricted: finalAllow.length > 0 || finalBlock.length > 0,
+      enabledIds: allIds.filter((id) =>
+        isSourceEnabled(id, finalAllow, finalBlock)
+      ),
     });
   } catch (error) {
     console.error('漫画源管理操作失败:', error);

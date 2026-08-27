@@ -324,7 +324,14 @@ export interface AdminConfig {
     Username?: string; // 登录用户名
     Password?: string; // 登录密码
     DefaultLang?: string; // 默认语言，如 zh
-    SourceIds?: string[]; // 限制可用源
+    SourceIds?: string[]; // 白名单：非空时只允许这些源；空 = 不限制
+    // 黑名单：明确停用的源。
+    //
+    // 「停用某个源」本质是减法运算。若只有白名单，在「目前不限制」的状态下
+    // 停用一个源就必须先把完整目录具体化 —— 而 Suwayomi 在重启／扩充套件
+    // 重载期间会成功回应但只列出部分来源，那时具体化会把所有当下没回报的
+    // 来源一起意外停用。黑名单不需要知道完整目录，因此没有这个失败模式。
+    DisabledSourceIds?: string[];
     MaxSources?: number; // 搜索时最多查询多少个源
   };
   OPDSConfig?: {

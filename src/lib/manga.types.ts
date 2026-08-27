@@ -1,3 +1,16 @@
+/**
+ * 「全部停用」用的白名單哨兵值。
+ *
+ * `SourceIds: []` 在全站語意是「不限制＝全開」，所以全停時不能寫回空陣列，
+ * 否則管理員按「全部停用」會得到「全部開放」。改寫一個不可能對到任何來源的
+ * 值，白名單過濾後自然是空清單＝全部拒絕。
+ * Suwayomi 的 source id 是數字字串，不會與這個值相撞。
+ *
+ * 定義在這裡讓 admin route（寫入端）與 suwayomi.client（讀取端）共用同一份，
+ * 避免兩邊各寫一個字面值而漂移。
+ */
+export const MANGA_DISABLE_ALL_SENTINEL = '__none__';
+
 export type MangaContentWarning = 'SAFE' | 'MIXED' | 'NSFW';
 
 export interface MangaSource {

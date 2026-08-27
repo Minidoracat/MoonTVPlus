@@ -4,7 +4,7 @@ import { NextRequest, NextResponse } from 'next/server';
 
 import { AdminConfigResult } from '@/lib/admin.types';
 import { getAuthInfoFromCookie } from '@/lib/auth';
-import { getConfig, isConfigDegraded } from '@/lib/config';
+import { getConfig, isDegradedConfigObject } from '@/lib/config';
 
 export const runtime = 'nodejs';
 
@@ -104,7 +104,7 @@ export async function POST(request: NextRequest) {
       // getConfig() 在 DB 故障時會回「臨時預設值」（SourceIds 被補成 []）。
       // 若照抄那個值並存回 DB，白名單就被寫成「不限制＝全部開放」，
       // 而下面的 setCachedConfig 還會把降級旗標清掉，連 fail-closed 也解除。
-      if (isConfigDegraded()) {
+      if (isDegradedConfigObject(current)) {
         return NextResponse.json(
           { error: '当前无法读取管理配置，请稍后再保存' },
           { status: 503 }
@@ -112,6 +112,9 @@ export async function POST(request: NextRequest) {
       }
       newConfig.SuwayomiConfig.SourceIds =
         current?.SuwayomiConfig?.SourceIds ?? [];
+      // 黑名單同樣由面板專責維護，一併保留 DB 現值
+      newConfig.SuwayomiConfig.DisabledSourceIds =
+        current?.SuwayomiConfig?.DisabledSourceIds ?? [];
     }
 
     // 保存配置

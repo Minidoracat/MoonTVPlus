@@ -466,6 +466,10 @@ export async function getConfig(): Promise<AdminConfig> {
       dbReadFailed = true;
     }
 
+    // 這一次載入是否降級。用區域變數而非全域旗標：全域旗標會被其他並發
+    // 請求翻掉，而下面的重標與快取判斷必須跟著「這一次載入」的事實走。
+    let degradedThisLoad = false;
+
     // db 中无配置，执行一次初始化
     if (!adminConfig) {
       if (dbReadFailed) {
@@ -475,17 +479,17 @@ export async function getConfig(): Promise<AdminConfig> {
         // 这份配置是「读不到真实设定时的临时默认值」，不代表管理员的意图。
         // 授权判断（例如漫画来源白名单 SourceIds）若把它当成真实设定，
         // 会在存储层故障时 fail open —— 因此标记为降级并且不长期缓存。
-        configIsDegraded = true;
-        degradedConfigs.add(adminConfig);
+        degradedThisLoad = true;
       } else {
         // 数据库中确实没有配置，首次初始化并保存
         console.log('首次初始化配置');
         adminConfig = await getInitConfig('');
         await db.saveAdminConfig(adminConfig);
-        configIsDegraded = false;
       }
-    } else {
-      configIsDegraded = false;
+    }
+    configIsDegraded = degradedThisLoad;
+    if (degradedThisLoad) {
+      degradedConfigs.add(adminConfig);
     }
 
     // 检查是否有旧格式Emby配置需要迁移
@@ -497,13 +501,13 @@ export async function getConfig(): Promise<AdminConfig> {
     adminConfig = configSelfCheck(adminConfig);
     // configSelfCheck 目前是就地修改並回傳同一個參考，但不倚賴這點：
     // 重新標記，避免它哪天改成回傳新物件時標記靜默遺失（那會 fail open）
-    if (configIsDegraded) {
+    if (degradedThisLoad) {
       degradedConfigs.add(adminConfig);
     }
     // 降级配置不写入长期缓存：否则一次短暂的 DB 故障会让整个进程
     // 在剩余生命周期内都用临时默认值（SourceIds 为空 = 不限制）。
     // 不缓存 = 下次请求会重新尝试读 DB，恢复后自动回到真实设定。
-    if (!configIsDegraded) {
+    if (!degradedThisLoad) {
       cachedConfig = adminConfig;
     }
 

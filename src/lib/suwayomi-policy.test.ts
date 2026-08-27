@@ -10,11 +10,11 @@
  */
 jest.mock('@/lib/config', () => ({
   getConfig: jest.fn(),
-  isConfigDegraded: jest.fn(),
+  isDegradedConfigObject: jest.fn(),
 }));
 
 import type { AdminConfig } from '@/lib/admin.types';
-import { getConfig, isConfigDegraded } from '@/lib/config';
+import { getConfig, isDegradedConfigObject } from '@/lib/config';
 import { SuwayomiClient } from '@/lib/suwayomi.client';
 
 const FORBIDDEN = '无法读取来源限制设置，已暂时拒绝访问';
@@ -32,9 +32,16 @@ function configWith(sourceIds: string[]): AdminConfig {
   } as AdminConfig;
 }
 
+/**
+ * 降級狀態綁在「那一份 config 物件」上，不是全域旗標 ——
+ * 所以 mock 也要以物件為判斷依據，否則測不到真正的授權分支。
+ */
 function setConfigState(degraded: boolean, sourceIds: string[] = []): void {
-  (getConfig as jest.Mock).mockResolvedValue(configWith(sourceIds));
-  (isConfigDegraded as jest.Mock).mockReturnValue(degraded);
+  const config = configWith(sourceIds);
+  (getConfig as jest.Mock).mockResolvedValue(config);
+  (isDegradedConfigObject as jest.Mock).mockImplementation(
+    (candidate: unknown) => degraded && candidate === config
+  );
 }
 
 describe('降級設定下的授權（fail closed）', () => {
@@ -56,7 +63,7 @@ describe('降級設定下的授權（fail closed）', () => {
     global.fetch = originalFetch;
   });
 
-  describe('isConfigDegraded() === true', () => {
+  describe('設定為降級（policy 未知）', () => {
     beforeEach(() => {
       setConfigState(true);
     });
@@ -118,7 +125,7 @@ describe('降級設定下的授權（fail closed）', () => {
     });
   });
 
-  describe('isConfigDegraded() === false（正常運作不可被誤擋）', () => {
+  describe('設定正常（正常運作不可被誤擋）', () => {
     beforeEach(() => {
       setConfigState(false);
     });

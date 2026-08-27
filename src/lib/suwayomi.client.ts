@@ -426,9 +426,23 @@ export class SuwayomiClient {
     return inflight;
   }
 
+  /**
+   * 列出「全部」來源，不套 admin 允許清單。
+   *
+   * 管理面板必須看得到已停用的來源才能把它重新啟用；
+   * `getSources()` 會套允許清單，被停用的來源在那裡是看不到的。
+   * 僅限管理員路徑呼叫；一般使用者入口一律用 `getSources()`。
+   * 不進 sourcesCache：避免未過濾的清單被授權路徑讀到。
+   */
+  async getSourcesForAdmin(lang?: string): Promise<MangaSource[]> {
+    return this.fetchSources(lang, undefined, true);
+  }
+
   private async fetchSources(
     lang?: string,
-    snapshot?: ResolvedSuwayomiConfig
+    snapshot?: ResolvedSuwayomiConfig,
+    /** true = 不套 admin 允許清單（僅供管理面板列出全部來源） */
+    unscoped = false
   ): Promise<MangaSource[]> {
     const resolved = snapshot ?? (await resolveSuwayomiConfig(this.options));
     const sourceSelection = `
@@ -492,7 +506,7 @@ ${fields}
 
     const filtered = nodes.filter((item) => !lang || item.lang === lang);
     const scoped =
-      resolved.sourceIds.length > 0
+      !unscoped && resolved.sourceIds.length > 0
         ? filtered.filter((item) => resolved.sourceIds.includes(String(item.id)))
         : filtered;
 
@@ -697,6 +711,23 @@ ${fields}
   }
 
   /**
+   * 政策（admin SourceIds）是否可信；不可信就拒絕。
+   *
+   * 刻意不放在 getSources() 裡：那個方法也是 /api/admin/suwayomi 連線測試
+   * 用的（帶明確 options、不依賴儲存的政策），在設定故障時把它一起擋掉，
+   * 等於讓管理員在最需要診斷的時候無法測連線。
+   * 因此檢查放在「授權邊界」與「面向使用者的列表端點」。
+   */
+  async assertPolicyKnown(): Promise<void> {
+    const resolved = await resolveSuwayomiConfig(this.options);
+    if (!resolved.policyKnown) {
+      throw new MangaSourceForbiddenError(
+        '无法读取来源限制设置，已暂时拒绝访问'
+      );
+    }
+  }
+
+  /**
    * 確認 sourceId 在 admin 的允許清單內（getSources 已套用 SourceIds）。
    * 所有以 sourceId 對外發請求的入口都要先過這道，否則使用者可用 URL 繞過管理員限制。
    */
@@ -769,6 +800,51 @@ ${fields}
       options.push({ position, kind, name: filter.name, values });
     });
     return options;
+  }
+
+  /**
+   * 主動探測單一來源：實際抓一次 POPULAR 第一頁並計時。
+   *
+   * **刻意不套 assertSourceAllowed**：管理面板需要能測「目前被停用」的來源，
+   * 才能判斷要不要啟用它。因此呼叫端必須是管理員專用路徑
+   * （`/api/admin/manga-sources`），一般使用者入口不可呼叫這個方法。
+   *
+   * 這是管理員明確按下按鈕才觸發的診斷動作，不是背景自動輪詢 ——
+   * 自動對所有來源發請求等於替使用者去打漫畫站。
+   */
+  async probeSource(
+    sourceId: string
+  ): Promise<{ ok: boolean; elapsedMs: number; count: number; error?: string }> {
+    const startedAt = Date.now();
+    try {
+      const query = `
+        mutation PROBE_SOURCE($input: FetchSourceMangaInput!) {
+          fetchSourceManga(input: $input) {
+            hasNextPage
+            mangas { id }
+          }
+        }
+      `;
+      const data = await this.graphqlRequest<{
+        fetchSourceManga?: { mangas?: Array<{ id: string | number }> };
+      }>(
+        query,
+        { input: { source: sourceId, type: 'POPULAR', page: 1 } },
+        'PROBE_SOURCE'
+      );
+      return {
+        ok: true,
+        elapsedMs: Date.now() - startedAt,
+        count: (data.fetchSourceManga?.mangas || []).length,
+      };
+    } catch (error) {
+      return {
+        ok: false,
+        elapsedMs: Date.now() - startedAt,
+        count: 0,
+        error: error instanceof Error ? error.message : '未知错误',
+      };
+    }
   }
 
   async getRecommendedManga(
@@ -1084,6 +1160,9 @@ ${fields}
     author?: string;
     status?: string;
   }): Promise<MangaDetail> {
+    // 政策未知要在送出任何上游請求之前擋掉，否則使用者仍能在授權不明時
+    // 驅動一次 manga(id:) 查詢。
+    await this.assertPolicyKnown();
     // 先驗權再取內容：getChapters 也會外發請求，順序顛倒等於先洩漏再檢查。
     const { sourceId: trueSourceId, manga } = await this.resolveMangaSource(
       input.mangaId
@@ -1108,6 +1187,8 @@ ${fields}
   }
 
   async getChapterPages(chapterId: string): Promise<string[]> {
+    // 政策未知要在送出任何上游請求之前擋掉（含下面的 ChapterSource 反查）
+    await this.assertPolicyKnown();
     // chapterId 不帶來源資訊，先反查 chapter -> manga -> sourceId 再驗權，
     // 否則被停用來源的內容仍可用 chapterId 直接讀出。
     const { data: chapterData } = await this.graphqlNodeQuery<{

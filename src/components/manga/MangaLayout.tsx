@@ -1,14 +1,28 @@
 ﻿'use client';
 
-import { BookOpen, ChevronLeft, Compass, History, List, Search, Settings2 } from 'lucide-react';
+import {
+  BookOpen,
+  ChevronLeft,
+  Compass,
+  History,
+  List,
+  Search,
+  Settings2,
+  SlidersHorizontal,
+  X,
+} from 'lucide-react';
 import Link from 'next/link';
 import { usePathname, useSearchParams } from 'next/navigation';
+import { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 
 import { LanguageToggle } from '@/components/LanguageToggle';
+import MangaSourceManagerPanel from '@/components/manga/MangaSourceManagerPanel';
 import { useSite } from '@/components/SiteProvider';
 import { ThemeToggle } from '@/components/ThemeToggle';
 import { UpdateNotification } from '@/components/UpdateNotification';
 import { UserMenu } from '@/components/UserMenu';
+import { getAuthInfoFromBrowserCookie } from '@/lib/auth';
 
 interface MangaLayoutProps {
   children: React.ReactNode;
@@ -60,6 +74,31 @@ export default function MangaLayout({ children }: MangaLayoutProps) {
   const { siteName } = useSite();
   const meta = getMeta(pathname, searchParams);
   const isReadingPage = pathname === '/manga/read';
+
+  // 管理員入口：一般使用者完全看不到這顆按鈕，後端 API 也另有權限檢查
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [showSourceManager, setShowSourceManager] = useState(false);
+  const managerTriggerRef = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    const auth = getAuthInfoFromBrowserCookie();
+    setIsAdmin(auth?.role === 'owner' || auth?.role === 'admin');
+  }, []);
+
+  useEffect(() => {
+    if (!showSourceManager) return undefined;
+    const previous = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setShowSourceManager(false);
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.body.style.overflow = previous;
+      window.removeEventListener('keydown', onKeyDown);
+      managerTriggerRef.current?.focus();
+    };
+  }, [showSourceManager]);
 
   const isActive = (href: string) => pathname === href;
 
@@ -120,6 +159,19 @@ export default function MangaLayout({ children }: MangaLayoutProps) {
                 </Link>
               );
             })}
+            {isAdmin && !isReadingPage && (
+              <button
+                ref={managerTriggerRef}
+                type='button'
+                onClick={() => setShowSourceManager(true)}
+                aria-haspopup='dialog'
+                aria-expanded={showSourceManager}
+                className='inline-flex cursor-pointer items-center gap-2 rounded-full px-4 py-2 text-sm text-gray-600 transition hover:bg-gray-100 hover:text-sky-600 dark:text-gray-300 dark:hover:bg-gray-800'
+              >
+                <SlidersHorizontal className='h-4 w-4' />
+                源管理
+              </button>
+            )}
           </nav>
 
           <div className={`${isReadingPage ? 'ml-auto flex shrink-0' : 'ml-auto hidden md:flex'} items-center gap-2`}>
@@ -173,7 +225,11 @@ export default function MangaLayout({ children }: MangaLayoutProps) {
           className='fixed inset-x-0 bottom-0 z-[998] border-t border-gray-200/70 bg-white/92 backdrop-blur-xl dark:border-gray-800/80 dark:bg-gray-950/92 lg:hidden'
           style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}
         >
-          <div className='mx-auto grid max-w-3xl grid-cols-4'>
+          <div
+            className={`mx-auto grid max-w-3xl ${
+              isAdmin ? 'grid-cols-5' : 'grid-cols-4'
+            }`}
+          >
             {sectionTabs.map((tab) => {
               const Icon = tab.icon;
               const active = isActive(tab.href);
@@ -198,9 +254,61 @@ export default function MangaLayout({ children }: MangaLayoutProps) {
                 </Link>
               );
             })}
+            {isAdmin && (
+              <button
+                type='button'
+                onClick={() => setShowSourceManager(true)}
+                aria-haspopup='dialog'
+                className='flex min-h-16 cursor-pointer flex-col items-center justify-center gap-1 py-2 text-xs'
+              >
+                <SlidersHorizontal className='h-5 w-5 text-gray-500 dark:text-gray-400' />
+                <span className='text-gray-600 dark:text-gray-300'>源管理</span>
+              </button>
+            )}
           </div>
         </nav>
       )}
+
+      {showSourceManager &&
+        typeof document !== 'undefined' &&
+        createPortal(
+          <div className='fixed inset-0 z-[1000] flex items-end justify-center sm:items-center sm:p-4'>
+            <button
+              type='button'
+              aria-label='关闭源管理'
+              tabIndex={-1}
+              onClick={() => setShowSourceManager(false)}
+              className='absolute inset-0 bg-black/50'
+            />
+            <div
+              role='dialog'
+              aria-modal='true'
+              aria-labelledby='manga-source-manager-title'
+              className='relative flex max-h-[88dvh] w-full max-w-4xl flex-col overflow-hidden rounded-t-3xl border border-gray-200 bg-white pb-[env(safe-area-inset-bottom)] shadow-xl dark:border-gray-800 dark:bg-gray-950 sm:max-h-[85vh] sm:rounded-3xl sm:pb-0'
+            >
+              <div className='flex items-center justify-between border-b border-gray-200 px-4 py-3 dark:border-gray-800'>
+                <h2
+                  id='manga-source-manager-title'
+                  className='text-sm font-semibold text-gray-900 dark:text-gray-100'
+                >
+                  漫画源管理
+                </h2>
+                <button
+                  type='button'
+                  onClick={() => setShowSourceManager(false)}
+                  aria-label='关闭'
+                  className='inline-flex min-h-11 min-w-11 cursor-pointer items-center justify-center rounded-2xl text-gray-500 transition-colors duration-200 hover:bg-gray-100 hover:text-gray-900 dark:hover:bg-gray-900 dark:hover:text-gray-100'
+                >
+                  <X className='h-5 w-5' />
+                </button>
+              </div>
+              <div className='min-h-0 flex-1 overflow-y-auto px-4 py-4'>
+                <MangaSourceManagerPanel />
+              </div>
+            </div>
+          </div>,
+          document.body
+        )}
     </div>
   );
 }

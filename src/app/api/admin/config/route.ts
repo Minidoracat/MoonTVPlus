@@ -83,6 +83,17 @@ export async function POST(request: NextRequest) {
   try {
     const newConfig = await request.json();
 
+    // SuwayomiConfig.SourceIds（漫畫來源白名單）由 /api/admin/manga-sources
+    // 專責維護，面板每次開關都即時寫入。而這個端點收到的是「頁面載入當時」的
+    // 整份設定快照 —— 若照抄，管理員在面板停用來源後只要回上面的表單按一次
+    // 儲存，白名單就會被舊值靜默還原（已停用的成人來源會重新開放，且沒有任何
+    // 錯誤訊息）。因此這裡一律保留 DB 現值，不接受客戶端傳來的 SourceIds。
+    if (newConfig?.SuwayomiConfig) {
+      const current = await getConfig();
+      newConfig.SuwayomiConfig.SourceIds =
+        current?.SuwayomiConfig?.SourceIds ?? [];
+    }
+
     // 权限检查
     if (username !== process.env.USERNAME) {
       const { db } = await import('@/lib/db');

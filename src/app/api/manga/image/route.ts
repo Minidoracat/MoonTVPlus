@@ -100,10 +100,12 @@ export async function GET(request: NextRequest) {
     // 禁止瀏覽器 MIME sniffing：即使上游標成 image/*，內容若像 HTML
     // 也不可被當成文件執行
     headers.set('x-content-type-options', 'nosniff');
-    // 這個回應是「經過使用者權限 + SourceIds 授權」才產生的，不可進共享快取：
-    // 反向代理／CDN 會在請求進到本 route 前直接回快取，讓未授權使用者
-    // 或來源被停用後仍能取得內容。也不轉送上游的 public cache 指示。
-    headers.set('cache-control', 'private, no-store');
+    // `private` 已足以禁止 nginx／CDN 這類共享快取儲存（那才是真正的威脅）。
+    // 不用 no-store：那會連瀏覽器快取一起關掉，閱讀器往回翻頁時每張圖都要
+    // 重新下載並重打本 route 與上游 Suwayomi。安全性沒有損失 —— 能重用快取
+    // 影像的只有先前已被授權看過該圖的同一使用者。
+    // 也不轉送上游的 cache-control（可能是 public）。
+    headers.set('cache-control', 'private, max-age=300');
 
     return new NextResponse(response.body, {
       status: 200,

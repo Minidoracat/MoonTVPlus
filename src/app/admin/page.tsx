@@ -31,6 +31,7 @@ import {
   Cat,
   Check,
   CheckCircle,
+  CheckCircle2,
   ChevronDown,
   ChevronUp,
   Cloud,
@@ -44,6 +45,7 @@ import {
   Monitor,
   Palette,
   Plus,
+  RefreshCw,
   Search,
   Send,
   Settings,
@@ -55,6 +57,7 @@ import {
   Users,
   Video,
   X,
+  XCircle,
 } from 'lucide-react';
 import { GripVertical } from 'lucide-react';
 import {
@@ -80,6 +83,7 @@ import {
 import AnimeSubscriptionComponent from '@/components/AnimeSubscriptionComponent';
 import CorrectDialog from '@/components/CorrectDialog';
 import DataMigration from '@/components/DataMigration';
+import MangaSourceManagerPanel from '@/components/manga/MangaSourceManagerPanel';
 import PageLayout from '@/components/PageLayout';
 
 // 统一按钮样式系统
@@ -13428,6 +13432,7 @@ const CustomAdFilterConfig = ({
   );
 };
 
+
 // 小雅配置组件
 
 const SuwayomiConfigComponent = ({
@@ -13447,7 +13452,6 @@ const SuwayomiConfigComponent = ({
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [defaultLang, setDefaultLang] = useState('zh');
-  const [sourceIds, setSourceIds] = useState('');
   const [maxSources, setMaxSources] = useState(10);
   const [showMangaDisclaimer, setShowMangaDisclaimer] = useState(false);
   const [mangaCountdown, setMangaCountdown] = useState(10);
@@ -13460,7 +13464,7 @@ const SuwayomiConfigComponent = ({
       setUsername(config.SuwayomiConfig.Username || '');
       setPassword(config.SuwayomiConfig.Password || '');
       setDefaultLang(config.SuwayomiConfig.DefaultLang || 'zh');
-      setSourceIds((config.SuwayomiConfig.SourceIds || []).join(','));
+      // SourceIds 交給下方「漫畫源管理」面板即時維護，不進這個表單
       setMaxSources(config.SuwayomiConfig.MaxSources || 10);
     }
   }, [config]);
@@ -13480,10 +13484,8 @@ const SuwayomiConfigComponent = ({
     Username: authMode === 'none' ? '' : username,
     Password: authMode === 'none' ? '' : password,
     DefaultLang: defaultLang || 'zh',
-    SourceIds: sourceIds
-      .split(',')
-      .map((item) => item.trim())
-      .filter(Boolean),
+    // 刻意不輸出 SourceIds：後端會保留 DB 現值。
+    // 這個表單的 state 是頁面載入時的快照，若送出會把面板後續的變更蓋掉。
     MaxSources: Math.max(1, maxSources || 10),
   });
 
@@ -13762,19 +13764,6 @@ const SuwayomiConfigComponent = ({
           </div>
         </div>
 
-        <div>
-          <label className='block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2'>
-            源白名单
-          </label>
-          <textarea
-            value={sourceIds}
-            onChange={(e) => setSourceIds(e.target.value)}
-            rows={3}
-            placeholder='留空表示使用默认语言下全部源；填写时用英文逗号分隔 sourceId'
-            className='w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100'
-          />
-        </div>
-
         <div className='flex gap-3'>
           <button
             onClick={handleTest}
@@ -13792,6 +13781,8 @@ const SuwayomiConfigComponent = ({
           </button>
         </div>
       </div>
+
+      <MangaSourceManagerPanel suwayomiEnabled={enabled} />
 
       <AlertModal
         isOpen={alertModal.isOpen}

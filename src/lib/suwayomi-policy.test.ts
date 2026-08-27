@@ -99,6 +99,23 @@ describe('降級設定下的授權（fail closed）', () => {
       await expect(client.assertMangaAllowed('1307')).rejects.toThrow();
       expect(fetchMock).not.toHaveBeenCalled();
     });
+
+    it('getMangaDetail 要拒絕，且不得先送 manga(id:) 查詢', async () => {
+      await expect(
+        client.getMangaDetail({ mangaId: '1307', sourceId: '123' })
+      ).rejects.toThrow(FORBIDDEN);
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it('getChapterPages 要拒絕，且不得先送 ChapterSource 反查', async () => {
+      await expect(client.getChapterPages('6505')).rejects.toThrow(FORBIDDEN);
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it('assertPolicyKnown 本身要拒絕', async () => {
+      await expect(client.assertPolicyKnown()).rejects.toThrow(FORBIDDEN);
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
   });
 
   describe('isConfigDegraded() === false（正常運作不可被誤擋）', () => {

@@ -19,10 +19,16 @@ import {
   refreshLiveChannels,
   setLastGlobalLiveRefreshTime,
 } from '@/lib/live';
+import { resolveMangaImageUrl } from '@/lib/manga-image-path';
 import { MangaChapter, MangaShelfItem } from '@/lib/manga.types';
 import { refreshNetflixTop10 } from '@/lib/netflix-top10';
 import { startOpenListRefresh } from '@/lib/openlist-refresh';
-import { getSuwayomiConfig, loginWithSimpleAuth, SuwayomiClient } from '@/lib/suwayomi.client';
+import {
+  getSuwayomiConfig,
+  loginWithSimpleAuth,
+  SuwayomiClient,
+  suwayomiClient,
+} from '@/lib/suwayomi.client';
 import { SearchResult } from '@/lib/types';
 
 export const runtime = 'nodejs';
@@ -38,45 +44,48 @@ async function fetchMangaCoverAsDataUri(coverUrl?: string): Promise<string | und
   if (!coverUrl) return undefined;
 
   try {
-    let requestUrl = coverUrl;
+    // 漫畫封面一律由 buildSuwayomiImageProxyUrl() 產生成
+    // `/api/manga/image?path=...`，絕對網址在這裡沒有合法用途。
+    //
+    // 舊版在 coverUrl 本身是絕對網址時會跳過整段同源檢查、直接 fetch 使用者
+    // 提供的 URL。而 cover 來自 /api/manga/shelf 的 POST（只驗 key/title），
+    // 等於任何有漫畫權限的使用者都能讓伺服器對任意 URL 發 GET（blind SSRF，
+    // 回應是圖片時還會被 inline 成 data URI 回送）。因此只接受內部代理路徑。
+    if (!coverUrl.startsWith('/api/manga/image?')) {
+      return undefined;
+    }
+
+    const config = await getSuwayomiConfig();
+    const parsedProxyUrl = new URL(`http://localhost${coverUrl}`);
+    const rawPath = parsedProxyUrl.searchParams.get('path')?.trim();
+    if (!rawPath) return undefined;
+
+    // 與 /api/manga/image 共用同一份白名單與同源檢查
+    const { url: requestUrl, mangaId } = resolveMangaImageUrl(
+      config.serverBaseUrl,
+      rawPath
+    );
+    // 這裡會附上管理員憑證，所以同樣要反查真正的來源驗白名單，
+    // 否則被停用來源的封面仍會被抓出來塞進通知信
+    await suwayomiClient.assertMangaAllowed(mangaId);
+
     let headers: HeadersInit | undefined;
-
-    if (!/^https?:\/\//i.test(coverUrl)) {
-      if (!coverUrl.startsWith('/api/manga/image?')) {
-        return undefined;
-      }
-
-      const config = await getSuwayomiConfig();
-      const parsedProxyUrl = new URL(`http://localhost${coverUrl}`);
-      const rawPath = parsedProxyUrl.searchParams.get('path')?.trim();
-      if (!rawPath) return undefined;
-
-      if (/^https?:\/\//i.test(rawPath)) {
-        const target = new URL(rawPath);
-        const base = new URL(config.serverBaseUrl);
-        if (target.origin !== base.origin) {
-          return undefined;
-        }
-        requestUrl = target.toString();
-      } else {
-        requestUrl = `${config.serverBaseUrl}${rawPath.startsWith('/') ? rawPath : `/${rawPath}`}`;
-      }
-
-      if (config.authMode === 'basic_auth') {
-        if (!config.username || !config.password) return undefined;
-        headers = new Headers({
-          Authorization: buildSuwayomiBasicAuthHeader(config.username, config.password),
-        });
-      } else if (config.authMode === 'simple_login') {
-        headers = new Headers({
-          Cookie: await loginWithSimpleAuth(config),
-        });
-      }
+    if (config.authMode === 'basic_auth') {
+      if (!config.username || !config.password) return undefined;
+      headers = new Headers({
+        Authorization: buildSuwayomiBasicAuthHeader(config.username, config.password),
+      });
+    } else if (config.authMode === 'simple_login') {
+      headers = new Headers({
+        Cookie: await loginWithSimpleAuth(config),
+      });
     }
 
     const response = await fetch(requestUrl, {
       headers,
       cache: 'no-store',
+      // 不可帶著管理員憑證跟隨上游重導向
+      redirect: 'manual',
     });
 
     if (!response.ok) {

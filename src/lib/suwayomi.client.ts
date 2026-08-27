@@ -514,6 +514,14 @@ ${fields}
     sourceId?: string | string[]
   ): Promise<Array<{ id: string; displayName?: string; name?: string }>> {
     const resolved = await resolveSuwayomiConfig(this.options);
+    // 這條路不走 assertSourceAllowed（它自己比對 getSources()），
+    // 所以 policyKnown 必須在這裡單獨擋一次。降級設定下 sourceIds 是空陣列，
+    // getSources() 會回傳全部來源，搜尋就會 fail open。
+    if (!resolved.policyKnown) {
+      throw new MangaSourceForbiddenError(
+        '无法读取来源限制设置，已暂时拒绝访问'
+      );
+    }
     const requested = (Array.isArray(sourceId) ? sourceId : sourceId ? [sourceId] : [])
       .map((id) => id.trim())
       .filter(Boolean);
@@ -1046,8 +1054,17 @@ ${fields}
    * 來源一律由伺服器解析，不接受呼叫端傳入。
    */
   async assertMangaAllowed(mangaId: string): Promise<void> {
-    const { serverBaseUrl } = await resolveSuwayomiConfig(this.options);
-    const cached = this.mangaSourceCache.get(`${serverBaseUrl}::${mangaId}`);
+    const resolved = await resolveSuwayomiConfig(this.options);
+    // 政策未知時要在「送出任何上游請求之前」就拒絕。若先 resolveMangaSource
+    // 再擋，等於讓使用者在授權不明的狀態下驅動任意 manga(id:) 查詢。
+    if (!resolved.policyKnown) {
+      throw new MangaSourceForbiddenError(
+        '无法读取来源限制设置，已暂时拒绝访问'
+      );
+    }
+    const cached = this.mangaSourceCache.get(
+      `${resolved.serverBaseUrl}::${mangaId}`
+    );
     const sourceId =
       cached && Date.now() - cached.at < SuwayomiClient.MANGA_SOURCE_TTL_MS
         ? cached.sourceId

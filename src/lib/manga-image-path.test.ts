@@ -1,95 +1,95 @@
 import { resolveMangaImageUrl } from '@/lib/manga-image-path';
 
-const ROOT = 'http://suwayomi.local:4567';
-const SUBPATH = 'https://host.example/suwayomi';
+const BASE = 'http://suwayomi:4567';
 
-describe('resolveMangaImageUrl', () => {
-  describe('合法圖片路徑', () => {
-    it('封面（相對路徑，root 部署）', () => {
-      expect(resolveMangaImageUrl(ROOT, '/api/v1/manga/1307/thumbnail')).toEqual({
-        url: `${ROOT}/api/v1/manga/1307/thumbnail`,
-        mangaId: '1307',
-      });
-    });
-
-    it('內頁（相對路徑，root 部署）', () => {
-      expect(
-        resolveMangaImageUrl(ROOT, '/api/v1/manga/21/chapter/1/page/0')
-      ).toEqual({
-        url: `${ROOT}/api/v1/manga/21/chapter/1/page/0`,
-        mangaId: '21',
-      });
-    });
-
-    it('缺前導斜線也接受', () => {
-      expect(
-        resolveMangaImageUrl(ROOT, 'api/v1/manga/9/thumbnail').mangaId
-      ).toBe('9');
+describe('resolveMangaImageUrl 允許的圖片端點', () => {
+  it('接受封面並取出 mangaId', () => {
+    expect(resolveMangaImageUrl(BASE, '/api/v1/manga/1307/thumbnail')).toEqual({
+      url: 'http://suwayomi:4567/api/v1/manga/1307/thumbnail',
+      mangaId: '1307',
     });
   });
 
-  // normalizeApiBaseUrl 只去尾斜線，所以 https://host/suwayomi 是合法設定。
-  // 本機 serverBaseUrl 沒有前綴，這組情境只能靠單元測試守住。
-  describe('sub-path 部署', () => {
-    it('相對路徑要補上 base 前綴', () => {
-      expect(
-        resolveMangaImageUrl(SUBPATH, '/api/v1/manga/1307/thumbnail')
-      ).toEqual({
-        url: 'https://host.example/suwayomi/api/v1/manga/1307/thumbnail',
-        mangaId: '1307',
-      });
-    });
-
-    it('絕對網址帶前綴時要剝掉前綴再比對白名單', () => {
-      expect(
-        resolveMangaImageUrl(
-          SUBPATH,
-          'https://host.example/suwayomi/api/v1/manga/42/chapter/3/page/7'
-        )
-      ).toEqual({
-        url: 'https://host.example/suwayomi/api/v1/manga/42/chapter/3/page/7',
-        mangaId: '42',
-      });
-    });
-
-    it('前綴外的同 origin 路徑要拒絕', () => {
-      expect(() =>
-        resolveMangaImageUrl(
-          SUBPATH,
-          'https://host.example/api/v1/manga/1/thumbnail'
-        )
-      ).toThrow('不允许代理该路径');
-    });
-
-    it('尾斜線的 base 不會產生雙斜線', () => {
-      expect(
-        resolveMangaImageUrl(`${SUBPATH}/`, '/api/v1/manga/5/thumbnail').url
-      ).toBe('https://host.example/suwayomi/api/v1/manga/5/thumbnail');
+  it('接受內頁並取出 mangaId（非章節或頁碼）', () => {
+    expect(
+      resolveMangaImageUrl(BASE, '/api/v1/manga/42/chapter/7/page/3')
+    ).toEqual({
+      url: 'http://suwayomi:4567/api/v1/manga/42/chapter/7/page/3',
+      mangaId: '42',
     });
   });
 
-  describe('拒絕非圖片端點', () => {
-    it.each([
-      ['/api/graphql'],
-      ['/api/v1/settings/about'],
-      ['/api/v1/backup/export'],
-      ['/api/v1/manga/1/thumbnail/../../../graphql'],
-      ['/api/v1/manga/abc/thumbnail'],
-      ['/api/v1/manga/1/chapter/1/page'],
-    ])('拒絕 %s', (path) => {
-      expect(() => resolveMangaImageUrl(ROOT, path)).toThrow('不允许代理该路径');
+  it('接受省略開頭斜線的路徑', () => {
+    expect(
+      resolveMangaImageUrl(BASE, 'api/v1/manga/5/thumbnail').mangaId
+    ).toBe('5');
+  });
+
+  it('接受同源的絕對網址', () => {
+    expect(
+      resolveMangaImageUrl(BASE, 'http://suwayomi:4567/api/v1/manga/9/thumbnail')
+        .mangaId
+    ).toBe('9');
+  });
+});
+
+describe('resolveMangaImageUrl 拒絕非圖片端點', () => {
+  // 這個代理會附上管理員憑證，放行任意 path 等於讓任何有漫畫權限的使用者
+  // 用管理員身分讀 Suwayomi 其他受保護的 GET 資源
+  it.each([
+    ['GraphQL', '/api/graphql'],
+    ['設定', '/api/v1/settings/about'],
+    ['備份', '/api/v1/backup/export'],
+    ['非數字 mangaId', '/api/v1/manga/abc/thumbnail'],
+    ['多餘路徑段', '/api/v1/manga/1/thumbnail/extra'],
+    ['matrix param', '/api/v1/manga/1;x/thumbnail'],
+  ])('拒絕 %s', (_label, input) => {
+    expect(() => resolveMangaImageUrl(BASE, input)).toThrow('不允许代理该路径');
+  });
+
+  it('路徑穿越在比對前已被正規化，收斂後不符白名單', () => {
+    expect(() =>
+      resolveMangaImageUrl(BASE, '/api/v1/manga/1/thumbnail/../../../graphql')
+    ).toThrow('不允许代理该路径');
+  });
+});
+
+describe('resolveMangaImageUrl 強制同源', () => {
+  // 任何逃出 Suwayomi origin 的輸入都會把管理員憑證送到別的主機
+  it.each([
+    ['絕對外部網址', 'http://evil.example/api/v1/manga/1/thumbnail'],
+    ['protocol-relative', '//evil.example/api/v1/manga/1/thumbnail'],
+    ['反斜線變體', '\\\\evil.example/api/v1/manga/1/thumbnail'],
+    ['userinfo 偽裝', 'http://suwayomi:4567@evil.example/api/v1/manga/1/thumbnail'],
+    ['不同 port', 'http://suwayomi:9999/api/v1/manga/1/thumbnail'],
+    ['不同 scheme', 'https://suwayomi:4567/api/v1/manga/1/thumbnail'],
+  ])('拒絕 %s', (_label, input) => {
+    expect(() => resolveMangaImageUrl(BASE, input)).toThrow(
+      '不允许代理非当前 Suwayomi 服务的地址'
+    );
+  });
+});
+
+describe('resolveMangaImageUrl 處理帶 sub-path 的 serverBaseUrl', () => {
+  const SUB = 'http://host/suwayomi';
+
+  it('相對路徑會補上 base 的 sub-path', () => {
+    expect(resolveMangaImageUrl(SUB, '/api/v1/manga/3/thumbnail')).toEqual({
+      url: 'http://host/suwayomi/api/v1/manga/3/thumbnail',
+      mangaId: '3',
     });
   });
 
-  describe('拒絕跨 origin（避免管理員憑證外流）', () => {
-    it.each([
-      ['絕對外部網址', 'http://attacker.example/api/v1/manga/1/thumbnail'],
-      ['protocol-relative', '//attacker.example/api/v1/manga/1/thumbnail'],
-      ['反斜線變體', '\\\\attacker.example/api/v1/manga/1/thumbnail'],
-    ])('拒絕 %s', (_label, path) => {
-      expect(() => resolveMangaImageUrl(ROOT, path)).toThrow(
-        '不允许代理非当前 Suwayomi 服务的地址'
-      );
-    });
+  it('絕對網址需帶 sub-path 前綴才通過', () => {
+    expect(
+      resolveMangaImageUrl(SUB, 'http://host/suwayomi/api/v1/manga/3/thumbnail')
+        .mangaId
+    ).toBe('3');
+  });
+
+  it('繞過 sub-path 前綴的同源路徑仍被拒', () => {
+    expect(() =>
+      resolveMangaImageUrl(SUB, 'http://host/api/v1/manga/3/thumbnail')
+    ).toThrow('不允许代理该路径');
   });
 });

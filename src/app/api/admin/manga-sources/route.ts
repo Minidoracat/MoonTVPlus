@@ -39,7 +39,11 @@ async function requireAdmin(
   const username = authInfo.username;
   if (username !== process.env.USERNAME) {
     const userInfo = await db.getUserInfoV2(username);
-    if (!userInfo || userInfo.role !== 'admin' || userInfo.banned) {
+    // 必須同時接受 owner：/api/admin/config 與 MangaLayout 的入口判斷都是
+    // owner || admin，若這裡只收 admin，非 process.env.USERNAME 的站長
+    // 會看得到「源管理」按鈕但每個動作都回 401。
+    const role = userInfo?.role;
+    if (!userInfo || (role !== 'admin' && role !== 'owner') || userInfo.banned) {
       return NextResponse.json({ error: '权限不足' }, { status: 401 });
     }
   }

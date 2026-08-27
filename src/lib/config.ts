@@ -82,6 +82,16 @@ let configInitPromise: Promise<AdminConfig> | null = null;
  * 授权判断必须区分「管理员刻意不限制」与「我们不知道限制是什么」。
  */
 let configIsDegraded = false;
+/**
+ * 被標記為「降級」的設定物件。
+ *
+ * 只用 module 旗標會有 TOCTOU：呼叫端先 `await getConfig()`、再讀
+ * `isConfigDegraded()` 是兩個敘述，中間別的請求完成一次成功載入把旗標翻回
+ * false，呼叫端就會用「降級的設定」搭配「政策已知」的結論繼續走 ——
+ * 而降級設定的 SourceIds 是空陣列，全站語意正是「不限制」，等於 fail open。
+ * 把狀態綁在物件上，判斷就跟著那一份設定走，不受全域競態影響。
+ */
+const degradedConfigs = new WeakSet<AdminConfig>();
 
 // 从配置文件补充管理员配置
 export function refineConfig(adminConfig: AdminConfig): AdminConfig {
@@ -466,6 +476,7 @@ export async function getConfig(): Promise<AdminConfig> {
         // 授权判断（例如漫画来源白名单 SourceIds）若把它当成真实设定，
         // 会在存储层故障时 fail open —— 因此标记为降级并且不长期缓存。
         configIsDegraded = true;
+        degradedConfigs.add(adminConfig);
       } else {
         // 数据库中确实没有配置，首次初始化并保存
         console.log('首次初始化配置');
@@ -484,6 +495,11 @@ export async function getConfig(): Promise<AdminConfig> {
       !adminConfig.EmbyConfig.Sources;
 
     adminConfig = configSelfCheck(adminConfig);
+    // configSelfCheck 目前是就地修改並回傳同一個參考，但不倚賴這點：
+    // 重新標記，避免它哪天改成回傳新物件時標記靜默遺失（那會 fail open）
+    if (configIsDegraded) {
+      degradedConfigs.add(adminConfig);
+    }
     // 降级配置不写入长期缓存：否则一次短暂的 DB 故障会让整个进程
     // 在剩余生命周期内都用临时默认值（SourceIds 为空 = 不限制）。
     // 不缓存 = 下次请求会重新尝试读 DB，恢复后自动回到真实设定。
@@ -1311,9 +1327,21 @@ export async function clearConfigCache() {
 /**
  * 目前生效的设定是否为「读不到真实设定时的临时默认值」。
  *
- * 授权判断必须用这个来区分「管理员刻意不限制」与「我们不知道限制是什么」，
- * 否则存储层故障会让白名单（例如漫画 SourceIds）fail open。
+ * 適用於「要不要寫入」這類全域判斷（例如 admin 端點拒絕寫回設定）。
+ * **授權判斷請改用 `isDegradedConfigObject()`**：這個全域旗標與取得設定
+ * 是兩個敘述，中間會被別的請求翻掉（TOCTOU）。
  */
 export function isConfigDegraded(): boolean {
   return configIsDegraded;
+}
+
+/**
+ * 這一份設定物件是否為降級（讀不到真實設定時的臨時預設值）。
+ *
+ * 授權判斷一律用這個：狀態綁在物件上，跟著那一份設定走，不受全域競態影響。
+ */
+export function isDegradedConfigObject(
+  config: AdminConfig | null | undefined
+): boolean {
+  return !!config && degradedConfigs.has(config);
 }

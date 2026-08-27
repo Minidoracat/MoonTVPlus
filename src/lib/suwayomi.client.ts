@@ -2,7 +2,7 @@
 
 import { createHash } from 'crypto';
 
-import { getConfig, isConfigDegraded } from './config';
+import { getConfig, isDegradedConfigObject } from './config';
 import {
   MangaChapter,
   MangaDetail,
@@ -156,9 +156,10 @@ async function resolveSuwayomiConfig(options: SuwayomiClientOptions = {}): Promi
 
   try {
     const config = await getConfig();
-    // getConfig() 在 DB 讀取失敗時不會 throw，而是回傳臨時預設值，
-    // 所以「有拿到設定」不等於「設定可信」，必須另外問降級狀態。
-    policyKnown = !isConfigDegraded();
+    // 綁在「這一份設定物件」上，不讀全域旗標：後者與這行是兩個敘述，
+    // 中間別的請求完成一次成功載入就會把旗標翻成 false，
+    // 於是我們會用降級設定（SourceIds 空＝不限制）卻認為政策已知 → fail open。
+    policyKnown = !isDegradedConfigObject(config);
     if (config.SuwayomiConfig?.Enabled) {
       serverUrl = config.SuwayomiConfig.ServerURL || serverUrl;
       authMode = normalizeSuwayomiAuthMode(config.SuwayomiConfig.AuthMode || authMode);
@@ -380,6 +381,14 @@ export class SuwayomiClient {
    */
   async getSources(lang?: string): Promise<MangaSource[]> {
     const resolved = await resolveSuwayomiConfig(this.options);
+    // 政策不可信時絕不回來源清單：降級設定的 sourceIds 是空陣列，
+    // 而空陣列在下面等於「不限制」，會把全部來源（含已停用的）交出去。
+    // 在這裡擋掉，呼叫端（assertSourceAllowed 等）就不可能拿到未過濾清單。
+    if (!resolved.policyKnown) {
+      throw new MangaSourceForbiddenError(
+        '无法读取来源限制设置，已暂时拒绝访问'
+      );
+    }
     // 政策必須進 key：快取值已套用當時的 SourceIds，若 key 只有 server/lang，
     // 管理員停用來源後最長 TTL 內仍會回舊清單，等於用 TTL 延後授權撤銷。
     // 政策一變 key 就變 → 立即 miss → 重新以當前政策抓取。
@@ -734,24 +743,9 @@ ${fields}
   private async assertSourceAllowed(
     sourceId: string
   ): Promise<MangaSource | undefined> {
-    const resolved = await resolveSuwayomiConfig(this.options);
-    if (!resolved.policyKnown) {
-      // 讀不到 admin 設定就不知道白名單是什麼。此時 sourceIds 會是空陣列，
-      // 而空陣列在 getSources 中代表「不限制」—— 直接放行等於在設定儲存層
-      // 故障時解除所有來源限制。授權必須 fail closed。
-      throw new MangaSourceForbiddenError(
-        '无法读取来源限制设置，已暂时拒绝访问'
-      );
-    }
+    // getSources() 自己會在政策不可信時丟 MangaSourceForbiddenError，
+    // 所以這裡不需要（也不該）再讀一次全域旗標——那會有 TOCTOU。
     const known = await this.getSources();
-    // getSources() 內部會再 resolve 一次設定。若在這兩次之間 cache 被清空
-    // 且 DB 故障，第二份 snapshot 會是降級的（sourceIds 為空＝不限制），
-    // 而 known 仍是全部來源 —— 那就會放行原本被停用的來源。再驗一次。
-    if (isConfigDegraded()) {
-      throw new MangaSourceForbiddenError(
-        '无法读取来源限制设置，已暂时拒绝访问'
-      );
-    }
     const matched = known.find((item) => item.id === sourceId);
     if (!matched) {
       throw new MangaSourceForbiddenError();

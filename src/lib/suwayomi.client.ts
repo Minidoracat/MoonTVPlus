@@ -331,6 +331,23 @@ export class SuwayomiClient {
    */
   private static readonly SOURCES_CACHE_MAX = 32;
   private static readonly MANGA_SOURCE_CACHE_MAX = 4096;
+  /**
+   * 推薦結果快取。
+   *
+   * key 只含上游參數（serverBaseUrl / sourceId / type / page / filters），
+   * **不含政策與使用者** —— 見 getRecommendedManga 內的說明。
+   * 讀寫都在 assertSourceAllowed 之後，所以撤權者走不到這裡。
+   */
+  private static readonly RECOMMEND_TTL_MS = 30_000;
+  private static readonly RECOMMEND_CACHE_MAX = 128;
+  private recommendCache = new Map<
+    string,
+    {
+      at: number;
+      inflight?: Promise<MangaRecommendResult>;
+      value?: MangaRecommendResult;
+    }
+  >();
   private sourcesCache = new Map<
     string,
     { at: number; inflight?: Promise<MangaSource[]>; value?: MangaSource[] }
@@ -925,62 +942,90 @@ ${fields}
       }
     `;
 
+    // 授權必須在快取之前 —— 這是整個設計安全的關鍵。
     const matchedSource = await this.assertSourceAllowed(sourceId);
 
-    const data = await this.graphqlRequest<{
-      fetchSourceManga?: {
-        hasNextPage?: boolean;
-        mangas?: Array<{
-          id: string | number;
-          title?: string;
-          thumbnailUrl?: string;
-          sourceId?: string | number;
-          description?: string;
-          author?: string;
-          artist?: string;
-          genre?: string;
-          status?: string;
-        }>;
-      };
-    }>(
-      query,
-      {
-        input:
-          filters.length > 0
-            ? {
-                // Suwayomi 只在 SEARCH 模式套用 filters；POPULAR/LATEST 會忽略。
-                // 空 query + filters = 以該來源自己的分類／排序瀏覽。
-                type: 'SEARCH',
-                source: sourceId,
-                page,
-                query: '',
-                filters: filters.map((selection) =>
-                  selection.kind === 'sort'
-                    ? {
-                        position: selection.position,
-                        sortState: {
-                          index: selection.index,
-                          ascending: selection.ascending ?? false,
-                        },
-                      }
-                    : {
-                        position: selection.position,
-                        selectState: selection.index,
-                      }
-                ),
-              }
-            : {
-                type,
-                source: sourceId,
-                page,
-              },
-      },
-      'GET_SOURCE_MANGAS_FETCH'
-    );
+    // 快取 key 刻意**不含**政策與使用者。
+    //
+    // 同一組 (serverBaseUrl, sourceId, type, page, filters) 的上游 payload
+    // 對任何使用者、任何白／黑名單狀態都完全相同 —— 政策決定的是「能不能
+    // 發這個呼叫」（上面那行 assertSourceAllowed），不是「回來的內容長怎樣」。
+    // 因為政策從未影響快取內容，結構上就不可能透過快取洩漏授權；
+    // 被撤權的使用者在上一行就已經被擋掉，走不到這裡。
+    //
+    // serverBaseUrl 必須進 key：換 Suwayomi 伺服器後同一組參數是不同內容。
+    const resolvedForCache = await resolveSuwayomiConfig(this.options);
+    const cacheKey = JSON.stringify([
+      resolvedForCache.serverBaseUrl,
+      sourceId,
+      filters.length > 0 ? 'SEARCH' : type,
+      page,
+      filters.map((f) => [f.position, f.kind, f.index, f.ascending ?? false]),
+    ]);
+    const cachedHit = this.recommendCache.get(cacheKey);
+    const nowMs = Date.now();
+    if (cachedHit) {
+      if (cachedHit.inflight) return cachedHit.inflight;
+      if (
+        cachedHit.value &&
+        nowMs - cachedHit.at < SuwayomiClient.RECOMMEND_TTL_MS
+      ) {
+        return cachedHit.value;
+      }
+    }
+    const inflight = (async (): Promise<MangaRecommendResult> => {
+      const data = await this.graphqlRequest<{
+        fetchSourceManga?: {
+          hasNextPage?: boolean;
+          mangas?: Array<{
+            id: string | number;
+            title?: string;
+            thumbnailUrl?: string;
+            sourceId?: string | number;
+            description?: string;
+            author?: string;
+            artist?: string;
+            genre?: string;
+            status?: string;
+          }>;
+        };
+      }>(
+        query,
+        {
+          input:
+            filters.length > 0
+              ? {
+                  // Suwayomi 只在 SEARCH 模式套用 filters；POPULAR/LATEST 會忽略。
+                  // 空 query + filters = 以該來源自己的分類／排序瀏覽。
+                  type: 'SEARCH',
+                  source: sourceId,
+                  page,
+                  query: '',
+                  filters: filters.map((selection) =>
+                    selection.kind === 'sort'
+                      ? {
+                          position: selection.position,
+                          sortState: {
+                            index: selection.index,
+                            ascending: selection.ascending ?? false,
+                          },
+                        }
+                      : {
+                          position: selection.position,
+                          selectState: selection.index,
+                        }
+                  ),
+                }
+              : {
+                  type,
+                  source: sourceId,
+                  page,
+                },
+        },
+        'GET_SOURCE_MANGAS_FETCH'
+      );
 
-    return {
-      hasNextPage: Boolean(data.fetchSourceManga?.hasNextPage),
-      mangas: (data.fetchSourceManga?.mangas || []).map((manga) => ({
+      const mangas = (data.fetchSourceManga?.mangas || []).map((manga) => ({
         id: String(manga.id),
         sourceId: String(manga.sourceId || sourceId),
         sourceName: matchedSource?.displayName || matchedSource?.name || sourceId,
@@ -991,8 +1036,51 @@ ${fields}
         artist: manga.artist,
         genre: manga.genre,
         status: normalizeMangaStatus(manga.status),
-      })),
-    };
+      }));
+
+      // 順手把 mangaId→sourceId 填進快取：這裡已經知道每本的來源，
+      // 不填的話圖片代理對每張封面都要再打一次 manga(id:) 反查。
+      for (const manga of mangas) {
+        this.rememberMangaSource(
+          resolvedForCache.serverBaseUrl,
+          manga.id,
+          manga.sourceId
+        );
+      }
+
+      return {
+        hasNextPage: Boolean(data.fetchSourceManga?.hasNextPage),
+        mangas,
+      };
+    })();
+
+    const published = inflight
+      .then((value) => {
+        // compare-and-set：容量汰除或後續呼叫可能已讓 key 指向別的 inflight
+        if (this.recommendCache.get(cacheKey)?.inflight === published) {
+          this.recommendCache.delete(cacheKey);
+          this.recommendCache.set(cacheKey, { at: Date.now(), value });
+          SuwayomiClient.capMap(
+            this.recommendCache,
+            SuwayomiClient.RECOMMEND_CACHE_MAX
+          );
+        }
+        return value;
+      })
+      .catch((error) => {
+        // 失敗不留快取
+        if (this.recommendCache.get(cacheKey)?.inflight === published) {
+          this.recommendCache.delete(cacheKey);
+        }
+        throw error;
+      });
+
+    this.recommendCache.set(cacheKey, { at: nowMs, inflight: published });
+    SuwayomiClient.capMap(
+      this.recommendCache,
+      SuwayomiClient.RECOMMEND_CACHE_MAX
+    );
+    return published;
   }
 
   async getChapters(mangaId: string): Promise<MangaChapter[]> {
@@ -1095,6 +1183,27 @@ ${fields}
   }
 
   /**
+   * 記住 mangaId 屬於哪個來源。
+   *
+   * 圖片代理只有 mangaId，必須反查來源才能驗權；沒有這份快取的話
+   * 一頁 24 張封面就是 24 次額外的 manga(id:) GraphQL。
+   * key 含 serverBaseUrl：換伺服器後同一個 mangaId 是不同漫畫。
+   */
+  private rememberMangaSource(
+    serverBaseUrl: string,
+    mangaId: string,
+    sourceId: string
+  ): void {
+    const key = `${serverBaseUrl}::${mangaId}`;
+    this.mangaSourceCache.delete(key);
+    this.mangaSourceCache.set(key, { at: Date.now(), sourceId });
+    SuwayomiClient.capMap(
+      this.mangaSourceCache,
+      SuwayomiClient.MANGA_SOURCE_CACHE_MAX
+    );
+  }
+
+  /**
    * 從伺服器查出 manga 真正所屬的 sourceId。
    *
    * 授權判斷絕不能信客戶端傳來的 sourceId：攻擊者只要拿「允許來源的 id」
@@ -1157,16 +1266,7 @@ ${fields}
     // key 必須用「發出這次查詢的那份 snapshot」的 serverBaseUrl。
     // 若在這裡重新 resolve，查詢期間管理員換了 Suwayomi 伺服器的話，
     // 舊伺服器的來源歸屬會被寫進新伺服器的 namespace，造成跨來源授權繞過。
-    const mangaKey = `${snapshot.serverBaseUrl}::${mangaId}`;
-    this.mangaSourceCache.delete(mangaKey);
-    this.mangaSourceCache.set(mangaKey, {
-      at: Date.now(),
-      sourceId,
-    });
-    SuwayomiClient.capMap(
-      this.mangaSourceCache,
-      SuwayomiClient.MANGA_SOURCE_CACHE_MAX
-    );
+    this.rememberMangaSource(snapshot.serverBaseUrl, mangaId, sourceId);
     return { sourceId, manga: data.manga };
   }
 

@@ -7,36 +7,44 @@
  *
  * 每個 pattern 的第一個 capture group 必須是 mangaId。
  */
-const ALLOWED_IMAGE_PATHS: RegExp[] = [
+const ALLOWED_IMAGE_PATHS: Array<{ kind: 'thumbnail' | 'page'; re: RegExp }> = [
   // 封面：buildSuwayomiImageProxyUrl(manga.thumbnailUrl)
-  /^\/api\/v1\/manga\/(\d+)\/thumbnail\/?$/,
+  { kind: 'thumbnail', re: /^\/api\/v1\/manga\/(\d+)\/thumbnail\/?$/ },
   // 內頁：fetchChapterPages 回傳的 pages
-  /^\/api\/v1\/manga\/(\d+)\/chapter\/\d+\/page\/\d+\/?$/,
+  {
+    kind: 'page',
+    re: /^\/api\/v1\/manga\/(\d+)\/chapter\/\d+\/page\/\d+\/?$/,
+  },
 ];
 
 /**
- * 從路徑取出 mangaId；不符合白名單則回 null。
+ * 從路徑取出 mangaId 與圖片種類；不符合白名單則回 null。
  *
  * 白名單只保證「這是圖片端點」，不保證「這本漫畫的來源仍被允許」——
  * path 裡的 mangaId 由客戶端提供，知道被停用來源的 id 就能直接讀圖，
  * 繞過 detail/pages 上的檢查。呼叫端仍要用這個 mangaId 反查來源做授權。
+ *
+ * kind 用來決定要不要縮圖：封面在列表裡只顯示約 200px 寬，
+ * 內頁是閱讀主體，不可降畫質。
  */
-function extractMangaId(pathname: string): string | null {
-  for (const pattern of ALLOWED_IMAGE_PATHS) {
-    const matched = pattern.exec(pathname);
-    if (matched) return matched[1];
+function matchImagePath(
+  pathname: string
+): { mangaId: string; kind: 'thumbnail' | 'page' } | null {
+  for (const { kind, re } of ALLOWED_IMAGE_PATHS) {
+    const matched = re.exec(pathname);
+    if (matched) return { mangaId: matched[1], kind };
   }
   return null;
 }
 
 /**
- * 把使用者給的 path 解析成上游圖片 URL，並回傳其 mangaId。
+ * 把使用者給的 path 解析成上游圖片 URL，並回傳其 mangaId 與圖片種類。
  * 不合法就丟錯，呼叫端不需再自行驗證。
  */
 export function resolveMangaImageUrl(
   serverBaseUrl: string,
   pathOrUrl: string
-): { url: string; mangaId: string } {
+): { url: string; mangaId: string; kind: 'thumbnail' | 'page' } {
   const base = new URL(serverBaseUrl);
   // serverBaseUrl 可以帶 sub-path（normalizeApiBaseUrl 只去尾斜線），
   // 例如 https://host/suwayomi。白名單比對的是「去掉前綴後」的路徑。
@@ -65,10 +73,10 @@ export function resolveMangaImageUrl(
     ? target.pathname.slice(basePath.length)
     : target.pathname;
 
-  const mangaId = extractMangaId(relativePath);
-  if (!mangaId) {
+  const matched = matchImagePath(relativePath);
+  if (!matched) {
     throw new Error('不允许代理该路径');
   }
 
-  return { url: target.toString(), mangaId };
+  return { url: target.toString(), mangaId: matched.mangaId, kind: matched.kind };
 }

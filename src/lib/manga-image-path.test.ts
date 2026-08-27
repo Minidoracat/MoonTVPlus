@@ -3,19 +3,21 @@ import { resolveMangaImageUrl } from '@/lib/manga-image-path';
 const BASE = 'http://suwayomi:4567';
 
 describe('resolveMangaImageUrl 允許的圖片端點', () => {
-  it('接受封面並取出 mangaId', () => {
+  it('接受封面並取出 mangaId 與 kind', () => {
     expect(resolveMangaImageUrl(BASE, '/api/v1/manga/1307/thumbnail')).toEqual({
       url: 'http://suwayomi:4567/api/v1/manga/1307/thumbnail',
       mangaId: '1307',
+      kind: 'thumbnail',
     });
   });
 
-  it('接受內頁並取出 mangaId（非章節或頁碼）', () => {
+  it('接受內頁並取出 mangaId 與 kind（非章節或頁碼）', () => {
     expect(
       resolveMangaImageUrl(BASE, '/api/v1/manga/42/chapter/7/page/3')
     ).toEqual({
       url: 'http://suwayomi:4567/api/v1/manga/42/chapter/7/page/3',
       mangaId: '42',
+      kind: 'page',
     });
   });
 
@@ -77,6 +79,7 @@ describe('resolveMangaImageUrl 處理帶 sub-path 的 serverBaseUrl', () => {
     expect(resolveMangaImageUrl(SUB, '/api/v1/manga/3/thumbnail')).toEqual({
       url: 'http://host/suwayomi/api/v1/manga/3/thumbnail',
       mangaId: '3',
+      kind: 'thumbnail',
     });
   });
 

@@ -46,29 +46,24 @@ export async function GET(request: NextRequest) {
 
         send({ type: 'start', totalSources: sources.length });
 
+        // 走 searchMangaSourceWithDeadline 而不是 searchMangaSource：
+        // 這裡雖然能逐顆先送 source_result，但 `complete` 仍在 Promise.all
+        // 之後，而前端要收到 complete 才停止 loading。少了 per-source 上限，
+        // 一顆卡住的來源就能讓整個搜尋 UI 停在載入中直到 20 秒 deadline。
         await Promise.all(
           sources.map(async (source) => {
-            const startedAt = Date.now();
-            try {
-              const result = await suwayomiClient.searchMangaSource(q, source, page);
-              completedSources += 1;
-              totalResults += result.results.length;
-              send({
-                type: 'source_result',
-                sourceId: String(source.id),
-                sourceName: source.displayName || source.name || String(source.id),
-                results: result.results,
-                completedSources,
-                totalSources: sources.length,
-                elapsedMs: Date.now() - startedAt,
-              });
-            } catch (error) {
-              const message = error instanceof Error ? error.message : '未知错误';
-              completedSources += 1;
+            const outcome = await suwayomiClient.searchMangaSourceWithDeadline(
+              q,
+              source,
+              page
+            );
+            completedSources += 1;
+
+            if (outcome.status === 'failed') {
               const failure = {
                 sourceId: String(source.id),
-                sourceName: source.displayName || source.name || String(source.id),
-                error: message,
+                sourceName: outcome.sourceName,
+                error: outcome.error,
               };
               failedSources.push(failure);
               send({
@@ -76,9 +71,21 @@ export async function GET(request: NextRequest) {
                 ...failure,
                 completedSources,
                 totalSources: sources.length,
-                elapsedMs: Date.now() - startedAt,
+                elapsedMs: outcome.elapsedMs,
               });
+              return;
             }
+
+            totalResults += outcome.results.length;
+            send({
+              type: 'source_result',
+              sourceId: String(source.id),
+              sourceName: outcome.sourceName,
+              results: outcome.results,
+              completedSources,
+              totalSources: sources.length,
+              elapsedMs: outcome.elapsedMs,
+            });
           })
         );
 

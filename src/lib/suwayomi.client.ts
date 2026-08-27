@@ -14,9 +14,12 @@ import {
   MangaRecommendType,
   MangaSearchItem,
   MangaSearchResult,
+  MangaSearchSourceRef,
   MangaSource,
   MangaSourceFilterOption,
   MangaSourceMeasurement,
+  MangaSourceSearchOutcome,
+  MangaSourceSearchResponse,
 } from './manga.types';
 import {
   isSuwayomiUnknownFieldError,
@@ -62,6 +65,26 @@ interface SuwayomiSessionCacheEntry {
 const SUWAYOMI_SESSION_TTL_MS = 25 * 60 * 1000;
 const DEFAULT_SUWAYOMI_TIMEOUT_MS = Number(process.env.SUWAYOMI_TIMEOUT_MS || 20000);
 
+/**
+ * 單一來源的搜尋上限。
+ *
+ * 搜尋是 fan-out：`searchManga` 用 Promise.all 同時打所有來源，整體耗時等於
+ * 最慢那顆。共用的 20 秒 deadline 對閱讀內頁是合理的，對搜尋卻代表一顆卡住的
+ * 來源就能讓整頁結果停 20 秒。實測正常來源約 350ms、10 顆併發約 1.4s，
+ * 但出現過 8.3s 的離群值。3 秒足夠涵蓋正常情況，又能把離群值擋掉。
+ *
+ * 逾時的來源會被歸到 failedSources，UI 照既有方式顯示「這幾顆失敗」。
+ */
+export const PER_SOURCE_SEARCH_TIMEOUT_MS = Number(
+  process.env.MANGA_SEARCH_SOURCE_TIMEOUT_MS || 3000
+);
+
+/** fan-out 逾時的哨兵，用來和來源正常回傳的結果區分。 */
+interface SearchDeadlineSentinel {
+  readonly deadlineReached: true;
+}
+
+const SEARCH_DEADLINE: SearchDeadlineSentinel = { deadlineReached: true };
 
 const suwayomiSessionCache = new Map<string, SuwayomiSessionCacheEntry>();
 
@@ -258,6 +281,24 @@ async function suwayomiFetch(
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(new Error(`Suwayomi 请求超时(${timeoutMs}ms)`)), timeoutMs);
 
+    // 呼叫端傳進來的 signal 必須與內建 deadline 合併，而不是被覆寫。
+    // 之前這裡直接寫 `signal: controller.signal`，等於默默丟棄 init.signal ——
+    // 呼叫端以為自己能取消請求，實際上取消不了，連線會一路掛到 20 秒。
+    //
+    // 用手動轉發而不是 AbortSignal.any()：後者雖然在 Node 24 執行期存在，
+    // 但本專案的 TS lib 還沒收錄，會編譯失敗。
+    const callerSignal = init.signal;
+    const forwardAbort = () => {
+      controller.abort(callerSignal?.reason);
+    };
+    if (callerSignal) {
+      if (callerSignal.aborted) {
+        forwardAbort();
+      } else {
+        callerSignal.addEventListener('abort', forwardAbort, { once: true });
+      }
+    }
+
     try {
       return await fetch(input, {
         ...init,
@@ -270,6 +311,9 @@ async function suwayomiFetch(
       });
     } finally {
       clearTimeout(timeoutId);
+      // 呼叫端的 signal 可能比這次請求活得久（例如重試時重用），
+      // 沒移除監聽會累積
+      callerSignal?.removeEventListener('abort', forwardAbort);
     }
   };
 
@@ -646,9 +690,10 @@ ${fields}
 
   async searchMangaSource(
     keyword: string,
-    source: { id: string; displayName?: string; name?: string },
-    page = 1
-  ): Promise<{ source: { id: string; displayName?: string; name?: string }; results: MangaSearchItem[] }> {
+    source: MangaSearchSourceRef,
+    page = 1,
+    signal?: AbortSignal
+  ): Promise<MangaSourceSearchResponse> {
     const query = `
       mutation GET_SOURCE_MANGAS_FETCH($input: FetchSourceMangaInput!) {
         fetchSourceManga(input: $input) {
@@ -719,6 +764,86 @@ ${fields}
     return { source, results };
   }
 
+  /**
+   * 在 per-source 上限內搜尋單一來源，永不 reject。
+   *
+   * REST（searchManga）與 SSE（/api/manga/search/ws）都必須走這裡：兩條路徑
+   * 最後都會 await 全部來源才算完成 —— WS 雖然能逐顆先送 `source_result`，
+   * 但 `complete` 仍在 Promise.all 之後，而前端要收到 `complete` 才會停止
+   * loading。所以上限只修 REST 沒有用，兩邊得共用同一份實作。
+   */
+  async searchMangaSourceWithDeadline(
+    keyword: string,
+    source: MangaSearchSourceRef,
+    page = 1
+  ): Promise<MangaSourceSearchOutcome> {
+    const startedAt = Date.now();
+    const sourceName = source.displayName || source.name || String(source.id);
+
+    // abort 只是 best-effort 回收連線：底層 loginWithSimpleAuth() 的 fetch
+    // 沒有 signal，卡在登入時取消不了。因此 deadline 的「保證」來自下面這個
+    // 一定會 settle 的計時器，不依賴請求能否被取消。
+    const controller = new AbortController();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    // 本來想用 Promise.withResolvers()，但專案 TypeScript 是 4.9.5，
+    // 它的 esnext lib 還沒有這個宣告（執行期 Node 24 有），會編譯失敗。
+    const deadline = new Promise<SearchDeadlineSentinel>((resolve) => {
+      timer = setTimeout(() => {
+        controller.abort(
+          new Error(`来源搜索超时(${PER_SOURCE_SEARCH_TIMEOUT_MS}ms)`)
+        );
+        resolve(SEARCH_DEADLINE);
+      }, PER_SOURCE_SEARCH_TIMEOUT_MS);
+    });
+
+    try {
+      // Promise.race 會替兩邊都掛上 handler，所以逾時後那個仍在進行的請求
+      // 即使稍後 reject 也已算被處理，不會變成 unhandledRejection。
+      const outcome = await Promise.race([
+        this.searchMangaSource(keyword, source, page, controller.signal),
+        deadline,
+      ]);
+
+      // 用 `in` 判別而不是 `=== SEARCH_DEADLINE`：後者比對的是物件參照，
+      // TypeScript 不會據此窄化 union，`outcome.results` 會編譯失敗。
+      if ('deadlineReached' in outcome) {
+        const error = `搜索超时（超过 ${PER_SOURCE_SEARCH_TIMEOUT_MS}ms）`;
+        console.warn(
+          `[Suwayomi] manga search source timed out: ${source.id} - ${error}`
+        );
+        return {
+          status: 'failed',
+          source,
+          sourceName,
+          error,
+          elapsedMs: Date.now() - startedAt,
+        };
+      }
+
+      return {
+        status: 'ok',
+        source,
+        sourceName,
+        results: outcome.results,
+        elapsedMs: Date.now() - startedAt,
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '未知错误';
+      console.warn(
+        `[Suwayomi] manga search source failed: ${source.id} - ${message}`
+      );
+      return {
+        status: 'failed',
+        source,
+        sourceName,
+        error: message,
+        elapsedMs: Date.now() - startedAt,
+      };
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
   async searchManga(
     keyword: string,
     sourceId?: string | string[],
@@ -731,39 +856,28 @@ ${fields}
     const seen = new Set<string>();
 
     const perSourceResults = await Promise.all(
-      sources.map(async (source) => {
-        const startedAt = Date.now();
-        try {
-          const result = await this.searchMangaSource(keyword, source, page);
-          measurements.push({
-            sourceId: String(source.id),
-            elapsedMs: Date.now() - startedAt,
-            failed: false,
-          });
-          return result;
-        } catch (error) {
-          const message = error instanceof Error ? error.message : '未知错误';
-          console.warn(`[Suwayomi] manga search source failed: ${source.id} - ${message}`);
-          failedSources.push({
-            sourceId: String(source.id),
-            sourceName: source.displayName || source.name || String(source.id),
-            error: message,
-          });
-          measurements.push({
-            sourceId: String(source.id),
-            elapsedMs: Date.now() - startedAt,
-            failed: true,
-          });
-          return {
-            source,
-            results: [],
-          };
-        }
-      })
+      sources.map((source) =>
+        this.searchMangaSourceWithDeadline(keyword, source, page)
+      )
     );
 
-    for (const { results: sourceResults } of perSourceResults) {
-      for (const manga of sourceResults) {
+    for (const outcome of perSourceResults) {
+      measurements.push({
+        sourceId: String(outcome.source.id),
+        elapsedMs: outcome.elapsedMs,
+        failed: outcome.status === 'failed',
+      });
+
+      if (outcome.status === 'failed') {
+        failedSources.push({
+          sourceId: String(outcome.source.id),
+          sourceName: outcome.sourceName,
+          error: outcome.error,
+        });
+        continue;
+      }
+
+      for (const manga of outcome.results) {
         const key = `${manga.sourceId}:${manga.id}`;
         if (seen.has(key)) continue;
         seen.add(key);

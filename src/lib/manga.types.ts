@@ -94,6 +94,46 @@ export interface MangaSearchResult {
   measurements: MangaSourceMeasurement[];
 }
 
+/** 單一搜尋來源的識別資訊（fan-out 過程中需要回報是哪一顆） */
+export interface MangaSearchSourceRef {
+  id: string;
+  displayName?: string;
+  name?: string;
+}
+
+/**
+ * 單一來源一次搜尋的原始回傳（尚未套 per-source 上限，會 reject）。
+ *
+ * 帶回 source 是因為 fan-out 是併發的，呼叫端要能認出這筆是哪一顆來源的。
+ */
+export interface MangaSourceSearchResponse {
+  source: MangaSearchSourceRef;
+  results: MangaSearchItem[];
+}
+
+/**
+ * 單一來源的搜尋結果，帶 per-source 上限後永不 reject。
+ *
+ * 用 status 判別而非「results 空陣列 + 另一個 error 欄位」：後者無法區分
+ * 「這顆來源真的沒有結果」與「這顆來源失敗了」，而 UI 必須分開顯示 ——
+ * 全部來源失敗時不能講成「沒有找到漫畫」。
+ */
+export type MangaSourceSearchOutcome =
+  | {
+      status: 'ok';
+      source: MangaSearchSourceRef;
+      sourceName: string;
+      results: MangaSearchItem[];
+      elapsedMs: number;
+    }
+  | {
+      status: 'failed';
+      source: MangaSearchSourceRef;
+      sourceName: string;
+      error: string;
+      elapsedMs: number;
+    };
+
 export type MangaRecommendType = 'POPULAR' | 'LATEST';
 
 export interface MangaRecommendResult {

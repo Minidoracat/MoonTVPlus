@@ -118,32 +118,51 @@ export interface MangaSourceStatusLabel {
   source: 'probe' | 'passive';
 }
 
+/** probe 的單一能力結果 → 標籤；probe 缺席回 null */
+function fromProbe(
+  ok: boolean,
+  ms: number
+): MangaSourceStatusLabel {
+  if (!ok) return { label: '失效', tone: 'bad', source: 'probe' };
+  return {
+    label: ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(1)}s`,
+    tone: ms < 1500 ? 'good' : 'slow',
+    source: 'probe',
+  };
+}
+
 /**
- * 合併「管理員測試快取」與「本機被動量測」，給選源選單一個標籤。
+ * 推薦頁（熱門／最新瀏覽）的來源燈號。
+ *
+ * **刻意沒有 health 參數**：本機被動量測只由搜尋 fan-out 累積，量的是
+ * 搜尋能力 —— 拿它當「熱門」的退路是語意錯配（包子漫画搜尋逾時但熱門
+ * 647ms 正常，fallback 會在推薦頁錯標成逾時）。與其靠呼叫端記得傳
+ * undefined，不如讓錯配不可表達。未被管理員測過的來源不顯示燈號，
+ * 是正確的缺席。
+ */
+export function formatMangaPopularStatus(
+  probe: MangaSourceProbeSummary | undefined
+): MangaSourceStatusLabel | null {
+  if (!probe) return null;
+  return fromProbe(probe.popularOk, probe.popularMs);
+}
+
+/**
+ * 搜尋頁的來源燈號：合併「管理員測試快取」與「本機被動量測」。
  *
  * 優先用 probe：那是管理員明確測出來的、全站共用的結果，且對「這顆能不能用」
  * 的判斷比被動量測可靠 —— 被動量測只在使用者剛好搜過那顆來源時才有資料。
  * probe 沒有該來源時才退回被動量測，這樣新啟用、還沒測過的來源仍能顯示
  * 使用者自己搜出來的速度。
  *
- * `capability` 決定看哪一種能力：推薦頁該看熱門、搜尋頁該看搜尋。
- * 混用會誤導 —— 實測有來源熱門正常卻搜不到，反之亦然。
+ * health 參數**只代表搜尋能力**（它就是搜尋 fan-out 的量測），
+ * 所以這個 fallback 只存在於搜尋版；熱門版沒有對應的被動資料。
  */
-export function formatMangaSourceStatus(
+export function formatMangaSearchStatus(
   probe: MangaSourceProbeSummary | undefined,
-  health: MangaSourceHealth | undefined,
-  capability: 'popular' | 'search'
+  health: MangaSourceHealth | undefined
 ): MangaSourceStatusLabel | null {
-  if (probe) {
-    const ok = capability === 'popular' ? probe.popularOk : probe.searchOk;
-    const ms = capability === 'popular' ? probe.popularMs : probe.searchMs;
-    if (!ok) return { label: '失效', tone: 'bad', source: 'probe' };
-    return {
-      label: ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(1)}s`,
-      tone: ms < 1500 ? 'good' : 'slow',
-      source: 'probe',
-    };
-  }
+  if (probe) return fromProbe(probe.searchOk, probe.searchMs);
 
   const passive = formatMangaSourceHealth(health);
   if (!passive) return null;

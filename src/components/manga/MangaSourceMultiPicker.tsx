@@ -14,7 +14,7 @@ import {
   type MangaSourceCategoryId,
 } from '@/lib/manga-source-groups';
 import {
-  formatMangaSourceStatus,
+  formatMangaSearchStatus,
   type MangaSourceHealth,
 } from '@/lib/manga-source-health';
 import type {
@@ -206,12 +206,11 @@ export default function MangaSourceMultiPicker({
           {visibleSources.map((source) => {
             const Icon = CATEGORY_ICON[getMangaSourceCategory(source)];
             const active = selected.has(source.id);
-            // 這裡是搜尋頁的選源，所以看「搜尋」能力 ——
+            // 這裡是搜尋頁的選源，所以用搜尋版燈號 ——
             // 有來源熱門正常卻搜不到，用熱門的燈號會誤導
-            const status = formatMangaSourceStatus(
+            const status = formatMangaSearchStatus(
               probe?.[source.id],
-              health?.[source.id],
-              'search'
+              health?.[source.id]
             );
             return (
               <button

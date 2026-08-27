@@ -20,9 +20,10 @@ jest.mock('@/lib/config', () => ({
 
 import type { AdminConfig } from '@/lib/admin.types';
 import { getConfig, isDegradedConfigObject } from '@/lib/config';
-import type {
-  MangaSearchItem,
-  MangaSourceSearchResponse,
+import {
+  isAllMangaSourcesFailed,
+  type MangaSearchItem,
+  type MangaSourceSearchResponse,
 } from '@/lib/manga.types';
 import {
   PER_SOURCE_SEARCH_TIMEOUT_MS,
@@ -73,23 +74,32 @@ afterEach(() => {
 });
 
 /**
- * 讓已排入的 microtask 跑完。
+ * 等到假時鐘上真的有計時器掛著，再推進它。
  *
- * Jest 27 沒有 advanceTimersByTimeAsync（那是 29 才有），所以推進假時鐘前後
- * 都要自己排空 microtask 佇列。promise 不受 fake timers 影響，
- * 因此 await Promise.resolve() 仍是真的讓出一個 tick。
+ * Jest 27 沒有 advanceTimersByTimeAsync（那是 29 才有），所以要自己排空
+ * microtask。但「固定 flush N 次」是猜的：只要日後在註冊計時器之前多一段
+ * await，N 次就可能不夠，於是時鐘先被推進、計時器才在新的時間點註冊，
+ * 測試會掛住。改成用 `jest.getTimerCount()` 這個可觀測的同步點 ——
+ * 有計時器才推進，等不到就明確報錯而不是靜默逾時。
+ *
+ * promise 不受 fake timers 影響，所以 `await Promise.resolve()` 仍是真的
+ * 讓出一個 microtask tick。
  */
-async function flushMicrotasks(times = 8): Promise<void> {
-  for (let i = 0; i < times; i += 1) {
+async function waitForTimer(maxTicks = 100): Promise<void> {
+  for (let i = 0; i < maxTicks; i += 1) {
+    if (jest.getTimerCount() > 0) return;
     await Promise.resolve();
   }
+  throw new Error('等不到 deadline 計時器被註冊');
 }
 
-/** 排空 microtask 後推進假時鐘，再排空一次讓 race 的結果傳遞出去 */
+/** 等計時器就位 → 推進假時鐘 → 排空 microtask 讓 race 的結果傳出來 */
 async function advance(ms: number): Promise<void> {
-  await flushMicrotasks();
+  await waitForTimer();
   jest.advanceTimersByTime(ms);
-  await flushMicrotasks();
+  for (let i = 0; i < 20; i += 1) {
+    await Promise.resolve();
+  }
 }
 
 describe('searchMangaSourceWithDeadline', () => {
@@ -242,5 +252,46 @@ describe('searchManga fan-out', () => {
 
     expect(result.results).toHaveLength(1);
     expect(result.failedSources).toHaveLength(0);
+  });
+
+  it('逾時的來源在 measurements 帶 timedOut，來源自身錯誤則不帶', async () => {
+    const client = new SuwayomiClient();
+    twoSources(client);
+    jest
+      .spyOn(client, 'searchMangaSource')
+      .mockImplementation((_keyword, source) =>
+        source.id === 'slow'
+          ? stalledForever()
+          : Promise.reject(new Error('上游 500'))
+      );
+
+    const pending = client.searchManga('x');
+    await advance(PER_SOURCE_SEARCH_TIMEOUT_MS);
+    const result = await pending;
+
+    const bySource = Object.fromEntries(
+      result.measurements.map((item) => [item.sourceId, item.timedOut])
+    );
+    // 逾時與「來源自己回報錯誤」必須分得開：健康度會據此顯示逾時或失效
+    expect(bySource).toEqual({ fast: false, slow: true });
+  });
+});
+
+describe('isAllMangaSourcesFailed', () => {
+  it('每一顆都失敗才算全滅', () => {
+    expect(isAllMangaSourcesFailed(3, 3)).toBe(true);
+  });
+
+  it('有一顆成功就不算全滅', () => {
+    expect(isAllMangaSourcesFailed(3, 2)).toBe(false);
+  });
+
+  it('沒有可查的來源不算全滅', () => {
+    // 這是「沒有可用來源」，不是「搜尋全部失敗」，錯誤訊息不同
+    expect(isAllMangaSourcesFailed(0, 0)).toBe(false);
+  });
+
+  it('成功但回 0 筆是合法空結果，不算失敗', () => {
+    expect(isAllMangaSourcesFailed(2, 0)).toBe(false);
   });
 });

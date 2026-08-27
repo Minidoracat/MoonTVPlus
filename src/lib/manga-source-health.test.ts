@@ -30,6 +30,40 @@ describe('recordMangaSourceHealth / readMangaSourceHealth', () => {
     });
   });
 
+  it('逾時的來源保留 timedOut 旗標', () => {
+    const map = recordMangaSourceHealth([
+      { sourceId: 'a', failed: true, timedOut: true },
+    ]);
+    expect(map.a).toMatchObject({ failed: true, timedOut: true });
+    expect(readMangaSourceHealth().a.timedOut).toBe(true);
+  });
+
+  it('來源自己回報錯誤時不標 timedOut', () => {
+    const map = recordMangaSourceHealth([
+      { sourceId: 'a', failed: true, timedOut: false },
+    ]);
+    expect(map.a.timedOut).toBeUndefined();
+  });
+
+  it('成功的來源即使誤傳 timedOut 也不會被標記', () => {
+    const map = recordMangaSourceHealth([
+      { sourceId: 'a', failed: false, elapsedMs: 120, timedOut: true },
+    ]);
+    expect(map.a).toEqual(
+      expect.objectContaining({ failed: false, elapsedMs: 120 })
+    );
+    expect(map.a.timedOut).toBeUndefined();
+  });
+
+  it('後續成功量測會清掉先前的 timedOut', () => {
+    recordMangaSourceHealth([{ sourceId: 'a', failed: true, timedOut: true }]);
+    const map = recordMangaSourceHealth([
+      { sourceId: 'a', failed: false, elapsedMs: 90 },
+    ]);
+    expect(map.a.timedOut).toBeUndefined();
+    expect(map.a.failed).toBe(false);
+  });
+
   it('後續量測覆蓋同一來源的舊值', () => {
     recordMangaSourceHealth([{ sourceId: 'a', elapsedMs: 800, failed: false }]);
     recordMangaSourceHealth([{ sourceId: 'a', failed: true }]);
@@ -105,10 +139,17 @@ describe('formatMangaSourceHealth', () => {
     expect(formatMangaSourceHealth(undefined)).toBeNull();
   });
 
-  it('失敗顯示失效', () => {
+  it('來源自己回報錯誤顯示失效', () => {
     expect(formatMangaSourceHealth({ failed: true, measuredAt: at })).toBe(
       '失效'
     );
+  });
+
+  it('逾時顯示逾時，不可顯示失效', () => {
+    // 3 秒切斷只代表這一次太慢；標成「失效」會讓使用者去停用其實健康的來源
+    expect(
+      formatMangaSourceHealth({ failed: true, timedOut: true, measuredAt: at })
+    ).toBe('逾時');
   });
 
   it('成功但沒有耗時不顯示', () => {
@@ -119,9 +160,7 @@ describe('formatMangaSourceHealth', () => {
     [800, '0.8s'],
     [1499, '1.5s'],
     [1500, '1.5s 慢'],
-    [4999, '5.0s 慢'],
-    [5000, '5s 很慢'],
-    [12000, '12s 很慢'],
+    [2999, '3.0s 慢'],
   ])('%dms 顯示為 %s', (elapsedMs, expected) => {
     expect(
       formatMangaSourceHealth({ failed: false, elapsedMs, measuredAt: at })

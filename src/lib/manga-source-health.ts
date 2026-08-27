@@ -13,6 +13,14 @@ export interface MangaSourceHealth {
   elapsedMs?: number;
   /** 最近一次是否失敗 */
   failed: boolean;
+  /**
+   * 失敗是否只是超過 per-source 搜尋上限。
+   *
+   * 逾時不等於來源壞掉：3 秒切斷只說明這一次太慢，來源本身可能完全正常。
+   * 這筆紀錄會保留 6 小時，若把暫時的慢顯示成「失效」，使用者會照著去停用
+   * 其實健康的來源。
+   */
+  timedOut?: boolean;
   /** 量測時間 */
   measuredAt: number;
 }
@@ -48,8 +56,21 @@ export function readMangaSourceHealth(): HealthMap {
   }
 }
 
+/**
+ * 一次量測回報。
+ *
+ * 具名匯出而不是在呼叫端各寫一份 inline 型別：搜尋頁的 pendingHealthRef 與
+ * 這裡必須同步，欄位漏傳（例如少了 timedOut）才會被 tsc 抓到。
+ */
+export interface MangaSourceHealthEntry {
+  sourceId: string;
+  elapsedMs?: number;
+  failed: boolean;
+  timedOut?: boolean;
+}
+
 export function recordMangaSourceHealth(
-  entries: Array<{ sourceId: string; elapsedMs?: number; failed: boolean }>
+  entries: MangaSourceHealthEntry[]
 ): HealthMap {
   if (typeof window === 'undefined' || entries.length === 0) return {};
 
@@ -60,6 +81,7 @@ export function recordMangaSourceHealth(
     next[entry.sourceId] = {
       failed: entry.failed,
       measuredAt,
+      ...(entry.failed && entry.timedOut ? { timedOut: true } : {}),
       ...(typeof entry.elapsedMs === 'number' && !entry.failed
         ? { elapsedMs: entry.elapsedMs }
         : {}),
@@ -79,9 +101,9 @@ export function formatMangaSourceHealth(
   health: MangaSourceHealth | undefined
 ): string | null {
   if (!health) return null;
-  if (health.failed) return '失效';
+  // 逾時與失效分開講：前者是「這次太慢」，後者是「這個來源不能用」。
+  if (health.failed) return health.timedOut ? '逾時' : '失效';
   if (typeof health.elapsedMs !== 'number') return null;
   if (health.elapsedMs < 1500) return `${(health.elapsedMs / 1000).toFixed(1)}s`;
-  if (health.elapsedMs < 5000) return `${(health.elapsedMs / 1000).toFixed(1)}s 慢`;
-  return `${(health.elapsedMs / 1000).toFixed(0)}s 很慢`;
+  return `${(health.elapsedMs / 1000).toFixed(1)}s 慢`;
 }

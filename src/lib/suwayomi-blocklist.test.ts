@@ -15,7 +15,7 @@ jest.mock('@/lib/config', () => ({
 }));
 
 import type { AdminConfig } from '@/lib/admin.types';
-import { getConfig } from '@/lib/config';
+import { getConfig, isDegradedConfigObject } from '@/lib/config';
 import {
   isMangaSourceAllowed,
   MANGA_DISABLE_ALL_SENTINEL,
@@ -97,9 +97,7 @@ describe('getSources 會套用黑名單', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
-    (require('@/lib/config').isDegradedConfigObject as jest.Mock).mockReturnValue(
-      false
-    );
+    (isDegradedConfigObject as jest.Mock).mockReturnValue(false);
     client = new SuwayomiClient();
     mockSourcesOk();
   });
@@ -152,9 +150,7 @@ describe('assertSourceAllowed 對被停用的來源必須拒絕', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
-    (require('@/lib/config').isDegradedConfigObject as jest.Mock).mockReturnValue(
-      false
-    );
+    (isDegradedConfigObject as jest.Mock).mockReturnValue(false);
     client = new SuwayomiClient();
     mockSourcesOk();
   });

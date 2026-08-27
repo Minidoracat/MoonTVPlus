@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 import { parseMangaSourceIds } from '@/lib/manga-search-params';
+import { isAllMangaSourcesFailed } from '@/lib/manga.types';
 import { suwayomiClient } from '@/lib/suwayomi.client';
 
 import { getAuthorizedUsername } from '../../_utils';
@@ -57,21 +58,31 @@ export async function GET(request: NextRequest) {
               source,
               page
             );
+
+            // 進度與事件共用同一段 payload，且遞增在分支之前只出現一次：
+            // 前端要收滿 completedSources 才會停止 loading，任何一支忘了
+            // 遞增都會讓搜尋永遠轉圈。
             completedSources += 1;
+            const progress = {
+              sourceId: String(source.id),
+              sourceName: outcome.sourceName,
+              completedSources,
+              totalSources: sources.length,
+              elapsedMs: outcome.elapsedMs,
+            };
 
             if (outcome.status === 'failed') {
-              const failure = {
-                sourceId: String(source.id),
-                sourceName: outcome.sourceName,
+              failedSources.push({
+                sourceId: progress.sourceId,
+                sourceName: progress.sourceName,
                 error: outcome.error,
-              };
-              failedSources.push(failure);
+              });
               send({
                 type: 'source_error',
-                ...failure,
-                completedSources,
-                totalSources: sources.length,
-                elapsedMs: outcome.elapsedMs,
+                ...progress,
+                error: outcome.error,
+                // 前端靠這個把「逾時」和「失效」分開存進來源健康度
+                timedOut: outcome.timedOut,
               });
               return;
             }
@@ -79,12 +90,8 @@ export async function GET(request: NextRequest) {
             totalResults += outcome.results.length;
             send({
               type: 'source_result',
-              sourceId: String(source.id),
-              sourceName: outcome.sourceName,
+              ...progress,
               results: outcome.results,
-              completedSources,
-              totalSources: sources.length,
-              elapsedMs: outcome.elapsedMs,
             });
           })
         );
@@ -95,8 +102,10 @@ export async function GET(request: NextRequest) {
           totalSources: sources.length,
           totalResults,
           failedSources,
-          // 全部來源都失敗時，前端不應顯示成「沒有結果」
-          allFailed: sources.length > 0 && failedSources.length === sources.length,
+          allFailed: isAllMangaSourcesFailed(
+            sources.length,
+            failedSources.length
+          ),
         });
       } catch (error) {
         send({

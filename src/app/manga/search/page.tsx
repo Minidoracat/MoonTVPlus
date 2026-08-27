@@ -10,6 +10,7 @@ import {
   readMangaSourceHealth,
   recordMangaSourceHealth,
   type MangaSourceHealth,
+  type MangaSourceHealthEntry,
 } from '@/lib/manga-source-health';
 import { MangaSearchItem, MangaShelfItem, MangaSource } from '@/lib/manga.types';
 
@@ -64,9 +65,7 @@ export default function MangaSearchPage() {
   const [completedSources, setCompletedSources] = useState(0);
   const [useFluidSearch, setUseFluidSearch] = useState(true);
   const [sourceHealth, setSourceHealth] = useState<Record<string, MangaSourceHealth>>({});
-  const pendingHealthRef = useRef<
-    Array<{ sourceId: string; elapsedMs?: number; failed: boolean }>
-  >([]);
+  const pendingHealthRef = useRef<MangaSourceHealthEntry[]>([]);
   const [maxSources, setMaxSources] = useState<number | undefined>(undefined);
 
   useEffect(() => {
@@ -247,6 +246,7 @@ export default function MangaSearchPage() {
                 pendingHealthRef.current.push({
                   sourceId: String(payload.sourceId || ''),
                   failed: true,
+                  timedOut: payload.timedOut === true,
                 });
                 break;
               case 'error':

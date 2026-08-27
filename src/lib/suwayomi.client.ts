@@ -63,20 +63,48 @@ interface SuwayomiSessionCacheEntry {
 }
 
 const SUWAYOMI_SESSION_TTL_MS = 25 * 60 * 1000;
-const DEFAULT_SUWAYOMI_TIMEOUT_MS = Number(process.env.SUWAYOMI_TIMEOUT_MS || 20000);
+/**
+ * 解析毫秒設定值，無效就退回預設。
+ *
+ * 不能直接 `Number(env || fallback)`：把 `MANGA_SEARCH_SOURCE_TIMEOUT_MS`
+ * 寫成 `3s` 會得到 NaN，而 `setTimeout(fn, NaN)` 依規範等同延遲 0 ——
+ * 於是每顆來源在第一個 macrotask 就逾時，整站搜尋靜默全滅，
+ * 唯一線索是錯誤訊息裡的 `NaN`。`0`／負數／`Infinity` 同樣要擋。
+ */
+function resolveTimeoutMs(raw: string | undefined, fallback: number): number {
+  if (!raw) return fallback;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    console.warn(
+      `[Suwayomi] 忽略無效的超時設定 ${JSON.stringify(raw)}，改用 ${fallback}ms`
+    );
+    return fallback;
+  }
+  return parsed;
+}
+
+const DEFAULT_SUWAYOMI_TIMEOUT_MS = resolveTimeoutMs(
+  process.env.SUWAYOMI_TIMEOUT_MS,
+  20000
+);
 
 /**
  * 單一來源的搜尋上限。
  *
  * 搜尋是 fan-out：`searchManga` 用 Promise.all 同時打所有來源，整體耗時等於
  * 最慢那顆。共用的 20 秒 deadline 對閱讀內頁是合理的，對搜尋卻代表一顆卡住的
- * 來源就能讓整頁結果停 20 秒。實測正常來源約 350ms、10 顆併發約 1.4s，
- * 但出現過 8.3s 的離群值。3 秒足夠涵蓋正常情況，又能把離群值擋掉。
+ * 來源就能讓整頁結果停 20 秒。
  *
- * 逾時的來源會被歸到 failedSources，UI 照既有方式顯示「這幾顆失敗」。
+ * 3 秒的餘裕並不寬：實測 10 顆併發時最慢的**合法**來源要 1880ms，另外記錄過
+ * 8.3s 的離群值。網路較差時可能把本來會成功的來源切掉，屆時用
+ * `MANGA_SEARCH_SOURCE_TIMEOUT_MS` 調大即可（SSE 會逐顆先送結果，
+ * 調大只影響 spinner 何時停，不影響已回來的來源何時顯示）。
+ *
+ * 逾時的來源會進 failedSources 並帶 `timedOut`，健康度不會把它當成「失效」。
  */
-export const PER_SOURCE_SEARCH_TIMEOUT_MS = Number(
-  process.env.MANGA_SEARCH_SOURCE_TIMEOUT_MS || 3000
+export const PER_SOURCE_SEARCH_TIMEOUT_MS = resolveTimeoutMs(
+  process.env.MANGA_SEARCH_SOURCE_TIMEOUT_MS,
+  3000
 );
 
 /** fan-out 逾時的哨兵，用來和來源正常回傳的結果區分。 */
@@ -415,7 +443,8 @@ export class SuwayomiClient {
     query: string,
     variables?: Record<string, any>,
     operationName?: string,
-    resolvedConfig?: ResolvedSuwayomiConfig
+    resolvedConfig?: ResolvedSuwayomiConfig,
+    signal?: AbortSignal
   ): Promise<T> {
     const resolved =
       resolvedConfig ?? (await resolveSuwayomiConfig(this.options));
@@ -425,6 +454,7 @@ export class SuwayomiClient {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({ query, variables, operationName }),
+      signal,
     });
 
     if (!response.ok) {
@@ -736,7 +766,9 @@ ${fields}
           page,
         },
       },
-      'GET_SOURCE_MANGAS_FETCH'
+      'GET_SOURCE_MANGAS_FETCH',
+      undefined,
+      signal
     );
 
     const seen = new Set<string>();
@@ -817,6 +849,7 @@ ${fields}
           sourceName,
           error,
           elapsedMs: Date.now() - startedAt,
+          timedOut: true,
         };
       }
 
@@ -838,6 +871,7 @@ ${fields}
         sourceName,
         error: message,
         elapsedMs: Date.now() - startedAt,
+        timedOut: false,
       };
     } finally {
       clearTimeout(timer);
@@ -866,6 +900,7 @@ ${fields}
         sourceId: String(outcome.source.id),
         elapsedMs: outcome.elapsedMs,
         failed: outcome.status === 'failed',
+        timedOut: outcome.status === 'failed' ? outcome.timedOut : false,
       });
 
       if (outcome.status === 'failed') {

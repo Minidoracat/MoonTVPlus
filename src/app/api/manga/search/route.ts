@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 import { parseMangaSourceIds } from '@/lib/manga-search-params';
+import { isAllMangaSourcesFailed } from '@/lib/manga.types';
 import { suwayomiClient } from '@/lib/suwayomi.client';
 
 import { getAuthorizedUsername, mangaErrorResponse } from '../_utils';
@@ -24,11 +25,10 @@ export async function GET(request: NextRequest) {
     const result = await suwayomiClient.searchManga(q, sourceIds, page);
     return NextResponse.json({
       ...result,
-      // 與 SSE 版一致：只有「每個查詢的來源都失敗」才算全滅。
-      // 來源成功但回 0 筆是合法空結果，不可算失敗。
-      allFailed:
-        result.attemptedSources > 0 &&
-        result.failedSources.length === result.attemptedSources,
+      allFailed: isAllMangaSourcesFailed(
+        result.attemptedSources,
+        result.failedSources.length
+      ),
     });
   } catch (error) {
     return mangaErrorResponse(error);

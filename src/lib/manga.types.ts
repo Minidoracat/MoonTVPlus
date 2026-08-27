@@ -83,6 +83,13 @@ export interface MangaSourceMeasurement {
   sourceId: string;
   elapsedMs: number;
   failed: boolean;
+  /**
+   * 是否因為超過 per-source 上限才被歸為失敗。
+   *
+   * 必須和「來源真的壞了」分開：逾時只代表這一次太慢，來源本身可能完全健康，
+   * 而健康度會保留 6 小時，把暫時的慢標成「失效」會誤導使用者去停用好來源。
+   */
+  timedOut?: boolean;
 }
 
 export interface MangaSearchResult {
@@ -132,7 +139,29 @@ export type MangaSourceSearchOutcome =
       sourceName: string;
       error: string;
       elapsedMs: number;
+      /** true = 超過 per-source 上限；false = 來源自己回報錯誤 */
+      timedOut: boolean;
     };
+
+/**
+ * 是否「每一個查詢的來源都失敗」。
+ *
+ * REST 與 SSE 兩條路徑都要回報這個旗標，前端據此把錯誤講成「全部來源都失敗」
+ * 而不是「沒有找到漫畫」—— 兩者對使用者的意義完全不同（後者會讓人以為
+ * 這個關鍵字沒有結果，而不是系統有問題）。
+ *
+ * 抽成單一函式而不是兩邊各寫一份判斷：先前就是各寫一份，任一邊寫錯都沒有
+ * 東西會發現。
+ *
+ * 注意 `attempted > 0`：沒有任何來源可查時不算全滅（那是「沒有可用來源」，
+ * 另一種狀況）；而來源成功但回 0 筆是合法的空結果，不能算失敗。
+ */
+export function isAllMangaSourcesFailed(
+  attempted: number,
+  failed: number
+): boolean {
+  return attempted > 0 && failed >= attempted;
+}
 
 export type MangaRecommendType = 'POPULAR' | 'LATEST';
 

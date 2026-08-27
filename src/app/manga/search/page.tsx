@@ -12,7 +12,12 @@ import {
   type MangaSourceHealth,
   type MangaSourceHealthEntry,
 } from '@/lib/manga-source-health';
-import { MangaSearchItem, MangaShelfItem, MangaSource } from '@/lib/manga.types';
+import {
+  MangaSearchItem,
+  MangaShelfItem,
+  MangaSource,
+  type MangaSourceProbeSummary,
+} from '@/lib/manga.types';
 
 import MangaCard from '@/components/MangaCard';
 import MangaSourceMultiPicker from '@/components/manga/MangaSourceMultiPicker';
@@ -65,6 +70,9 @@ export default function MangaSearchPage() {
   const [completedSources, setCompletedSources] = useState(0);
   const [useFluidSearch, setUseFluidSearch] = useState(true);
   const [sourceHealth, setSourceHealth] = useState<Record<string, MangaSourceHealth>>({});
+  const [sourceProbe, setSourceProbe] = useState<
+    Record<string, MangaSourceProbeSummary>
+  >({});
   const pendingHealthRef = useRef<MangaSourceHealthEntry[]>([]);
   const [maxSources, setMaxSources] = useState<number | undefined>(undefined);
 
@@ -166,6 +174,8 @@ export default function MangaSearchPage() {
       .then((res) => res.json())
       .then((data) => {
         setSources(data.sources || []);
+        // 管理員最近一次測試的燈號／延遲，優先於本機被動量測顯示
+        setSourceProbe(data.probe || {});
         if (typeof data.maxSources === 'number' && data.maxSources > 0) {
           setMaxSources(data.maxSources);
         }
@@ -485,6 +495,7 @@ export default function MangaSearchPage() {
             value={sourceId ? sourceId.split(',').filter(Boolean) : []}
             onChange={(ids) => setSourceId(ids.join(','))}
             health={sourceHealth}
+            probe={sourceProbe}
             maxActive={maxSources}
             className='lg:w-64'
           />

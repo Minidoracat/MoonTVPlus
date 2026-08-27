@@ -163,6 +163,60 @@ export function isAllMangaSourcesFailed(
   return attempted > 0 && failed >= attempted;
 }
 
+/** 單一能力（熱門／搜尋）的探測結果 */
+export interface MangaSourceProbeOutcome {
+  ok: boolean;
+  elapsedMs: number;
+  /** 實際拿到幾筆；ok 但 count 為 0 代表來源可連但沒內容 */
+  count: number;
+  error?: string;
+}
+
+/**
+ * 一個來源的完整探測結果。
+ *
+ * 熱門與搜尋分開記錄，因為它們會各自壞掉 —— 實測有來源熱門正常卻搜不到
+ * （擴充套件沒實作搜尋），也有來源熱門逾時卻搜得到。合成單一顆燈會誤導。
+ */
+export interface MangaSourceProbe {
+  popular: MangaSourceProbeOutcome;
+  search: MangaSourceProbeOutcome;
+}
+
+/** 探測結果加上來源 id 與量測時間，即快取中的一筆 */
+export interface MangaSourceProbeEntry extends MangaSourceProbe {
+  sourceId: string;
+  testedAt: number;
+}
+
+/**
+ * 給一般使用者（選源面板）看的精簡探測摘要。
+ *
+ * 刻意**不含** error 欄位：完整錯誤訊息帶著上游的 Java stack trace，
+ * 那是管理員診斷用的內部資訊，不該出現在面向使用者的端點。
+ * 選源只需要「這顆能不能用、多快」。
+ */
+export interface MangaSourceProbeSummary {
+  popularOk: boolean;
+  popularMs: number;
+  searchOk: boolean;
+  searchMs: number;
+  testedAt: number;
+}
+
+/** 把完整探測結果收斂成給使用者看的摘要 */
+export function toMangaSourceProbeSummary(
+  entry: MangaSourceProbeEntry
+): MangaSourceProbeSummary {
+  return {
+    popularOk: entry.popular.ok,
+    popularMs: entry.popular.elapsedMs,
+    searchOk: entry.search.ok,
+    searchMs: entry.search.elapsedMs,
+    testedAt: entry.testedAt,
+  };
+}
+
 export type MangaRecommendType = 'POPULAR' | 'LATEST';
 
 export interface MangaRecommendResult {

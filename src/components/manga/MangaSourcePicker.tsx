@@ -13,7 +13,11 @@ import {
   sourcesInCategory,
   type MangaSourceCategoryId,
 } from '@/lib/manga-source-groups';
-import type { MangaSource } from '@/lib/manga.types';
+import { formatMangaSourceStatus } from '@/lib/manga-source-health';
+import type {
+  MangaSource,
+  MangaSourceProbeSummary,
+} from '@/lib/manga.types';
 
 import MangaSourceSheet from '@/components/manga/MangaSourceSheet';
 
@@ -23,6 +27,8 @@ interface MangaSourcePickerProps {
   onChange: (sourceId: string) => void;
   allowAll?: boolean;
   allLabel?: string;
+  /** 管理員最近一次測試的結果（伺服器端快取），用來顯示燈號與延遲 */
+  probe?: Record<string, MangaSourceProbeSummary>;
   className?: string;
 }
 
@@ -42,6 +48,7 @@ export default function MangaSourcePicker({
   onChange,
   allowAll = false,
   allLabel = '全部来源',
+  probe,
   className = '',
 }: MangaSourcePickerProps) {
   const [open, setOpen] = useState(false);
@@ -138,6 +145,13 @@ export default function MangaSourcePicker({
           {visibleSources.map((source) => {
             const Icon = CATEGORY_ICON[getMangaSourceCategory(source)];
             const active = source.id === value;
+            // 推薦頁看「熱門」能力：這個 picker 選的是要瀏覽哪一顆的熱門／最新，
+            // 用搜尋的燈號會誤導（有來源搜不到但熱門正常）
+            const status = formatMangaSourceStatus(
+              probe?.[source.id],
+              undefined,
+              'popular'
+            );
             return (
               <button
                 key={source.id}
@@ -150,9 +164,23 @@ export default function MangaSourcePicker({
                 }`}
               >
                 <Icon className='h-4 w-4 shrink-0 opacity-70' />
-                <span className='truncate text-sm font-medium'>
+                <span className='min-w-0 flex-1 truncate text-sm font-medium'>
                   {getMangaSourceLabel(source)}
                 </span>
+                {status && (
+                  <span
+                    className={`shrink-0 text-[10px] tabular-nums ${
+                      status.tone === 'bad'
+                        ? 'text-red-500 dark:text-red-400'
+                        : status.tone === 'slow'
+                          ? 'text-amber-500 dark:text-amber-400'
+                          : 'text-gray-400 dark:text-gray-500'
+                    }`}
+                    title='管理員最近一次測試的熱門結果'
+                  >
+                    {status.label}
+                  </span>
+                )}
               </button>
             );
           })}

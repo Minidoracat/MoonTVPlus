@@ -18,6 +18,8 @@ import {
   MangaSource,
   MangaSourceFilterOption,
   MangaSourceMeasurement,
+  MangaSourceProbe,
+  MangaSourceProbeOutcome,
   MangaSourceSearchOutcome,
   MangaSourceSearchResponse,
 } from './manga.types';
@@ -117,6 +119,15 @@ export const PER_SOURCE_SEARCH_TIMEOUT_MS = resolveTimeoutMs(
   process.env.MANGA_SEARCH_SOURCE_TIMEOUT_MS,
   3000
 );
+
+/**
+ * 探測搜尋能力時用的關鍵詞。
+ *
+ * 必須是繁簡都常見的單字，否則「搜不到結果」與「搜尋壞掉」會分不清 ——
+ * 探測只在意「呼叫有沒有成功」，不在意筆數，但用太罕見的詞會讓正常來源
+ * 回 0 筆而顯得可疑。
+ */
+const PROBE_SEARCH_KEYWORD = '龍';
 
 /** fan-out 逾時的哨兵，用來和來源正常回傳的結果區分。 */
 interface SearchDeadlineSentinel {
@@ -1060,7 +1071,13 @@ ${fields}
   }
 
   /**
-   * 主動探測單一來源：實際抓一次 POPULAR 第一頁並計時。
+   * 主動探測單一來源：POPULAR 與 SEARCH 各抓一次第一頁並計時。
+   *
+   * **兩種都要測**，因為它們會各自壞掉，只測一種會誤導：
+   * 實測 53 個來源，有 4 個 POPULAR 正常但 SEARCH 失敗
+   * （《崩坏3》IP站的擴充套件根本沒實作搜尋、嗶哩漫畫拿不到搜尋憑證），
+   * 也有 2 個 POPULAR 逾時但 SEARCH 正常（18漫画、JComic）。
+   * 只看單一顆燈，兩個方向都會判錯。
    *
    * **刻意不套 assertSourceAllowed**：管理面板需要能測「目前被停用」的來源，
    * 才能判斷要不要啟用它。因此呼叫端必須是管理員專用路徑
@@ -1069,9 +1086,20 @@ ${fields}
    * 這是管理員明確按下按鈕才觸發的診斷動作，不是背景自動輪詢 ——
    * 自動對所有來源發請求等於替使用者去打漫畫站。
    */
-  async probeSource(
-    sourceId: string
-  ): Promise<{ ok: boolean; elapsedMs: number; count: number; error?: string }> {
+  async probeSource(sourceId: string): Promise<MangaSourceProbe> {
+    // 兩種能力併發測，總耗時取決於較慢那個而不是相加
+    const [popular, search] = await Promise.all([
+      this.probeCapability(sourceId, 'POPULAR'),
+      this.probeCapability(sourceId, 'SEARCH'),
+    ]);
+    return { popular, search };
+  }
+
+  /** 測單一種能力；永不 reject，失敗以 ok: false 表達 */
+  private async probeCapability(
+    sourceId: string,
+    type: 'POPULAR' | 'SEARCH'
+  ): Promise<MangaSourceProbeOutcome> {
     const startedAt = Date.now();
     try {
       const query = `
@@ -1086,7 +1114,15 @@ ${fields}
         fetchSourceManga?: { mangas?: Array<{ id: string | number }> };
       }>(
         query,
-        { input: { source: sourceId, type: 'POPULAR', page: 1 } },
+        {
+          input: {
+            source: sourceId,
+            type,
+            page: 1,
+            // SEARCH 一定要帶關鍵詞，否則擴充套件會走到不同分支
+            ...(type === 'SEARCH' ? { query: PROBE_SEARCH_KEYWORD } : {}),
+          },
+        },
         'PROBE_SOURCE'
       );
       return {

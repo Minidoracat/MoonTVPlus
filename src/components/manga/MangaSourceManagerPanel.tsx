@@ -3,12 +3,18 @@
 import { CheckCircle2, RefreshCw, XCircle } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
-export interface AdminMangaSourceProbe {
-  sourceId: string;
+/** 單一能力（熱門／搜尋）的探測結果 */
+export interface AdminMangaSourceProbeOutcome {
   ok: boolean;
   elapsedMs: number;
   count: number;
   error?: string;
+}
+
+export interface AdminMangaSourceProbe {
+  sourceId: string;
+  popular: AdminMangaSourceProbeOutcome;
+  search: AdminMangaSourceProbeOutcome;
   testedAt: number;
 }
 
@@ -36,12 +42,65 @@ function formatLatency(ms: number): string {
   return ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(1)}s`;
 }
 
+/** 相對時間；用來表達「這份燈號有多舊」 */
+export function formatRelativeTime(at: number): string {
+  const diff = Date.now() - at;
+  if (diff < 60_000) return '剛剛';
+  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)} 分鐘前`;
+  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)} 小時前`;
+  return `${Math.floor(diff / 86_400_000)} 天前`;
+}
+
 /**
- * 狀態燈。
+ * 單一能力的狀態燈。
  *
- * 刻意同時輸出圖示與文字，不只用顏色 —— 色盲使用者無法只靠紅綠分辨，
+ * 熱門與搜尋分開顯示，因為它們會各自壞掉：實測有來源熱門正常卻搜不到
+ * （擴充套件沒實作搜尋），也有來源熱門逾時卻搜得到。合成一顆燈兩邊都會判錯。
+ *
+ * 刻意同時輸出標籤文字與圖示，不只用顏色 —— 色盲使用者無法只靠紅綠分辨，
  * WCAG 也要求不可僅以顏色傳達資訊。
  */
+function CapabilityBadge({
+  label,
+  outcome,
+}: {
+  label: string;
+  outcome: AdminMangaSourceProbeOutcome;
+}) {
+  if (!outcome.ok) {
+    return (
+      <span
+        className='inline-flex shrink-0 items-center gap-1 rounded-full bg-red-100 px-2 py-1 text-xs text-red-800 dark:bg-red-900/30 dark:text-red-300'
+        title={outcome.error || '請求失敗'}
+      >
+        <XCircle aria-hidden='true' className='h-3.5 w-3.5' />
+        {label}
+      </span>
+    );
+  }
+
+  const tone = latencyTone(outcome.elapsedMs);
+  const toneClass =
+    tone === 'good'
+      ? 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300'
+      : tone === 'slow'
+        ? 'bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300'
+        : 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-300';
+
+  return (
+    <span
+      className={`inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-1 text-xs ${toneClass}`}
+      title={`${label}：取得 ${outcome.count} 筆，耗時 ${outcome.elapsedMs}ms`}
+    >
+      <CheckCircle2 aria-hidden='true' className='h-3.5 w-3.5' />
+      {label}
+      <span className='font-medium tabular-nums'>
+        {formatLatency(outcome.elapsedMs)}
+      </span>
+    </span>
+  );
+}
+
 function SourceStatusBadge({ probe }: { probe: AdminMangaSourceProbe | null }) {
   if (!probe) {
     return (
@@ -52,36 +111,13 @@ function SourceStatusBadge({ probe }: { probe: AdminMangaSourceProbe | null }) {
     );
   }
 
-  if (!probe.ok) {
-    return (
-      <span
-        className='inline-flex shrink-0 items-center gap-1.5 rounded-full bg-red-100 px-2 py-1 text-xs text-red-800 dark:bg-red-900/30 dark:text-red-300'
-        title={probe.error || '請求失敗'}
-      >
-        <XCircle aria-hidden='true' className='h-3.5 w-3.5' />
-        失敗
-      </span>
-    );
-  }
-
-  const tone = latencyTone(probe.elapsedMs);
-  const toneClass =
-    tone === 'good'
-      ? 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300'
-      : tone === 'slow'
-        ? 'bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300'
-        : 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-300';
-
   return (
     <span
-      className={`inline-flex shrink-0 items-center gap-1.5 rounded-full px-2 py-1 text-xs ${toneClass}`}
-      title={`取得 ${probe.count} 筆，耗時 ${probe.elapsedMs}ms`}
+      className='inline-flex shrink-0 flex-wrap items-center justify-end gap-1'
+      title={`測試於 ${new Date(probe.testedAt).toLocaleString('zh-TW')}`}
     >
-      <CheckCircle2 aria-hidden='true' className='h-3.5 w-3.5' />
-      正常
-      <span className='font-medium tabular-nums'>
-        {formatLatency(probe.elapsedMs)}
-      </span>
+      <CapabilityBadge label='熱門' outcome={probe.popular} />
+      <CapabilityBadge label='搜尋' outcome={probe.search} />
     </span>
   );
 }
@@ -105,6 +141,18 @@ export default function MangaSourceManagerPanel({
   const [error, setError] = useState('');
   const [query, setQuery] = useState('');
   const [onlyEnabled, setOnlyEnabled] = useState(false);
+  /**
+   * 依燈號篩選。
+   *
+   * `ok` / `failed` 的判斷用「熱門與搜尋是否都正常」與「任一失敗」——
+   * 兩個能力分開顯示之後，「這顆是綠燈還是紅燈」不再是單一布林，
+   * 篩選要明確定義才不會讓使用者以為漏掉東西。
+   */
+  const [statusFilter, setStatusFilter] = useState<
+    'all' | 'ok' | 'failed' | 'untested'
+  >('all');
+  /** 最近一次「全部測試」的時間；null = 從未測過 */
+  const [probedAt, setProbedAt] = useState<number | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [busyIds, setBusyIds] = useState<Set<string>>(new Set());
   const [bulkBusy, setBulkBusy] = useState<
@@ -128,6 +176,7 @@ export default function MangaSourceManagerPanel({
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || '讀取失敗');
       setSources(data.sources || []);
+      setProbedAt(typeof data.probedAt === 'number' ? data.probedAt : null);
       setError('');
     } catch (err) {
       setError((err as Error).message);
@@ -206,7 +255,10 @@ export default function MangaSourceManagerPanel({
    * 分批送出，讓進度可見也避免一次打爆上游。
    */
   const runTest = async (ids?: string[]) => {
-    const targets = ids && ids.length > 0 ? ids : sources.map((s) => s.id);
+    // 沒帶 ids = 使用者按了「測試全部」。這個區別要保留到最後一批，
+    // 才能決定要不要更新「上次全部測試」的時間戳。
+    const isFullRun = !ids || ids.length === 0;
+    const targets = isFullRun ? sources.map((s) => s.id) : ids;
     if (targets.length === 0) return;
 
     const single = targets.length === 1;
@@ -220,10 +272,19 @@ export default function MangaSourceManagerPanel({
       const CHUNK = 8;
       for (let i = 0; i < targets.length; i += CHUNK) {
         const chunk = targets.slice(i, i + CHUNK);
+        const isLastChunk = i + CHUNK >= targets.length;
         markBusy(chunk, true);
         try {
-          const data = await call({ action: 'test', sourceIds: chunk });
+          // fullRun 只在「測試全部」的最後一批送出。不能讓後端用
+          // 「這批的數量等於全清單」推斷 —— 前端是分批送的，沒有任何一批
+          // 會等於全清單，那樣時間戳永遠不會被寫入。
+          const data = await call({
+            action: 'test',
+            sourceIds: chunk,
+            ...(isFullRun && isLastChunk ? { fullRun: true } : {}),
+          });
           applyProbes(data.results || []);
+          if (typeof data.probedAt === 'number') setProbedAt(data.probedAt);
         } finally {
           markBusy(chunk, false);
           if (!single) {
@@ -254,6 +315,24 @@ export default function MangaSourceManagerPanel({
     const keyword = query.trim().toLowerCase();
     return sources.filter((item) => {
       if (onlyEnabled && !item.enabled) return false;
+
+      if (statusFilter !== 'all') {
+        const probe = item.probe;
+        if (statusFilter === 'untested') {
+          if (probe) return false;
+        } else if (!probe) {
+          // 未測試的來源不屬於綠燈也不屬於紅燈
+          return false;
+        } else if (statusFilter === 'ok') {
+          // 綠燈 = 兩個能力都正常。只有熱門正常的來源會搜不到，
+          // 歸進綠燈會讓使用者以為它可用
+          if (!probe.popular.ok || !probe.search.ok) return false;
+        } else if (probe.popular.ok && probe.search.ok) {
+          // statusFilter === 'failed'：任一能力失敗就算
+          return false;
+        }
+      }
+
       if (!keyword) return true;
       return (
         item.name.toLowerCase().includes(keyword) ||
@@ -261,7 +340,7 @@ export default function MangaSourceManagerPanel({
         (item.lang || '').toLowerCase().includes(keyword)
       );
     });
-  }, [onlyEnabled, query, sources]);
+  }, [onlyEnabled, query, sources, statusFilter]);
 
   const visibleIds = useMemo(() => visible.map((item) => item.id), [visible]);
   const selectedVisible = visibleIds.filter((id) => selected.has(id));
@@ -384,6 +463,39 @@ export default function MangaSourceManagerPanel({
         </button>
       </div>
 
+      <div className='flex flex-wrap items-center gap-2'>
+        <span className='text-xs text-gray-500 dark:text-gray-400'>燈號</span>
+        {(
+          [
+            ['all', '全部'],
+            ['ok', '綠燈（熱門與搜尋皆正常）'],
+            ['failed', '紅燈（任一失敗）'],
+            ['untested', '未測試'],
+          ] as const
+        ).map(([value, label]) => (
+          <button
+            key={value}
+            type='button'
+            onClick={() => setStatusFilter(value)}
+            aria-pressed={statusFilter === value}
+            className={`min-h-9 cursor-pointer rounded-full border px-3 text-xs font-medium transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-blue-500 ${
+              statusFilter === value
+                ? 'border-blue-600 bg-blue-600 text-white'
+                : 'border-gray-300 text-gray-700 hover:border-blue-500 hover:text-blue-700 dark:border-gray-600 dark:text-gray-200'
+            }`}
+          >
+            {label}
+          </button>
+        ))}
+        <span className='ml-auto text-xs text-gray-500 dark:text-gray-400'>
+          {probedAt
+            ? `上次全部測試：${formatRelativeTime(probedAt)}（${new Date(
+                probedAt
+              ).toLocaleString('zh-TW')}）`
+            : '尚未做過完整測試'}
+        </span>
+      </div>
+
       {error && (
         <div
           role='alert'
@@ -464,11 +576,23 @@ export default function MangaSourceManagerPanel({
                         成人
                       </span>
                     )}
-                    {source.probe?.error && (
-                      <span className='truncate text-red-600 dark:text-red-400'>
-                        {source.probe.error.split('\n')[0].slice(0, 60)}
-                      </span>
-                    )}
+                    {source.probe &&
+                      (
+                        [
+                          ['熱門', source.probe.popular.error],
+                          ['搜尋', source.probe.search.error],
+                        ] as const
+                      )
+                        .filter(([, err]) => Boolean(err))
+                        .map(([label, err]) => (
+                          <span
+                            key={label}
+                            className='truncate text-red-600 dark:text-red-400'
+                            title={err}
+                          >
+                            {label}：{(err || '').split('\n')[0].slice(0, 60)}
+                          </span>
+                        ))}
                   </div>
                 </div>
 

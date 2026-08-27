@@ -9,6 +9,7 @@ import { getMangaSourceCategory } from '@/lib/manga-source-groups';
 import type {
   MangaFilterSelection,
   MangaSourceFilterOption,
+  MangaSourceProbeSummary,
 } from '@/lib/manga.types';
 import {
   MangaRecommendResult,
@@ -63,6 +64,9 @@ export default function MangaRecommendPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const [sources, setSources] = useState<MangaSource[]>([]);
+  const [sourceProbe, setSourceProbe] = useState<
+    Record<string, MangaSourceProbeSummary>
+  >({});
   const [sourceId, setSourceId] = useState(
     () => searchParams.get('sourceId') || ''
   );
@@ -135,6 +139,8 @@ export default function MangaRecommendPage() {
       .then((data) => {
         const nextSources = (data.sources || []) as MangaSource[];
         setSources(nextSources);
+        // 管理員最近一次測試的燈號／延遲，供 picker 顯示
+        setSourceProbe(data.probe || {});
         setSourceId((prev) => {
           const fromUrl = searchParams.get('sourceId') || '';
           if (fromUrl && nextSources.some((source) => source.id === fromUrl)) {
@@ -291,7 +297,12 @@ export default function MangaRecommendPage() {
         <div className='space-y-2'>
           <div className='text-sm font-medium text-gray-700 dark:text-gray-200'>漫画源</div>
           {sources.length > 0 ? (
-            <MangaSourcePicker sources={sources} value={sourceId} onChange={setSourceId} />
+            <MangaSourcePicker
+              sources={sources}
+              value={sourceId}
+              onChange={setSourceId}
+              probe={sourceProbe}
+            />
           ) : (
             <div className='rounded-2xl bg-gray-100 px-4 py-3 text-sm text-gray-500 dark:bg-gray-900 dark:text-gray-400'>
               暂无可用漫画源

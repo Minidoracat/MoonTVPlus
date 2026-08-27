@@ -2,6 +2,11 @@ import { createHash } from 'crypto';
 
 import { NextRequest, NextResponse } from 'next/server';
 
+import { readMangaProbeCache } from '@/lib/manga-probe-cache.server';
+import {
+  toMangaSourceProbeSummary,
+  type MangaSourceProbeSummary,
+} from '@/lib/manga.types';
 import { getSuwayomiConfig, suwayomiClient } from '@/lib/suwayomi.client';
 
 import { getAuthorizedUsername, mangaErrorResponse } from '../_utils';
@@ -27,9 +32,10 @@ export async function GET(request: NextRequest) {
     // getSources() 會回傳所有來源，等於把管理員刻意隱藏的（含 NSFW）源名
     // 洩漏到 picker UI。列表端點跟著授權邊界一起 fail closed。
     await suwayomiClient.assertPolicyKnown();
-    const [sources, config] = await Promise.all([
+    const [sources, config, probeCache] = await Promise.all([
       suwayomiClient.getSources(lang),
       getSuwayomiConfig(),
+      readMangaProbeCache(),
     ]);
     // maxSources = 單次搜尋實際查詢的來源上限，前端用來提示多選超限
     //
@@ -45,10 +51,22 @@ export async function GET(request: NextRequest) {
       )
       .digest('hex')
       .slice(0, 12);
+
+    // 只對「這位使用者看得到的來源」附上探測摘要 —— sources 已經套過
+    // 允許清單，用它當來源比對就不會洩漏被停用來源的存在。
+    // 摘要不含錯誤訊息（見 toMangaSourceProbeSummary 的說明）。
+    const probe: Record<string, MangaSourceProbeSummary> = {};
+    for (const source of sources) {
+      const entry = probeCache.entries[source.id];
+      if (entry) probe[source.id] = toMangaSourceProbeSummary(entry);
+    }
+
     return NextResponse.json({
       sources,
       maxSources: config.maxSources,
       policyVersion,
+      probe,
+      probedAt: probeCache.testedAt || null,
     });
   } catch (error) {
     return mangaErrorResponse(error);

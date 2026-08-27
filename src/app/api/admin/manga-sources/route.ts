@@ -11,8 +11,13 @@ import {
 } from '@/lib/config';
 import { db } from '@/lib/db';
 import {
+  mergeMangaProbeCache,
+  readMangaProbeCache,
+} from '@/lib/manga-probe-cache.server';
+import {
   isMangaSourceAllowed,
   MANGA_DISABLE_ALL_SENTINEL,
+  type MangaSourceProbeEntry,
 } from '@/lib/manga.types';
 import { suwayomiClient } from '@/lib/suwayomi.client';
 
@@ -21,22 +26,12 @@ export const runtime = 'nodejs';
 /** 單次測試的併發上限：避免一次對十幾個漫畫站同時發請求 */
 const PROBE_CONCURRENCY = 4;
 
-export interface MangaSourceProbeResult {
-  sourceId: string;
-  ok: boolean;
-  elapsedMs: number;
-  count: number;
-  error?: string;
-  testedAt: number;
-}
-
 /**
- * 最近一次測試結果，per-process 記憶體快取。
+ * 探測結果快取改存 DB（見 manga-probe-cache.server.ts）。
  *
- * 刻意不落 DB：這是診斷資料而非設定，重啟後顯示「未測試」比顯示過期的
- * 綠燈誠實。管理員按一次「測試」就會重新填滿。
+ * 原本是 per-process Map，容器一重啟就歸零；而重測 53 個來源要對所有漫畫站
+ * 各發兩次請求，不該因為一次部署就被迫重跑。選源面板也要讀同一份。
  */
-const probeResults = new Map<string, MangaSourceProbeResult>();
 
 async function requireAdmin(
   request: NextRequest
@@ -66,14 +61,18 @@ export async function GET(request: NextRequest) {
   try {
     const config = await getConfig();
     // 帶 lang=undefined 取全部語言，管理面板要能看到／啟用其他語言的來源
-    const sources = await suwayomiClient.getSourcesForAdmin();
-    const allIds = sources.map((item) => item.id);
+    const [sources, probeCache] = await Promise.all([
+      suwayomiClient.getSourcesForAdmin(),
+      readMangaProbeCache(),
+    ]);
     const allowList = config.SuwayomiConfig?.SourceIds || [];
     const blockList = config.SuwayomiConfig?.DisabledSourceIds || [];
 
     return NextResponse.json({
       restricted: allowList.length > 0 || blockList.length > 0,
       maxSources: config.SuwayomiConfig?.MaxSources || 10,
+      /** 最近一次「全部測試」的時間，供面板顯示快取新舊 */
+      probedAt: probeCache.testedAt || null,
       sources: sources.map((item) => ({
         id: item.id,
         name: item.name,
@@ -81,7 +80,7 @@ export async function GET(request: NextRequest) {
         lang: item.lang,
         contentWarning: item.contentWarning,
         enabled: isMangaSourceAllowed(item.id, allowList, blockList),
-        probe: probeResults.get(item.id) || null,
+        probe: probeCache.entries[item.id] || null,
       })),
     });
   } catch (error) {
@@ -101,6 +100,13 @@ export async function POST(request: NextRequest) {
       action?: 'enable' | 'disable' | 'enable_all' | 'disable_all' | 'test';
       sourceId?: string;
       sourceIds?: string[];
+      /**
+       * 這一批是否為「測試全部」的收尾批次。
+       *
+       * 由前端明確告知，不能用「sourceIds 數量等於全清單」推斷 ——
+       * 前端是分批送的，沒有任何一批會等於全清單。
+       */
+      fullRun?: boolean;
     };
     const action = body.action;
     if (
@@ -122,25 +128,24 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ results: [] });
       }
 
-      const results: MangaSourceProbeResult[] = [];
+      const results: MangaSourceProbeEntry[] = [];
       // 分批跑，避免一次打爆上游
       for (let i = 0; i < targets.length; i += PROBE_CONCURRENCY) {
         const batch = targets.slice(i, i + PROBE_CONCURRENCY);
         const settled = await Promise.all(
           batch.map(async (sourceId) => {
             const probe = await suwayomiClient.probeSource(sourceId);
-            const entry: MangaSourceProbeResult = {
-              sourceId,
-              ...probe,
-              testedAt: Date.now(),
-            };
-            probeResults.set(sourceId, entry);
-            return entry;
+            return { sourceId, ...probe, testedAt: Date.now() };
           })
         );
         results.push(...settled);
       }
-      return NextResponse.json({ results });
+
+      // 頂層時間戳代表「上一次完整掃描結束的時間」，所以只在前端明確標記的
+      // 收尾批次更新。單顆重測或只測選取的幾顆都不該讓面板看起來像剛做過
+      // 完整檢查。
+      const cache = await mergeMangaProbeCache(results, body.fullRun === true);
+      return NextResponse.json({ results, probedAt: cache.testedAt || null });
     }
 
     // 以下是寫入設定的動作。

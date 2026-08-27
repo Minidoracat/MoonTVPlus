@@ -14,10 +14,13 @@ import {
   type MangaSourceCategoryId,
 } from '@/lib/manga-source-groups';
 import {
-  formatMangaSourceHealth,
+  formatMangaSourceStatus,
   type MangaSourceHealth,
 } from '@/lib/manga-source-health';
-import type { MangaSource } from '@/lib/manga.types';
+import type {
+  MangaSource,
+  MangaSourceProbeSummary,
+} from '@/lib/manga.types';
 
 import MangaSourceSheet from '@/components/manga/MangaSourceSheet';
 
@@ -29,6 +32,8 @@ interface MangaSourceMultiPickerProps {
   maxActive?: number;
   /** 來源速度／失效標記，由搜尋結果被動累積 */
   health?: Record<string, MangaSourceHealth>;
+  /** 管理員最近一次測試的結果（伺服器端快取），優先於被動量測 */
+  probe?: Record<string, MangaSourceProbeSummary>;
   className?: string;
 }
 
@@ -48,6 +53,7 @@ export default function MangaSourceMultiPicker({
   onChange,
   maxActive,
   health,
+  probe,
   className = '',
 }: MangaSourceMultiPickerProps) {
   const [open, setOpen] = useState(false);
@@ -200,8 +206,13 @@ export default function MangaSourceMultiPicker({
           {visibleSources.map((source) => {
             const Icon = CATEGORY_ICON[getMangaSourceCategory(source)];
             const active = selected.has(source.id);
-            const healthLabel = formatMangaSourceHealth(health?.[source.id]);
-            const healthFailed = health?.[source.id]?.failed === true;
+            // 這裡是搜尋頁的選源，所以看「搜尋」能力 ——
+            // 有來源熱門正常卻搜不到，用熱門的燈號會誤導
+            const status = formatMangaSourceStatus(
+              probe?.[source.id],
+              health?.[source.id],
+              'search'
+            );
             return (
               <button
                 key={source.id}
@@ -256,15 +267,22 @@ export default function MangaSourceMultiPicker({
                 <span className='min-w-0 flex-1 truncate text-sm font-medium'>
                   {getMangaSourceLabel(source)}
                 </span>
-                {healthLabel && (
+                {status && (
                   <span
                     className={`shrink-0 text-[10px] tabular-nums ${
-                      healthFailed
+                      status.tone === 'bad'
                         ? 'text-red-500 dark:text-red-400'
-                        : 'text-gray-400 dark:text-gray-500'
+                        : status.tone === 'slow'
+                          ? 'text-amber-500 dark:text-amber-400'
+                          : 'text-gray-400 dark:text-gray-500'
                     }`}
+                    title={
+                      status.source === 'probe'
+                        ? '管理員最近一次測試的搜尋結果'
+                        : '你自己搜尋時量到的速度'
+                    }
                   >
-                    {healthLabel}
+                    {status.label}
                   </span>
                 )}
               </button>

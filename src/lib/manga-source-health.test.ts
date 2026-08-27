@@ -1,5 +1,6 @@
 import {
   formatMangaSourceHealth,
+  formatMangaSourceStatus,
   readMangaSourceHealth,
   recordMangaSourceHealth,
 } from '@/lib/manga-source-health';
@@ -129,6 +130,76 @@ describe('recordMangaSourceHealth / readMangaSourceHealth', () => {
     } finally {
       Storage.prototype.setItem = original;
     }
+  });
+});
+
+describe('formatMangaSourceStatus', () => {
+  const at = Date.now();
+  const probe = {
+    popularOk: true,
+    popularMs: 800,
+    searchOk: true,
+    searchMs: 2500,
+    testedAt: at,
+  };
+
+  it('沒有任何資料時不顯示', () => {
+    expect(formatMangaSourceStatus(undefined, undefined, 'search')).toBeNull();
+  });
+
+  it('看熱門與看搜尋取的是不同數字', () => {
+    expect(formatMangaSourceStatus(probe, undefined, 'popular')?.label).toBe(
+      '800ms'
+    );
+    expect(formatMangaSourceStatus(probe, undefined, 'search')?.label).toBe(
+      '2.5s'
+    );
+  });
+
+  it('延遲決定顏色：<1.5s 綠、其餘琥珀', () => {
+    expect(formatMangaSourceStatus(probe, undefined, 'popular')?.tone).toBe(
+      'good'
+    );
+    expect(formatMangaSourceStatus(probe, undefined, 'search')?.tone).toBe(
+      'slow'
+    );
+  });
+
+  it('該能力失敗時顯示失效', () => {
+    const failed = { ...probe, searchOk: false };
+    expect(formatMangaSourceStatus(failed, undefined, 'search')).toMatchObject({
+      label: '失效',
+      tone: 'bad',
+    });
+    // 另一個能力仍正常，不該被連帶標成失效
+    expect(formatMangaSourceStatus(failed, undefined, 'popular')?.label).toBe(
+      '800ms'
+    );
+  });
+
+  it('probe 優先於被動量測', () => {
+    const health = { failed: true, measuredAt: at };
+    const status = formatMangaSourceStatus(probe, health, 'search');
+    // 被動量測說失效，但管理員測試說可用 —— 以 probe 為準
+    expect(status).toMatchObject({ label: '2.5s', source: 'probe' });
+  });
+
+  it('沒有 probe 時退回被動量測', () => {
+    const health = { failed: false, elapsedMs: 900, measuredAt: at };
+    expect(formatMangaSourceStatus(undefined, health, 'search')).toMatchObject({
+      label: '0.9s',
+      tone: 'good',
+      source: 'passive',
+    });
+  });
+
+  it('退回被動量測時，逾時標琥珀而非紅', () => {
+    const health = { failed: true, timedOut: true, measuredAt: at };
+    expect(formatMangaSourceStatus(undefined, health, 'search')).toMatchObject({
+      label: '逾時',
+      tone: 'slow',
+      source: 'passive',
+    });
   });
 });
 

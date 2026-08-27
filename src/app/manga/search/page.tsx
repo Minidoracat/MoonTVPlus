@@ -4,6 +4,7 @@ import { Search } from 'lucide-react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { startTransition, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
+import { getAuthInfoFromBrowserCookie } from '@/lib/auth';
 import { deleteMangaShelf, getAllMangaShelf, saveMangaShelf } from '@/lib/db.client';
 import {
   readMangaSourceHealth,
@@ -71,36 +72,48 @@ export default function MangaSearchPage() {
   useEffect(() => {
     setSourceHealth(readMangaSourceHealth());
   }, []);
-
-  const getCacheKey = useCallback((keyword: string, selectedSourceId: string) => {
-    return `manga_search_cache_${selectedSourceId || 'all'}_${keyword.trim()}`;
-  }, []);
-
-  const getCachedResults = useCallback(
-    (keyword: string, selectedSourceId: string) => {
-      if (typeof window === 'undefined' || !keyword.trim()) return null;
+  /**
+   * 搜尋結果**不做客戶端持久化快取**。
+   *
+   * 先前有兩個 sessionStorage store（結果快取與整份 search state）存的都是
+   * 「經過伺服器授權才拿到的內容」，key 只有來源與關鍵字。於是停用來源後、
+   * 撤銷漫畫權限後、或同一分頁登出 A 換 B，舊結果都會在任何 API 授權檢查
+   * **之前**被重播出來。
+   *
+   * 這件事無法用 key 修好：加使用者名稱擋不住「同一人、來源剛被停用」；
+   * 加政策版本也只在頁面載入時取一次；改成「先畫快取再打 API 覆蓋」則會
+   * 短暫顯示剛被封鎖的內容 —— 對成人來源屏蔽而言那已經是繞過。
+   *
+   * 所以只保留「關鍵字與來源選擇」這類非授權的 UI 狀態，
+   * 速度改由伺服器端快取（getRecommendedManga 的政策無關快取）與
+   * SSE 逐源串流提供 —— 那兩者都在授權之後。
+   */
+  const saveSearchState = useCallback(
+    (nextState: { query: string; sourceId: string }) => {
+      if (typeof window === 'undefined') return;
       try {
-        const cached = sessionStorage.getItem(getCacheKey(keyword, selectedSourceId));
-        return cached ? (JSON.parse(cached) as MangaSearchItem[]) : null;
-      } catch {
-        return null;
-      }
-    },
-    [getCacheKey]
-  );
-
-  const setCachedResults = useCallback(
-    (keyword: string, selectedSourceId: string, nextResults: MangaSearchItem[]) => {
-      if (typeof window === 'undefined' || !keyword.trim()) return;
-      try {
-        sessionStorage.setItem(getCacheKey(keyword, selectedSourceId), JSON.stringify(nextResults));
+        sessionStorage.setItem(
+          MANGA_SEARCH_STATE_KEY,
+          JSON.stringify({ query: nextState.query, sourceId: nextState.sourceId })
+        );
       } catch {
         // ignore session cache failures
       }
     },
-    [getCacheKey]
+    []
   );
 
+  const restoreSearchState = useCallback(() => {
+    if (typeof window === 'undefined') return null;
+    try {
+      const cached = sessionStorage.getItem(MANGA_SEARCH_STATE_KEY);
+      if (!cached) return null;
+      const parsed = JSON.parse(cached) as { query?: string; sourceId?: string };
+      return { query: parsed.query || '', sourceId: parsed.sourceId || '' };
+    } catch {
+      return null;
+    }
+  }, []);
 
   const readFluidSearchSetting = useCallback(() => {
     if (typeof window === 'undefined') return true;
@@ -144,31 +157,6 @@ export default function MangaSearchPage() {
         });
         flushTimerRef.current = null;
       }, 80);
-    }
-  }, []);
-
-  const saveSearchState = useCallback((nextState: { query: string; sourceId: string; results: MangaSearchItem[] }) => {
-    if (typeof window === 'undefined') return;
-    try {
-      sessionStorage.setItem(MANGA_SEARCH_STATE_KEY, JSON.stringify(nextState));
-    } catch {
-      // ignore session cache failures
-    }
-  }, []);
-
-  const restoreSearchState = useCallback(() => {
-    if (typeof window === 'undefined') return null;
-    try {
-      const cached = sessionStorage.getItem(MANGA_SEARCH_STATE_KEY);
-      return cached
-        ? (JSON.parse(cached) as {
-            query: string;
-            sourceId: string;
-            results: MangaSearchItem[];
-          })
-        : null;
-    } catch {
-      return null;
     }
   }, []);
 
@@ -216,16 +204,8 @@ export default function MangaSearchPage() {
       setTotalSources(0);
       setCompletedSources(0);
 
-      const cached = forceRefresh ? null : getCachedResults(trimmedQuery, normalizedSourceId);
-      if (cached) {
-        setResults(cached);
-        saveSearchState({ query: trimmedQuery, sourceId: normalizedSourceId, results: cached });
-        setLoading(false);
-        setTotalSources(1);
-        setCompletedSources(1);
-        return;
-      }
-
+      // 結果一律重新向伺服器取得。不從本地快取先畫 ——
+      // 那會讓剛被停用的來源內容短暫顯示出來，等同繞過授權。
       setResults([]);
 
       const currentFluidSearch = readFluidSearchSetting();
@@ -306,20 +286,14 @@ export default function MangaSearchPage() {
                     flushTimerRef.current = null;
                   }
                   startTransition(() => {
-                    setResults((prev) => {
-                      const nextResults = prev.concat(toAppend);
-                      if (cacheable) {
-                        setCachedResults(trimmedQuery, normalizedSourceId, nextResults);
-                        saveSearchState({ query: trimmedQuery, sourceId: normalizedSourceId, results: nextResults });
-                      }
-                      return nextResults;
-                    });
+                    setResults((prev) => prev.concat(toAppend));
                   });
-                } else if (cacheable) {
-                  setResults((prev) => {
-                    setCachedResults(trimmedQuery, normalizedSourceId, prev);
-                    saveSearchState({ query: trimmedQuery, sourceId: normalizedSourceId, results: prev });
-                    return prev;
+                }
+                if (cacheable) {
+                  // 只記關鍵字與來源選擇（非授權內容），供返回時還原輸入
+                  saveSearchState({
+                    query: trimmedQuery,
+                    sourceId: normalizedSourceId,
                   });
                 }
                 setLoading(false);
@@ -380,10 +354,12 @@ export default function MangaSearchPage() {
         setResults(nextResults);
         setTotalSources(data.attemptedSources || 1);
         setCompletedSources(data.attemptedSources || 1);
-        // 同上：全滅不入快取，否則會被記成正常的空結果
+        // 全滅不記狀態，否則返回時會還原成一個看起來正常的空搜尋
         if (!data.allFailed) {
-          setCachedResults(trimmedQuery, normalizedSourceId, nextResults);
-          saveSearchState({ query: trimmedQuery, sourceId: normalizedSourceId, results: nextResults });
+          saveSearchState({
+            query: trimmedQuery,
+            sourceId: normalizedSourceId,
+          });
         }
       } catch (err) {
         if (searchGenerationRef.current !== generation) return;
@@ -399,10 +375,8 @@ export default function MangaSearchPage() {
       appendBufferedResults,
       clearPendingResults,
       closeEventSource,
-      getCachedResults,
       readFluidSearchSetting,
       saveSearchState,
-      setCachedResults,
     ]
   );
 
@@ -411,14 +385,11 @@ export default function MangaSearchPage() {
       restoredRef.current = true;
 
       if (!urlQuery) {
+        // 只還原輸入狀態；結果一律重新搜尋，不從本地重播
         const cachedState = restoreSearchState();
         if (cachedState?.query?.trim()) {
           setQuery(cachedState.query);
           setSourceId(cachedState.sourceId || '');
-          setResults(cachedState.results || []);
-          setHasSearched(true);
-          setLastSearchedQuery(cachedState.query);
-          setLastSearchedSourceId(cachedState.sourceId || '');
         }
         return;
       }

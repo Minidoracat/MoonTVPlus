@@ -1,3 +1,5 @@
+import { createHash } from 'crypto';
+
 import { NextRequest, NextResponse } from 'next/server';
 
 import { getSuwayomiConfig, suwayomiClient } from '@/lib/suwayomi.client';
@@ -30,7 +32,24 @@ export async function GET(request: NextRequest) {
       getSuwayomiConfig(),
     ]);
     // maxSources = 單次搜尋實際查詢的來源上限，前端用來提示多選超限
-    return NextResponse.json({ sources, maxSources: config.maxSources });
+    //
+    // policyVersion = 兩份來源清單的短 hash。前端用它當 sessionStorage
+    // 快取 key 的一部分：政策一變（管理員停用來源）舊快取就全部自然失效，
+    // 不會再把已停用來源的結果重播出來。
+    const policyVersion = createHash('sha256')
+      .update(
+        JSON.stringify([
+          [...config.sourceIds].sort(),
+          [...config.disabledSourceIds].sort(),
+        ])
+      )
+      .digest('hex')
+      .slice(0, 12);
+    return NextResponse.json({
+      sources,
+      maxSources: config.maxSources,
+      policyVersion,
+    });
   } catch (error) {
     return mangaErrorResponse(error);
   }

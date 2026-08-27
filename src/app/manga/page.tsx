@@ -21,6 +21,7 @@ import {
 
 import CapsuleSwitch from '@/components/CapsuleSwitch';
 import MangaCard from '@/components/MangaCard';
+import MangaFilterGroupChips from '@/components/manga/MangaFilterGroupChips';
 import MangaSourcePicker from '@/components/manga/MangaSourcePicker';
 
 function MangaCardSkeleton({ withButton = false }: { withButton?: boolean }) {
@@ -348,53 +349,175 @@ export default function MangaRecommendPage() {
               )}
             </div>
             <div className='grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3'>
-              {sourceFilters.map((filter) => {
-                const current = filterSelections.find(
-                  (item) => item.position === filter.position
-                );
-                const selectId = `manga-filter-${filter.position}`;
-                return (
-                  <div key={filter.position} className='space-y-1'>
+              {sourceFilters
+                .filter(
+                  (f): f is Extract<MangaSourceFilterOption, { kind: 'select' | 'sort' }> =>
+                    f.kind === 'select' || f.kind === 'sort'
+                )
+                .map((filter) => {
+                  const current = filterSelections.find(
+                    (item) =>
+                      item.position === filter.position &&
+                      (item.kind === 'select' || item.kind === 'sort')
+                  ) as
+                    | Extract<MangaFilterSelection, { kind: 'select' | 'sort' }>
+                    | undefined;
+                  const selectId = `manga-filter-${filter.position}`;
+                  return (
+                    <div key={filter.position} className='space-y-1'>
+                      <label
+                        htmlFor={selectId}
+                        className='block text-xs text-gray-500 dark:text-gray-400'
+                      >
+                        {filter.name}
+                      </label>
+                      <select
+                        id={selectId}
+                        value={current ? String(current.index) : ''}
+                        onChange={(event) => {
+                          const raw = event.target.value;
+                          setFilterSelections((prev) => {
+                            const rest = prev.filter(
+                              (item) => item.position !== filter.position
+                            );
+                            if (raw === '') return rest;
+                            const index = Number(raw);
+                            return [
+                              ...rest,
+                              filter.kind === 'sort'
+                                ? {
+                                    position: filter.position,
+                                    kind: 'sort',
+                                    index,
+                                    ascending: false,
+                                  }
+                                : {
+                                    position: filter.position,
+                                    kind: 'select',
+                                    index,
+                                  },
+                            ];
+                          });
+                        }}
+                        className='h-11 w-full cursor-pointer rounded-2xl border border-gray-200 bg-gray-50 px-3 text-sm text-gray-900 outline-none transition-colors duration-200 focus:border-sky-500 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-100'
+                      >
+                        <option value=''>不限</option>
+                        {filter.values.map((label, index) => (
+                          <option key={`${filter.position}-${index}`} value={index}>
+                            {label}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  );
+                })}
+              {/* 頂層單一勾選（少見，vomic 等 2 顆來源）：與下拉同格擺放 */}
+              {sourceFilters
+                .filter(
+                  (f): f is Extract<MangaSourceFilterOption, { kind: 'checkbox' }> =>
+                    f.kind === 'checkbox'
+                )
+                .map((filter) => {
+                  const checked = filterSelections.some(
+                    (item) =>
+                      item.position === filter.position &&
+                      item.kind === 'checkbox' &&
+                      item.checked
+                  );
+                  return (
                     <label
-                      htmlFor={selectId}
-                      className='block text-xs text-gray-500 dark:text-gray-400'
+                      key={filter.position}
+                      className='flex min-h-11 cursor-pointer items-end gap-2 pb-2 text-sm text-gray-700 dark:text-gray-200'
                     >
+                      <input
+                        type='checkbox'
+                        checked={checked}
+                        onChange={(event) => {
+                          const next = event.target.checked;
+                          setFilterSelections((prev) => {
+                            const rest = prev.filter(
+                              (item) => item.position !== filter.position
+                            );
+                            // 未勾 = 不送（來源預設值），不送 checked: false
+                            return next
+                              ? [
+                                  ...rest,
+                                  {
+                                    position: filter.position,
+                                    kind: 'checkbox',
+                                    checked: true,
+                                  },
+                                ]
+                              : rest;
+                          });
+                        }}
+                        className='h-4 w-4 cursor-pointer rounded border-gray-300 text-sky-600 focus:ring-2 focus:ring-sky-500/40'
+                      />
                       {filter.name}
                     </label>
-                    <select
-                      id={selectId}
-                      value={current ? String(current.index) : ''}
-                      onChange={(event) => {
-                        const raw = event.target.value;
-                        setFilterSelections((prev) => {
-                          const rest = prev.filter(
-                            (item) => item.position !== filter.position
-                          );
-                          if (raw === '') return rest;
-                          return [
-                            ...rest,
-                            {
-                              position: filter.position,
-                              kind: filter.kind,
-                              index: Number(raw),
-                              ...(filter.kind === 'sort' ? { ascending: false } : {}),
-                            },
-                          ];
-                        });
-                      }}
-                      className='h-11 w-full cursor-pointer rounded-2xl border border-gray-200 bg-gray-50 px-3 text-sm text-gray-900 outline-none transition-colors duration-200 focus:border-sky-500 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-100'
-                    >
-                      <option value=''>不限</option>
-                      {filter.values.map((label, index) => (
-                        <option key={`${filter.position}-${index}`} value={index}>
-                          {label}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
+                  );
+                })}
+            </div>
+            {/* 分類多選群組：chip 佔滿寬度，放在下拉 grid 之外 */}
+            {sourceFilters
+              .filter(
+                (f): f is Extract<MangaSourceFilterOption, { kind: 'group' }> =>
+                  f.kind === 'group'
+              )
+              .map((filter) => {
+                const current = filterSelections.find(
+                  (item) =>
+                    item.position === filter.position && item.kind === 'group'
+                ) as Extract<MangaFilterSelection, { kind: 'group' }> | undefined;
+                return (
+                  <MangaFilterGroupChips
+                    key={filter.position}
+                    name={filter.name}
+                    options={filter.options}
+                    selected={current?.positions ?? []}
+                    onToggle={(innerPosition, checked) => {
+                      // 在 updater 內用 prev 計算：快速連點時 props 的
+                      // selected 是上一次 render 的舊值，用它算會蓋掉前一次點擊
+                      setFilterSelections((prev) => {
+                        const existing = prev.find(
+                          (item) =>
+                            item.position === filter.position &&
+                            item.kind === 'group'
+                        ) as
+                          | Extract<MangaFilterSelection, { kind: 'group' }>
+                          | undefined;
+                        const currentPositions = existing?.positions ?? [];
+                        const nextPositions = checked
+                          ? currentPositions.includes(innerPosition)
+                            ? currentPositions
+                            : [...currentPositions, innerPosition]
+                          : currentPositions.filter(
+                              (item) => item !== innerPosition
+                            );
+                        const rest = prev.filter(
+                          (item) => item.position !== filter.position
+                        );
+                        // 全部取消勾選 = 移除這個 filter，不送空陣列
+                        return nextPositions.length > 0
+                          ? [
+                              ...rest,
+                              {
+                                position: filter.position,
+                                kind: 'group',
+                                positions: nextPositions,
+                              },
+                            ]
+                          : rest;
+                      });
+                    }}
+                    onClear={() => {
+                      setFilterSelections((prev) =>
+                        prev.filter((item) => item.position !== filter.position)
+                      );
+                    }}
+                  />
                 );
               })}
-            </div>
           </div>
         )}
       </section>

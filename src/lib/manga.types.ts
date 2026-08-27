@@ -41,23 +41,114 @@ export interface MangaSource {
   contentWarning?: MangaContentWarning;
 }
 
-/** 來源自帶的篩選項（分類／排序／地區等），由各來源外掛定義，沒有跨來源標準 */
-export interface MangaSourceFilterOption {
-  /** Suwayomi filter 在 filters 陣列中的位置，送回去時必填 */
+/** GroupFilter 內的一個勾選項；position 是它在**群組內**的原始位置 */
+export interface MangaFilterGroupOption {
+  /**
+   * 群組內原始 position。不可用「過濾後的索引」——群組內可能混有我們
+   * 不支援的型別（Header 等），過濾後索引會錯位，送回 Suwayomi 就勾錯項。
+   */
   position: number;
-  kind: 'select' | 'sort';
   name: string;
-  values: string[];
 }
 
+/**
+ * 來源自帶的篩選項（分類／排序／地區等），由各來源外掛定義，沒有跨來源標準。
+ *
+ * `group` 是「分類多選」的實際形態：一組勾選框（實測 Komiic 的「類型」有
+ * 71 項）。`checkbox` 是頂層單一勾選（例如 vomic 的開關）。
+ */
+export type MangaSourceFilterOption =
+  | {
+      /** Suwayomi filter 在 filters 陣列中的位置，送回去時必填 */
+      position: number;
+      kind: 'select' | 'sort';
+      name: string;
+      values: string[];
+    }
+  | {
+      position: number;
+      kind: 'group';
+      name: string;
+      options: MangaFilterGroupOption[];
+    }
+  | {
+      position: number;
+      kind: 'checkbox';
+      name: string;
+    };
+
 /** 使用者選定的一個 filter 值 */
-export interface MangaFilterSelection {
+export type MangaFilterSelection =
+  | {
+      position: number;
+      kind: 'select';
+      /** values 的索引 */
+      index: number;
+    }
+  | {
+      position: number;
+      kind: 'sort';
+      index: number;
+      ascending?: boolean;
+    }
+  | {
+      position: number;
+      kind: 'group';
+      /** 勾選項在群組內的原始 position 清單（見 MangaFilterGroupOption） */
+      positions: number[];
+    }
+  | {
+      position: number;
+      kind: 'checkbox';
+      checked: boolean;
+    };
+
+/** Suwayomi fetchSourceManga 的 FilterChangeInput（我們用到的子集） */
+export interface SuwayomiFilterChange {
   position: number;
-  kind: 'select' | 'sort';
-  /** values 的索引 */
-  index: number;
-  /** sort 專用；select 忽略 */
-  ascending?: boolean;
+  selectState?: number;
+  sortState?: { index: number; ascending: boolean };
+  checkBoxState?: boolean;
+  groupChange?: { position: number; checkBoxState: boolean };
+}
+
+/**
+ * 把使用者的選擇轉成 Suwayomi 的 FilterChangeInput 陣列。
+ *
+ * group 會**展開成多筆**：Suwayomi 的 groupChange 一筆只能改群組內一個
+ * 勾選框，勾三個分類就是三筆。這也是這個函式存在的理由 —— 轉換不再是
+ * 1:1 的 map，值得抽成純函式讓測試守著。
+ */
+export function buildFilterChangeInputs(
+  selections: MangaFilterSelection[]
+): SuwayomiFilterChange[] {
+  return selections.flatMap((selection): SuwayomiFilterChange[] => {
+    switch (selection.kind) {
+      case 'sort':
+        return [
+          {
+            position: selection.position,
+            sortState: {
+              index: selection.index,
+              ascending: selection.ascending ?? false,
+            },
+          },
+        ];
+      case 'select':
+        return [
+          { position: selection.position, selectState: selection.index },
+        ];
+      case 'checkbox':
+        return [
+          { position: selection.position, checkBoxState: selection.checked },
+        ];
+      case 'group':
+        return selection.positions.map((inner) => ({
+          position: selection.position,
+          groupChange: { position: inner, checkBoxState: true },
+        }));
+    }
+  });
 }
 
 export interface MangaSearchItem {

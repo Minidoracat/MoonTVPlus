@@ -4,6 +4,7 @@ import { createHash } from 'crypto';
 
 import { getConfig, isDegradedConfigObject } from './config';
 import {
+  buildFilterChangeInputs,
   isMangaSourceAllowed,
   MANGA_DISABLE_ALL_SENTINEL,
   MangaChapter,
@@ -1036,36 +1037,79 @@ ${fields}
             __typename
             ... on SelectFilter { name values }
             ... on SortFilter { name values }
+            ... on CheckBoxFilter { name }
+            ... on GroupFilter {
+              name
+              filters {
+                __typename
+                ... on CheckBoxFilter { name }
+              }
+            }
           }
         }
       }
     `;
 
+    interface RawFilter {
+      __typename?: string;
+      name?: string;
+      values?: string[];
+      filters?: Array<{ __typename?: string; name?: string }>;
+    }
     const data = await this.graphqlRequest<{
-      source?: {
-        filters?: Array<{
-          __typename?: string;
-          name?: string;
-          values?: string[];
-        }>;
-      };
+      source?: { filters?: RawFilter[] };
     }>(query, { id: sourceId }, 'GetSourceFilters');
 
     const raw = data.source?.filters || [];
     const options: MangaSourceFilterOption[] = [];
     raw.forEach((filter, position) => {
-      const kind =
-        filter.__typename === 'SelectFilter'
-          ? 'select'
-          : filter.__typename === 'SortFilter'
-            ? 'sort'
-            : null;
-      if (!kind) return;
-      const values = (filter.values || []).filter(
-        (v): v is string => typeof v === 'string'
-      );
-      if (values.length === 0 || !filter.name) return;
-      options.push({ position, kind, name: filter.name, values });
+      if (!filter.name) return;
+
+      if (
+        filter.__typename === 'SelectFilter' ||
+        filter.__typename === 'SortFilter'
+      ) {
+        const values = (filter.values || []).filter(
+          (v): v is string => typeof v === 'string'
+        );
+        if (values.length === 0) return;
+        options.push({
+          position,
+          kind: filter.__typename === 'SelectFilter' ? 'select' : 'sort',
+          name: filter.name,
+          values,
+        });
+        return;
+      }
+
+      if (filter.__typename === 'CheckBoxFilter') {
+        options.push({ position, kind: 'checkbox', name: filter.name });
+        return;
+      }
+
+      if (filter.__typename === 'GroupFilter') {
+        // 群組內只取 CheckBox，但 position 必須是**群組內原始位置**：
+        // 群組內可能混有其他型別，用過濾後的索引會讓 groupChange 勾錯項
+        const inner = (filter.filters || [])
+          .map((item, innerPosition) => ({ item, innerPosition }))
+          .filter(
+            ({ item }) =>
+              item.__typename === 'CheckBoxFilter' &&
+              typeof item.name === 'string' &&
+              item.name.length > 0
+          )
+          .map(({ item, innerPosition }) => ({
+            position: innerPosition,
+            name: item.name as string,
+          }));
+        if (inner.length === 0) return;
+        options.push({
+          position,
+          kind: 'group',
+          name: filter.name,
+          options: inner,
+        });
+      }
     });
     return options;
   }
@@ -1186,12 +1230,14 @@ ${fields}
     //
     // serverBaseUrl 必須進 key：換 Suwayomi 伺服器後同一組參數是不同內容。
     const resolvedForCache = await resolveSuwayomiConfig(this.options);
+    // filters 直接以「實際會送出的 FilterChangeInput」為 key：union 化之後
+    // 各 kind 的欄位不同（group 是 positions 陣列），逐欄拼 key 容易漏
     const cacheKey = JSON.stringify([
       resolvedForCache.serverBaseUrl,
       sourceId,
       filters.length > 0 ? 'SEARCH' : type,
       page,
-      filters.map((f) => [f.position, f.kind, f.index, f.ascending ?? false]),
+      buildFilterChangeInputs(filters),
     ]);
     const cachedHit = this.recommendCache.get(cacheKey);
     const nowMs = Date.now();
@@ -1232,20 +1278,7 @@ ${fields}
                   source: sourceId,
                   page,
                   query: '',
-                  filters: filters.map((selection) =>
-                    selection.kind === 'sort'
-                      ? {
-                          position: selection.position,
-                          sortState: {
-                            index: selection.index,
-                            ascending: selection.ascending ?? false,
-                          },
-                        }
-                      : {
-                          position: selection.position,
-                          selectState: selection.index,
-                        }
-                  ),
+                  filters: buildFilterChangeInputs(filters),
                 }
               : {
                   type,

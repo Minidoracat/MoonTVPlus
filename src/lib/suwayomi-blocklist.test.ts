@@ -42,21 +42,22 @@ function setPolicy(sourceIds: string[], disabledSourceIds: string[]): void {
   } as AdminConfig);
 }
 
-/** 讓 sources 查詢成功、其餘 GraphQL 一律失敗（我們只驗過濾結果） */
+/**
+ * 讓 sources 查詢成功、其餘 GraphQL 一律回空（我們只驗過濾結果）。
+ *
+ * 用 `text()` 而不是 `json()`：`suwayomiFetch` 刻意在自己的 deadline 範圍內
+ * 把 body 讀成字串再交給呼叫端解析（見該函式的說明）。
+ */
 function mockSourcesOk(): jest.Mock {
   const fetchMock = jest.fn(async (_url: string, init?: RequestInit) => {
     const body = String((init as { body?: unknown })?.body ?? '');
-    if (body.includes('sources')) {
-      return {
-        ok: true,
-        status: 200,
-        json: async () => ({ data: { sources: { nodes: SOURCES } } }),
-      } as unknown as Response;
-    }
+    const payload = body.includes('sources')
+      ? { data: { sources: { nodes: SOURCES } } }
+      : { data: {} };
     return {
       ok: true,
       status: 200,
-      json: async () => ({ data: {} }),
+      text: async () => JSON.stringify(payload),
     } as unknown as Response;
   });
   global.fetch = fetchMock as unknown as typeof global.fetch;

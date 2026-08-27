@@ -64,17 +64,28 @@ interface SuwayomiSessionCacheEntry {
 
 const SUWAYOMI_SESSION_TTL_MS = 25 * 60 * 1000;
 /**
+ * `setTimeout` 能表示的最大延遲。
+ *
+ * 超過 32-bit signed integer 時 Node 會發出 overflow 警告並把延遲壓成約 1ms ——
+ * 也就是「想把 deadline 放寬」的設定會變成「幾乎立刻逾時」，方向完全相反。
+ */
+const MAX_TIMEOUT_MS = 2 ** 31 - 1;
+
+/**
  * 解析毫秒設定值，無效就退回預設。
  *
  * 不能直接 `Number(env || fallback)`：把 `MANGA_SEARCH_SOURCE_TIMEOUT_MS`
  * 寫成 `3s` 會得到 NaN，而 `setTimeout(fn, NaN)` 依規範等同延遲 0 ——
  * 於是每顆來源在第一個 macrotask 就逾時，整站搜尋靜默全滅，
- * 唯一線索是錯誤訊息裡的 `NaN`。`0`／負數／`Infinity` 同樣要擋。
+ * 唯一線索是錯誤訊息裡的 `NaN`。
+ *
+ * 要擋的無效值：NaN、0、負數、Infinity，以及超過 `MAX_TIMEOUT_MS`
+ * 的過大值（後者同樣會變成約 1ms）。
  */
 function resolveTimeoutMs(raw: string | undefined, fallback: number): number {
   if (!raw) return fallback;
   const parsed = Number(raw);
-  if (!Number.isFinite(parsed) || parsed <= 0) {
+  if (!Number.isFinite(parsed) || parsed <= 0 || parsed > MAX_TIMEOUT_MS) {
     console.warn(
       `[Suwayomi] 忽略無效的超時設定 ${JSON.stringify(raw)}，改用 ${fallback}ms`
     );
@@ -297,14 +308,28 @@ async function getSuwayomiRequestHeaders(
   return undefined;
 }
 
+/**
+ * 一次 Suwayomi 請求的結果。
+ *
+ * 刻意回傳「已讀完的 body 字串」而不是 `Response`：body 必須在 deadline 與
+ * 取消訊號的涵蓋範圍內讀完（見 suwayomiFetch 內的說明）。
+ */
+interface SuwayomiFetchResult {
+  ok: boolean;
+  status: number;
+  body: string;
+}
+
 async function suwayomiFetch(
   resolved: ResolvedSuwayomiConfig,
   input: string,
   init: RequestInit = {}
-): Promise<Response> {
+): Promise<SuwayomiFetchResult> {
   const timeoutMs = DEFAULT_SUWAYOMI_TIMEOUT_MS;
 
-  const execute = async (forceSimpleLoginRefresh: boolean) => {
+  const execute = async (
+    forceSimpleLoginRefresh: boolean
+  ): Promise<SuwayomiFetchResult> => {
     const authHeaders = await getSuwayomiRequestHeaders(resolved, forceSimpleLoginRefresh);
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(new Error(`Suwayomi 请求超时(${timeoutMs}ms)`)), timeoutMs);
@@ -328,7 +353,7 @@ async function suwayomiFetch(
     }
 
     try {
-      return await fetch(input, {
+      const response = await fetch(input, {
         ...init,
         headers: {
           ...(authHeaders || {}),
@@ -337,6 +362,20 @@ async function suwayomiFetch(
         cache: 'no-store',
         signal: controller.signal,
       });
+
+      // body 一定要在這裡讀完，不能把 Response 交給呼叫端自己讀。
+      //
+      // fetch 只在「收到 response header」時 resolve。先前這個函式在那一刻
+      // 就回傳，finally 隨即 clearTimeout + 移除 abort 監聽，而 body 是呼叫端
+      // 在 graphqlRequest 裡才 await 的 —— 上游送完 header 就停止送 body 時，
+      // 那個 await 永不 settle，20 秒 deadline 與呼叫端的取消訊號都已被拆掉，
+      // socket 與 promise 永久滯留。搜尋路徑雖有 3 秒 race 讓 UI 不卡住，
+      // 洩漏仍會隨每次搜尋累積；getSources／getChapterPages 這些沒有第二層
+      // deadline 的路徑則會讓整個 request handler 掛死。
+      //
+      // 回傳字串而非 Response 也順便讓「不是合法 JSON」有明確錯誤訊息。
+      const body = await response.text();
+      return { ok: response.ok, status: response.status, body };
     } finally {
       clearTimeout(timeoutId);
       // 呼叫端的 signal 可能比這次請求活得久（例如重試時重用），
@@ -461,7 +500,14 @@ export class SuwayomiClient {
       throw new Error(`Suwayomi 请求失败: ${response.status}`);
     }
 
-    const data = (await response.json()) as GraphQLResponse<T>;
+    let data: GraphQLResponse<T>;
+    try {
+      data = JSON.parse(response.body) as GraphQLResponse<T>;
+    } catch {
+      // 上游反向代理故障時會回 HTML 錯誤頁；直接讓 SyntaxError 冒出來
+      // 對診斷沒有幫助
+      throw new Error('Suwayomi 返回的不是有效 JSON');
+    }
     if (data.errors?.length) {
       throw new Error(data.errors.map((item) => item.message || 'Unknown error').join('; '));
     }

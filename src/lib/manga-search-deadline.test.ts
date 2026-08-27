@@ -74,28 +74,33 @@ afterEach(() => {
 });
 
 /**
- * 等到假時鐘上真的有計時器掛著，再推進它。
+ * 等到假時鐘上掛滿 `expected` 個計時器，再推進它們。
  *
  * Jest 27 沒有 advanceTimersByTimeAsync（那是 29 才有），所以要自己排空
  * microtask。但「固定 flush N 次」是猜的：只要日後在註冊計時器之前多一段
  * await，N 次就可能不夠，於是時鐘先被推進、計時器才在新的時間點註冊，
- * 測試會掛住。改成用 `jest.getTimerCount()` 這個可觀測的同步點 ——
- * 有計時器才推進，等不到就明確報錯而不是靜默逾時。
+ * 測試會掛住。改成等 `jest.getTimerCount()` 這個可觀測的同步點。
+ *
+ * 要比對**確切個數**而不只是「> 0」：fan-out 有多顆來源時，只等第一顆的
+ * 計時器就推進，後面那幾顆可能還沒註冊上去。等不到就明確報錯，
+ * 不要靜默逾時。
  *
  * promise 不受 fake timers 影響，所以 `await Promise.resolve()` 仍是真的
  * 讓出一個 microtask tick。
  */
-async function waitForTimer(maxTicks = 100): Promise<void> {
+async function waitForTimers(expected: number, maxTicks = 200): Promise<void> {
   for (let i = 0; i < maxTicks; i += 1) {
-    if (jest.getTimerCount() > 0) return;
+    if (jest.getTimerCount() >= expected) return;
     await Promise.resolve();
   }
-  throw new Error('等不到 deadline 計時器被註冊');
+  throw new Error(
+    `等不到 ${expected} 個 deadline 計時器（目前 ${jest.getTimerCount()} 個）`
+  );
 }
 
 /** 等計時器就位 → 推進假時鐘 → 排空 microtask 讓 race 的結果傳出來 */
-async function advance(ms: number): Promise<void> {
-  await waitForTimer();
+async function advance(ms: number, sources = 1): Promise<void> {
+  await waitForTimers(sources);
   jest.advanceTimersByTime(ms);
   for (let i = 0; i < 20; i += 1) {
     await Promise.resolve();
@@ -202,7 +207,7 @@ describe('searchManga fan-out', () => {
       );
 
     const pending = client.searchManga('x');
-    await advance(PER_SOURCE_SEARCH_TIMEOUT_MS);
+    await advance(PER_SOURCE_SEARCH_TIMEOUT_MS, 2);
     const result = await pending;
 
     // 快來源的結果照樣拿到
@@ -227,7 +232,7 @@ describe('searchManga fan-out', () => {
       );
 
     const pending = client.searchManga('x');
-    await advance(PER_SOURCE_SEARCH_TIMEOUT_MS);
+    await advance(PER_SOURCE_SEARCH_TIMEOUT_MS, 2);
     const result = await pending;
 
     expect(result.measurements).toHaveLength(2);
@@ -266,7 +271,7 @@ describe('searchManga fan-out', () => {
       );
 
     const pending = client.searchManga('x');
-    await advance(PER_SOURCE_SEARCH_TIMEOUT_MS);
+    await advance(PER_SOURCE_SEARCH_TIMEOUT_MS, 2);
     const result = await pending;
 
     const bySource = Object.fromEntries(

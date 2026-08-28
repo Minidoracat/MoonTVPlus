@@ -82,8 +82,6 @@ export default function MangaRecommendPage() {
   const [shelf, setShelf] = useState<Record<string, MangaShelfItem>>({});
   const loadMoreRef = useRef<HTMLDivElement | null>(null);
   const recommendRequestRef = useRef(0);
-  /** 分辨「來源剛換」與「同來源內條件變更」：前者不能沿用舊來源的 filter/keyword */
-  const prevSourceRef = useRef(sourceId);
   const [sourceFilters, setSourceFilters] = useState<MangaSourceFilterOption[]>([]);
   /** 源內搜尋：輸入框內容與「已提交」的關鍵字分開 —— 打字過程中不該每個字都打上游 */
   const [keywordInput, setKeywordInput] = useState('');
@@ -91,13 +89,32 @@ export default function MangaRecommendPage() {
   const [filterSelections, setFilterSelections] = useState<MangaFilterSelection[]>([]);
   const [filtersError, setFiltersError] = useState('');
 
-  useEffect(() => {
+  /*
+   * 換來源時「在 render 期」重設，而不是在 effect 裡。
+   *
+   * 在 effect 裡重設會留下一個 render 窗口：那一輪 sourceId 已是新值，
+   * keyword/filterSelections 卻還是舊來源的，於是同一輪建立的
+   * fetchRecommend closure 會把使用者在前一個來源打的關鍵字送去新來源
+   * （實測過，log 出現「新 sourceId + 舊 q」）。effect 內的 setState
+   * 不會改寫已建立的 closure，requestId guard 也只能丟棄回應、無法收回
+   * 已送出的 HTTP。
+   *
+   * React 會在跑 effect 之前先用新 state 重跑 render，所以 effect 看到的
+   * closure 已經是乾淨值 —— 窗口從根本消失，不需要額外的 override 參數或
+   * ref，也少掉「先用舊值抓一次、再用新值抓一次」的多餘請求。
+   */
+  const [paramsSourceId, setParamsSourceId] = useState(sourceId);
+  if (paramsSourceId !== sourceId) {
+    setParamsSourceId(sourceId);
     setSourceFilters([]);
     setFilterSelections([]);
     setFiltersError('');
     // 關鍵字也要跟著清：換來源後同一個關鍵字的搜尋範圍／分類語意都變了
     setKeywordInput('');
     setKeyword('');
+  }
+
+  useEffect(() => {
     if (!sourceId) return;
 
     let cancelled = false;
@@ -174,19 +191,8 @@ export default function MangaRecommendPage() {
     getAllMangaShelf().then(setShelf).catch(() => undefined);
   }, []);
 
-  const fetchRecommend = useCallback(async (
-    nextPage: number,
-    append: boolean,
-    /** 換來源時呼叫端必須明確傳入，不能信任 closure（見下方註解） */
-    overrides?: { filters?: MangaFilterSelection[]; keyword?: string }
-  ) => {
+  const fetchRecommend = useCallback(async (nextPage: number, append: boolean) => {
     if (!sourceId) return;
-
-    /* effect 裡的 setState 不會改寫「同一輪 render 已建立的 closure」。
-       換來源時 sourceId 已是新值，filterSelections/keyword 卻還是舊來源的，
-       照送就會把使用者在前一個來源打的關鍵字洩漏給他沒選擇的新來源。 */
-    const activeFilters = overrides?.filters ?? filterSelections;
-    const activeKeyword = overrides?.keyword ?? keyword;
 
     const requestId = ++recommendRequestRef.current;
 
@@ -203,11 +209,11 @@ export default function MangaRecommendPage() {
         type: recommendType,
         page: String(nextPage),
       });
-      if (activeFilters.length > 0) {
-        params.set('filters', JSON.stringify(activeFilters));
+      if (filterSelections.length > 0) {
+        params.set('filters', JSON.stringify(filterSelections));
       }
-      if (activeKeyword) {
-        params.set('q', activeKeyword);
+      if (keyword) {
+        params.set('q', keyword);
       }
       const res = await fetch(`/api/manga/recommend?${params.toString()}`);
       if (recommendRequestRef.current !== requestId) return;
@@ -253,8 +259,6 @@ export default function MangaRecommendPage() {
 
   useEffect(() => {
     recommendRequestRef.current += 1;
-    const sourceJustChanged = prevSourceRef.current !== sourceId;
-    prevSourceRef.current = sourceId;
     if (!sourceId) {
       setResult({ mangas: [], hasNextPage: false });
       setPage(1);
@@ -262,11 +266,7 @@ export default function MangaRecommendPage() {
       setLoadingMore(false);
       return;
     }
-    void fetchRecommend(
-      1,
-      false,
-      sourceJustChanged ? { filters: [], keyword: '' } : undefined
-    );
+    void fetchRecommend(1, false);
   }, [fetchRecommend, sourceId]);
 
   useEffect(() => {

@@ -51,10 +51,6 @@ export async function GET(request: NextRequest) {
     if (!Number.isInteger(pageParam) || pageParam < 1) {
       return NextResponse.json({ error: 'page 参数无效' }, { status: 400 });
     }
-    // 見 MAX_PAGE 的註解：這是「沒有更多」，不是呼叫端的錯。
-    if (pageParam > MAX_PAGE) {
-      return NextResponse.json({ mangas: [], hasNextPage: false });
-    }
 
     const filters = parseMangaFilterSelections(searchParams.get('filters'));
     if (filters === null) {
@@ -62,6 +58,17 @@ export async function GET(request: NextRequest) {
         { error: 'filters 参数格式无效' },
         { status: 400 }
       );
+    }
+
+    /*
+     * 見 MAX_PAGE 的註解：這是「沒有更多」，不是呼叫端的錯。
+     *
+     * 這個早退必須排在**所有格式驗證之後** —— 放前面的話，
+     * `?page=10001&filters=<格式錯誤>` 會拿到 200 而不是 400，
+     * 格式無效的輸入被靜默接受。
+     */
+    if (pageParam > MAX_PAGE) {
+      return NextResponse.json({ mangas: [], hasNextPage: false });
     }
 
     const result = await suwayomiClient.getRecommendedManga(

@@ -1,6 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 
-import { parseMangaSourceIds } from '@/lib/manga-search-params';
+import {
+  MAX_KEYWORD_LENGTH,
+  parseMangaPage,
+  parseMangaSourceIds,
+} from '@/lib/manga-search-params';
 import { isAllMangaSourcesFailed } from '@/lib/manga.types';
 import { suwayomiClient } from '@/lib/suwayomi.client';
 
@@ -19,10 +23,26 @@ export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
   const q = searchParams.get('q')?.trim();
   const sourceIds = parseMangaSourceIds(searchParams);
-  const page = Number(searchParams.get('page') || '1');
+  const parsedPage = parseMangaPage(searchParams.get('page'));
+
+  /*
+   * 與 /api/manga/search 同一組防線：這條也是對所有啟用來源 fan-out，
+   * 畸形 page 或超長關鍵字會放大成數十次對外請求。
+   * 格式驗證排在語意性早退之前。
+   */
+  if (q && q.length > MAX_KEYWORD_LENGTH) {
+    return NextResponse.json({ error: '搜索关键词过长' }, { status: 400 });
+  }
+  if (!parsedPage.ok && parsedPage.reason === 'invalid') {
+    return NextResponse.json({ error: 'page 参数无效' }, { status: 400 });
+  }
 
   if (!q) {
     return NextResponse.json({ error: '缺少搜索关键词' }, { status: 400 });
+  }
+  // 超出願意轉發的頁數：這條是 SSE，回一個立即結束的空結果比開串流合理
+  if (!parsedPage.ok) {
+    return NextResponse.json({ results: [] });
   }
 
   const encoder = new TextEncoder();
@@ -56,7 +76,7 @@ export async function GET(request: NextRequest) {
             const outcome = await suwayomiClient.searchMangaSourceWithDeadline(
               q,
               source,
-              page
+              parsedPage.page
             );
 
             // 進度與事件共用同一段 payload，且遞增在分支之前只出現一次：

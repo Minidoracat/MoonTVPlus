@@ -65,7 +65,13 @@ function formatMangaRecommendError(message: string): string {
 export default function MangaRecommendPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const [sources, setSources] = useState<MangaSource[]>([]);
+  /*
+   * `null` 代表「還沒載入完」，`[]` 才是「確實沒有可用來源」。
+   * 用初值 `[]` 的話，`/api/manga/sources` 還在飛的時候畫面就會斷言
+   * 「暂无可用漫画源」—— 與本輪修掉的「当前源暂无推荐内容」同一個誤報
+   * 家族（拿空集合的初值去斷言空結果）。
+   */
+  const [sources, setSources] = useState<MangaSource[] | null>(null);
   const [sourceProbe, setSourceProbe] = useState<
     Record<string, MangaSourceProbeSummary>
   >({});
@@ -213,7 +219,11 @@ export default function MangaRecommendPage() {
           );
         });
       })
-      .catch(() => undefined);
+      .catch(() => {
+        // 失敗也要結束「載入中」，否則畫面永遠停在骨架。對使用者的意義
+        // 與「確實沒有可用來源」相同：都無法選源。
+        setSources([]);
+      });
 
     getAllMangaShelf().then(setShelf).catch(() => undefined);
   }, []);
@@ -254,6 +264,13 @@ export default function MangaRecommendPage() {
         mangas: append ? [...prev.mangas, ...data.mangas] : data.mangas,
         hasNextPage: data.hasNextPage,
       }));
+      /*
+       * 成功了就把 error 清掉。append 路徑沒有在開頭清（開頭只清 !append），
+       * 留著會讓哨兵在之後真的到底時（hasNextPage 變 false）檢查到殘留的
+       * error 而顯示重試按鈕 —— 使用者已經看完所有頁，卻被告知載入失敗，
+       * 而且點下去又是「成功但沒有新資料」，永遠看不到「没有更多了」。
+       */
+      setError('');
     } catch (err) {
       if (recommendRequestRef.current !== requestId) return;
       setError(formatMangaRecommendError((err as Error).message));
@@ -364,7 +381,9 @@ export default function MangaRecommendPage() {
       <section className='space-y-4 rounded-3xl border border-gray-200/70 bg-white/80 p-4 shadow-sm dark:border-gray-800 dark:bg-gray-950/70 sm:p-5'>
         <div className='space-y-2'>
           <div className='text-sm font-medium text-gray-700 dark:text-gray-200'>漫画源</div>
-          {sources.length > 0 ? (
+          {sources === null ? (
+            <div className='h-11 animate-pulse rounded-2xl bg-gray-100 dark:bg-gray-900' />
+          ) : sources.length > 0 ? (
             <MangaSourcePicker
               sources={sources}
               value={sourceId}

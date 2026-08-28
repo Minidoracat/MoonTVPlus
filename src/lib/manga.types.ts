@@ -56,12 +56,24 @@ export interface MangaFilterGroupOption {
  *
  * `group` 是「分類多選」的實際形態：一組勾選框（實測 Komiic 的「類型」有
  * 71 項）。`checkbox` 是頂層單一勾選（例如 vomic 的開關）。
+ * `group_select` 是**群組內的單選下拉**（實測喜漫的「分组标签」群組內是
+ * 4 個 SelectFilter，各對應一種「类型」的標籤集）—— 對使用者呈現上就是
+ * 一般下拉，只是提交時要走 groupChange。
  */
 export type MangaSourceFilterOption =
   | {
       /** Suwayomi filter 在 filters 陣列中的位置，送回去時必填 */
       position: number;
       kind: 'select' | 'sort';
+      name: string;
+      values: string[];
+    }
+  | {
+      /** 所屬群組在頂層 filters 陣列中的位置 */
+      position: number;
+      kind: 'group_select';
+      /** 下拉自己在群組內的原始位置 */
+      innerPosition: number;
       name: string;
       values: string[];
     }
@@ -93,6 +105,12 @@ export type MangaFilterSelection =
     }
   | {
       position: number;
+      kind: 'group_select';
+      innerPosition: number;
+      index: number;
+    }
+  | {
+      position: number;
       kind: 'group';
       /** 勾選項在群組內的原始 position 清單（見 MangaFilterGroupOption） */
       positions: number[];
@@ -103,13 +121,22 @@ export type MangaFilterSelection =
       checked: boolean;
     };
 
-/** Suwayomi fetchSourceManga 的 FilterChangeInput（我們用到的子集） */
+/**
+ * Suwayomi fetchSourceManga 的 FilterChangeInput（我們用到的子集）。
+ *
+ * groupChange 在真實 schema 是遞迴的 FilterChangeInput —— 已用 introspection
+ * 確認並對喜漫實測 `groupChange: { position, selectState }` 生效。
+ */
 export interface SuwayomiFilterChange {
   position: number;
   selectState?: number;
   sortState?: { index: number; ascending: boolean };
   checkBoxState?: boolean;
-  groupChange?: { position: number; checkBoxState: boolean };
+  groupChange?: {
+    position: number;
+    checkBoxState?: boolean;
+    selectState?: number;
+  };
 }
 
 /**
@@ -137,6 +164,16 @@ export function buildFilterChangeInputs(
       case 'select':
         return [
           { position: selection.position, selectState: selection.index },
+        ];
+      case 'group_select':
+        return [
+          {
+            position: selection.position,
+            groupChange: {
+              position: selection.innerPosition,
+              selectState: selection.index,
+            },
+          },
         ];
       case 'checkbox':
         return [

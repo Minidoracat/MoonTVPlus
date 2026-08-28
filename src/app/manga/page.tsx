@@ -414,6 +414,79 @@ export default function MangaRecommendPage() {
                     </div>
                   );
                 })}
+              {/* 群組內單選下拉（喜漫的「分组标签」）：識別鍵是
+                  (position, innerPosition) —— 同一群組的多個下拉共用頂層
+                  position，rest 過濾若只比 position 會把兄弟下拉的選擇清掉 */}
+              {sourceFilters
+                .filter(
+                  (f): f is Extract<MangaSourceFilterOption, { kind: 'group_select' }> =>
+                    f.kind === 'group_select'
+                )
+                .map((filter) => {
+                  const current = filterSelections.find(
+                    (
+                      item
+                    ): item is Extract<
+                      MangaFilterSelection,
+                      { kind: 'group_select' }
+                    > =>
+                      item.kind === 'group_select' &&
+                      item.position === filter.position &&
+                      item.innerPosition === filter.innerPosition
+                  );
+                  const selectId = `manga-filter-${filter.position}-${filter.innerPosition}`;
+                  return (
+                    <div
+                      key={`${filter.position}-${filter.innerPosition}`}
+                      className='space-y-1'
+                    >
+                      <label
+                        htmlFor={selectId}
+                        className='block text-xs text-gray-500 dark:text-gray-400'
+                      >
+                        {filter.name}
+                      </label>
+                      <select
+                        id={selectId}
+                        value={current ? String(current.index) : ''}
+                        onChange={(event) => {
+                          const raw = event.target.value;
+                          setFilterSelections((prev) => {
+                            const rest = prev.filter(
+                              (item) =>
+                                !(
+                                  item.kind === 'group_select' &&
+                                  item.position === filter.position &&
+                                  item.innerPosition === filter.innerPosition
+                                )
+                            );
+                            if (raw === '') return rest;
+                            return [
+                              ...rest,
+                              {
+                                position: filter.position,
+                                kind: 'group_select',
+                                innerPosition: filter.innerPosition,
+                                index: Number(raw),
+                              },
+                            ];
+                          });
+                        }}
+                        className='h-11 w-full cursor-pointer rounded-2xl border border-gray-200 bg-gray-50 px-3 text-sm text-gray-900 outline-none transition-colors duration-200 focus:border-sky-500 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-100'
+                      >
+                        <option value=''>不限</option>
+                        {filter.values.map((label, index) => (
+                          <option
+                            key={`${filter.position}-${filter.innerPosition}-${index}`}
+                            value={index}
+                          >
+                            {label}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  );
+                })}
               {/* 頂層單一勾選（少見，vomic 等 2 顆來源）：與下拉同格擺放 */}
               {sourceFilters
                 .filter(
@@ -496,8 +569,14 @@ export default function MangaRecommendPage() {
                               (item) => item !== innerPosition
                             )
                           : [...currentPositions, innerPosition];
+                        // 只移除自己（kind='group'）：混合群組下同一 position
+                        // 還可能掛著 group_select 的兄弟選擇，不可連帶清掉
                         const rest = prev.filter(
-                          (item) => item.position !== filter.position
+                          (item) =>
+                            !(
+                              item.kind === 'group' &&
+                              item.position === filter.position
+                            )
                         );
                         // 全部取消勾選 = 移除這個 filter，不送空陣列
                         return nextPositions.length > 0
@@ -514,7 +593,13 @@ export default function MangaRecommendPage() {
                     }}
                     onClear={() => {
                       setFilterSelections((prev) =>
-                        prev.filter((item) => item.position !== filter.position)
+                        prev.filter(
+                          (item) =>
+                            !(
+                              item.kind === 'group' &&
+                              item.position === filter.position
+                            )
+                        )
                       );
                     }}
                   />

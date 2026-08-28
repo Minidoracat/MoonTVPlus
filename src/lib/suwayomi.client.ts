@@ -1043,6 +1043,7 @@ ${fields}
               filters {
                 __typename
                 ... on CheckBoxFilter { name }
+                ... on SelectFilter { name values }
               }
             }
           }
@@ -1054,7 +1055,7 @@ ${fields}
       __typename?: string;
       name?: string;
       values?: string[];
-      filters?: Array<{ __typename?: string; name?: string }>;
+      filters?: Array<{ __typename?: string; name?: string; values?: string[] }>;
     }
     const data = await this.graphqlRequest<{
       source?: { filters?: RawFilter[] };
@@ -1088,10 +1089,16 @@ ${fields}
       }
 
       if (filter.__typename === 'GroupFilter') {
-        // 群組內只取 CheckBox，但 position 必須是**群組內原始位置**：
-        // 群組內可能混有其他型別，用過濾後的索引會讓 groupChange 勾錯項
-        const inner = (filter.filters || [])
-          .map((item, innerPosition) => ({ item, innerPosition }))
+        // 群組內取 CheckBox（→ chip 多選）與 Select（→ 一般下拉，實測喜漫的
+        // 「分组标签」群組內是 4 個 SelectFilter）。position 必須是**群組內
+        // 原始位置**：群組內混有其他型別時，用過濾後的索引會讓 groupChange
+        // 改錯項。
+        const indexed = (filter.filters || []).map((item, innerPosition) => ({
+          item,
+          innerPosition,
+        }));
+
+        const checkboxes = indexed
           .filter(
             ({ item }) =>
               item.__typename === 'CheckBoxFilter' &&
@@ -1102,13 +1109,30 @@ ${fields}
             position: innerPosition,
             name: item.name as string,
           }));
-        if (inner.length === 0) return;
-        options.push({
-          position,
-          kind: 'group',
-          name: filter.name,
-          options: inner,
-        });
+        if (checkboxes.length > 0) {
+          options.push({
+            position,
+            kind: 'group',
+            name: filter.name,
+            options: checkboxes,
+          });
+        }
+
+        for (const { item, innerPosition } of indexed) {
+          if (item.__typename !== 'SelectFilter') continue;
+          if (typeof item.name !== 'string' || item.name.length === 0) continue;
+          const values = (item.values || []).filter(
+            (v): v is string => typeof v === 'string'
+          );
+          if (values.length === 0) continue;
+          options.push({
+            position,
+            kind: 'group_select',
+            innerPosition,
+            name: item.name,
+            values,
+          });
+        }
       }
     });
     return options;

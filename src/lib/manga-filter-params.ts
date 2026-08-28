@@ -69,6 +69,14 @@ export function parseMangaFilterSelections(
       continue;
     }
 
+    if (kind === 'group_select') {
+      const innerPosition = readNumber(entry, 'innerPosition');
+      const index = readNumber(entry, 'index');
+      if (innerPosition === null || index === null) return null;
+      out.push({ position, kind, innerPosition, index });
+      continue;
+    }
+
     if (kind === 'group') {
       const rawPositions =
         'positions' in entry ? Reflect.get(entry, 'positions') : undefined;

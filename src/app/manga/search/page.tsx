@@ -24,6 +24,24 @@ import MangaSourceMultiPicker from '@/components/manga/MangaSourceMultiPicker';
 
 const MANGA_SEARCH_STATE_KEY = 'manga_search_state';
 
+/** 結果的排列方式。arrival 是既有行為：誰先回應誰在前。 */
+type MangaResultSort = 'arrival' | 'source' | 'title';
+
+/**
+ * 一顆來源這次搜尋失敗的紀錄。
+ *
+ * SSE 的 source_error 原本只寫進 health 量測（供 picker 顯示燈號），
+ * 沒有留給畫面用。放寬來源上限後失敗來源會變多（實測 51 顆裡有 8 顆
+ * 搜尋直接失敗、2 顆超過 per-source deadline），使用者需要知道
+ * 「不是沒有結果，是這幾顆沒回來」。
+ */
+interface MangaSearchFailedSource {
+  sourceId: string;
+  sourceName: string;
+  error: string;
+  timedOut: boolean;
+}
+
 function MangaCardSkeleton({ withButton = false }: { withButton?: boolean }) {
   return (
     <div className='space-y-2'>
@@ -75,6 +93,12 @@ export default function MangaSearchPage() {
   >({});
   const pendingHealthRef = useRef<MangaSourceHealthEntry[]>([]);
   const [maxSources, setMaxSources] = useState<number | undefined>(undefined);
+  const [failedSources, setFailedSources] = useState<MangaSearchFailedSource[]>([]);
+  /** 空陣列 = 不篩選（顯示全部來源的結果） */
+  const [sourceFilter, setSourceFilter] = useState<string[]>([]);
+  const [sortMode, setSortMode] = useState<MangaResultSort>('arrival');
+  const [groupBySource, setGroupBySource] = useState(false);
+  const [showFailedDetail, setShowFailedDetail] = useState(false);
 
   useEffect(() => {
     setSourceHealth(readMangaSourceHealth());
@@ -212,6 +236,14 @@ export default function MangaSearchPage() {
       setLastSearchedSourceId(normalizedSourceId);
       setTotalSources(0);
       setCompletedSources(0);
+      setFailedSources([]);
+      setShowFailedDetail(false);
+      /*
+       * 來源篩選也要清：上一次搜尋選的來源在這次可能根本沒有結果，
+       * 留著會讓畫面看起來「什麼都沒搜到」。排序與分組是使用者的顯示
+       * 偏好，跨搜尋保留。
+       */
+      setSourceFilter([]);
 
       // 結果一律重新向伺服器取得。不從本地快取先畫 ——
       // 那會讓剛被停用的來源內容短暫顯示出來，等同繞過授權。
@@ -258,6 +290,16 @@ export default function MangaSearchPage() {
                   failed: true,
                   timedOut: payload.timedOut === true,
                 });
+                // 也留給畫面：使用者要能分辨「沒有結果」與「這幾顆沒回來」
+                setFailedSources((prev) => [
+                  ...prev,
+                  {
+                    sourceId: String(payload.sourceId || ''),
+                    sourceName: String(payload.sourceName || payload.sourceId || '未知来源'),
+                    error: String(payload.error || '搜索失败').split('\n')[0].slice(0, 160),
+                    timedOut: payload.timedOut === true,
+                  },
+                ]);
                 break;
               case 'error':
                 streamFinished = true;
@@ -357,6 +399,19 @@ export default function MangaSearchPage() {
               : '所有来源都搜索失败'
           );
         }
+        // 非流式路徑也要把失敗來源留給畫面，兩條路徑的可見度要一致
+        if (Array.isArray(data.failedSources)) {
+          setFailedSources(
+            data.failedSources.map(
+              (f: { sourceId?: string; sourceName?: string; error?: string; timedOut?: boolean }) => ({
+                sourceId: String(f.sourceId || ''),
+                sourceName: String(f.sourceName || f.sourceId || '未知来源'),
+                error: String(f.error || '搜索失败').split('\n')[0].slice(0, 160),
+                timedOut: f.timedOut === true,
+              })
+            )
+          );
+        }
         // 非流式路徑同樣要累積來源健康度，否則關閉流式搜尋後速度標記永遠不更新
         if (Array.isArray(data.measurements) && data.measurements.length > 0) {
           setSourceHealth(recordMangaSourceHealth(data.measurements));
@@ -451,6 +506,72 @@ export default function MangaSearchPage() {
     return queryString ? `/manga/search?${queryString}` : '/manga/search';
   }, [lastSearchedQuery, lastSearchedSourceId]);
 
+  /**
+   * 每個有結果的來源與其筆數，供篩選 chip 顯示。
+   *
+   * 依筆數由多到少排：實測單一來源最多回 100 筆（包子漫画每次都接近上限），
+   * 一顆就佔全部結果的四到五成，把它排在前面比字典序有用。
+   */
+  const sourceBuckets = useMemo(() => {
+    const counts = new Map<string, { sourceId: string; sourceName: string; count: number }>();
+    for (const item of results) {
+      const existing = counts.get(item.sourceId);
+      if (existing) {
+        existing.count += 1;
+      } else {
+        counts.set(item.sourceId, {
+          sourceId: item.sourceId,
+          sourceName: item.sourceName || item.sourceId,
+          count: 1,
+        });
+      }
+    }
+    return Array.from(counts.values()).sort((a, b) => b.count - a.count);
+  }, [results]);
+
+  /** 套用來源篩選與排序後、真正要畫出來的結果 */
+  const visibleResults = useMemo(() => {
+    const allowed = sourceFilter.length > 0 ? new Set(sourceFilter) : null;
+    const filtered = allowed
+      ? results.filter((item) => allowed.has(item.sourceId))
+      : results;
+    if (sortMode === 'arrival') return filtered;
+    /*
+     * 一定要複製再排：results 是 state，就地 sort 會改到 state 物件本身，
+     * React 比對不到變化，而下一次 append 又是基於被改過的陣列。
+     */
+    const sorted = [...filtered];
+    if (sortMode === 'title') {
+      sorted.sort((a, b) => a.title.localeCompare(b.title, 'zh-Hant'));
+    } else {
+      // source：來源名排序，同來源內維持到達順序（sort 是穩定的）
+      sorted.sort((a, b) =>
+        (a.sourceName || a.sourceId).localeCompare(b.sourceName || b.sourceId, 'zh-Hant')
+      );
+    }
+    return sorted;
+  }, [results, sourceFilter, sortMode]);
+
+  /**
+   * 分組模式下的區塊。區塊順序沿用 sourceBuckets（筆數多的在前），
+   * 區塊內順序沿用 visibleResults 已套好的排序。
+   */
+  const groupedResults = useMemo(() => {
+    if (!groupBySource) return [];
+    const bySource = new Map<string, MangaSearchItem[]>();
+    for (const item of visibleResults) {
+      const list = bySource.get(item.sourceId);
+      if (list) list.push(item);
+      else bySource.set(item.sourceId, [item]);
+    }
+    return sourceBuckets
+      .filter((bucket) => bySource.has(bucket.sourceId))
+      .map((bucket) => ({
+        ...bucket,
+        items: bySource.get(bucket.sourceId) as MangaSearchItem[],
+      }));
+  }, [groupBySource, visibleResults, sourceBuckets]);
+
   const toggleShelf = async (item: MangaSearchItem) => {
     const key = `${item.sourceId}+${item.id}`;
     if (shelf[key]) {
@@ -476,6 +597,26 @@ export default function MangaSearchPage() {
     };
     await saveMangaShelf(item.sourceId, item.id, shelfItem);
     setShelf((prev) => ({ ...prev, [key]: shelfItem }));
+  };
+
+  /** 分組模式與平鋪模式共用同一份卡片渲染，避免兩邊各改一次而長歪 */
+  const renderResultCard = (item: MangaSearchItem) => {
+    const key = `${item.sourceId}+${item.id}`;
+    return (
+      <div key={key} className='space-y-2'>
+        <MangaCard
+          item={item}
+          href={`/manga/detail?mangaId=${item.id}&sourceId=${item.sourceId}&title=${encodeURIComponent(item.title)}&cover=${encodeURIComponent(item.cover)}&sourceName=${encodeURIComponent(item.sourceName)}&description=${encodeURIComponent(item.description || '')}&author=${encodeURIComponent(item.author || '')}&status=${encodeURIComponent(item.status || '')}&returnTo=${encodeURIComponent(returnTo)}`}
+          subtitle={item.author || item.status || item.description}
+        />
+        <button
+          onClick={() => toggleShelf(item)}
+          className='w-full rounded-2xl border border-gray-200 px-3 py-2 text-xs font-medium text-gray-700 transition hover:border-sky-500 hover:text-sky-600 dark:border-gray-700 dark:text-gray-200'
+        >
+          {shelf[key] ? '移出书架' : '加入书架'}
+        </button>
+      </div>
+    );
   };
 
   return (
@@ -506,15 +647,123 @@ export default function MangaSearchPage() {
       </form>
 
       <section>
-        <div className='mb-4 flex items-center justify-between gap-3'>
-          <h2 className='text-lg font-semibold'>搜索结果{results.length > 0 ? `（${results.length}）` : ''}</h2>
-          {loading && useFluidSearch && totalSources > 0 && (
-            <span className='text-xs text-gray-500 dark:text-gray-400'>
-              搜索中 {completedSources}/{totalSources}
-            </span>
-          )}
+        <div className='mb-3 flex flex-wrap items-center justify-between gap-3'>
+          <h2 className='text-lg font-semibold'>
+            搜索结果
+            {results.length > 0
+              ? visibleResults.length === results.length
+                ? `（${results.length}）`
+                : `（${visibleResults.length} / ${results.length}）`
+              : ''}
+          </h2>
+          <div className='flex flex-wrap items-center gap-2 text-xs'>
+            {loading && useFluidSearch && totalSources > 0 && (
+              <span className='text-gray-500 dark:text-gray-400'>
+                搜索中 {completedSources}/{totalSources}
+              </span>
+            )}
+            {results.length > 0 && (
+              <>
+                <label className='flex items-center gap-1 text-gray-500 dark:text-gray-400'>
+                  排序
+                  <select
+                    value={sortMode}
+                    onChange={(event) => setSortMode(event.target.value as MangaResultSort)}
+                    className='min-h-9 cursor-pointer rounded-xl border border-gray-200 bg-gray-50 px-2 text-xs text-gray-900 outline-none transition focus:border-sky-500 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-100'
+                  >
+                    <option value='arrival'>來源回應順序</option>
+                    <option value='source'>來源名稱</option>
+                    <option value='title'>標題</option>
+                  </select>
+                </label>
+                <button
+                  type='button'
+                  onClick={() => setGroupBySource((prev) => !prev)}
+                  className={`min-h-9 rounded-xl border px-3 transition-colors ${
+                    groupBySource
+                      ? 'border-sky-500 bg-sky-50 text-sky-700 dark:bg-sky-950/40 dark:text-sky-300'
+                      : 'border-gray-200 text-gray-600 hover:border-sky-500 dark:border-gray-700 dark:text-gray-300'
+                  }`}
+                >
+                  {groupBySource ? '依來源分組：開' : '依來源分組：關'}
+                </button>
+              </>
+            )}
+          </div>
         </div>
+
+        {/* 來源篩選：放寬上限後結果會來自數十顆來源，而 grid 是按到達順序排的，
+            最快的兩三顆會霸佔前排。沒有這排 chip 使用者滾不到其他來源。 */}
+        {sourceBuckets.length > 1 && (
+          <div className='mb-3 flex flex-wrap items-center gap-2'>
+            <button
+              type='button'
+              onClick={() => setSourceFilter([])}
+              className={`min-h-9 rounded-full border px-3 text-xs transition-colors ${
+                sourceFilter.length === 0
+                  ? 'border-sky-500 bg-sky-50 text-sky-700 dark:bg-sky-950/40 dark:text-sky-300'
+                  : 'border-gray-200 text-gray-600 hover:border-sky-500 dark:border-gray-700 dark:text-gray-300'
+              }`}
+            >
+              全部（{results.length}）
+            </button>
+            {sourceBuckets.map((bucket) => {
+              const active = sourceFilter.includes(bucket.sourceId);
+              return (
+                <button
+                  key={bucket.sourceId}
+                  type='button'
+                  onClick={() =>
+                    setSourceFilter((prev) =>
+                      prev.includes(bucket.sourceId)
+                        ? prev.filter((id) => id !== bucket.sourceId)
+                        : [...prev, bucket.sourceId]
+                    )
+                  }
+                  className={`min-h-9 rounded-full border px-3 text-xs transition-colors ${
+                    active
+                      ? 'border-sky-500 bg-sky-50 text-sky-700 dark:bg-sky-950/40 dark:text-sky-300'
+                      : 'border-gray-200 text-gray-600 hover:border-sky-500 dark:border-gray-700 dark:text-gray-300'
+                  }`}
+                >
+                  {bucket.sourceName}（{bucket.count}）
+                </button>
+              );
+            })}
+          </div>
+        )}
+
         {error && <div className='mb-4 text-sm text-red-500'>{error}</div>}
+
+        {/* 失敗來源要可見：放寬上限後實測 51 顆裡有 8 顆搜尋失敗、2 顆超過
+            per-source deadline。不顯示的話使用者會把「這幾顆沒回來」誤讀成
+            「這些來源沒有這部作品」。 */}
+        {failedSources.length > 0 && (
+          <div className='mb-4 rounded-2xl bg-amber-50 px-4 py-3 text-xs text-amber-800 dark:bg-amber-950/30 dark:text-amber-200'>
+            <button
+              type='button'
+              onClick={() => setShowFailedDetail((prev) => !prev)}
+              className='font-medium underline-offset-2 hover:underline'
+            >
+              {failedSources.length} 个来源没有回应
+              {failedSources.some((f) => f.timedOut)
+                ? `（含 ${failedSources.filter((f) => f.timedOut).length} 个超时）`
+                : ''}
+              ，{showFailedDetail ? '收起' : '展开'}
+            </button>
+            {showFailedDetail && (
+              <ul className='mt-2 space-y-1'>
+                {failedSources.map((failed) => (
+                  <li key={failed.sourceId}>
+                    <span className='font-medium'>{failed.sourceName}</span>
+                    {failed.timedOut ? '（超时）' : ''}：{failed.error}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
+
         {loading && results.length === 0 ? (
           <div className='grid grid-cols-2 gap-4 md:grid-cols-4 xl:grid-cols-6'>
             {Array.from({ length: 12 }).map((_, index) => (
@@ -525,26 +774,29 @@ export default function MangaSearchPage() {
           <div className='rounded-2xl bg-gray-50 p-10 text-center text-sm text-gray-500 dark:bg-gray-900/50'>
             {hasSearched ? '没有找到相关漫画' : '请输入关键词开始搜索漫画'}
           </div>
+        ) : visibleResults.length === 0 ? (
+          <div className='rounded-2xl bg-gray-50 p-10 text-center text-sm text-gray-500 dark:bg-gray-900/50'>
+            目前的来源筛选没有结果，换一个来源或点「全部」
+          </div>
+        ) : groupBySource ? (
+          <div className='space-y-6'>
+            {groupedResults.map((group) => (
+              <div key={group.sourceId} className='space-y-3'>
+                <div className='flex items-center gap-2 text-sm font-medium text-gray-700 dark:text-gray-200'>
+                  {group.sourceName}
+                  <span className='text-xs text-gray-500 dark:text-gray-400'>
+                    {group.items.length} 部
+                  </span>
+                </div>
+                <div className='grid grid-cols-2 gap-4 md:grid-cols-4 xl:grid-cols-6'>
+                  {group.items.map(renderResultCard)}
+                </div>
+              </div>
+            ))}
+          </div>
         ) : (
           <div className='grid grid-cols-2 gap-4 md:grid-cols-4 xl:grid-cols-6'>
-            {results.map((item) => {
-              const key = `${item.sourceId}+${item.id}`;
-              return (
-                <div key={key} className='space-y-2'>
-                  <MangaCard
-                    item={item}
-                    href={`/manga/detail?mangaId=${item.id}&sourceId=${item.sourceId}&title=${encodeURIComponent(item.title)}&cover=${encodeURIComponent(item.cover)}&sourceName=${encodeURIComponent(item.sourceName)}&description=${encodeURIComponent(item.description || '')}&author=${encodeURIComponent(item.author || '')}&status=${encodeURIComponent(item.status || '')}&returnTo=${encodeURIComponent(returnTo)}`}
-                    subtitle={item.author || item.status || item.description}
-                  />
-                  <button
-                    onClick={() => toggleShelf(item)}
-                    className='w-full rounded-2xl border border-gray-200 px-3 py-2 text-xs font-medium text-gray-700 transition hover:border-sky-500 hover:text-sky-600 dark:border-gray-700 dark:text-gray-200'
-                  >
-                    {shelf[key] ? '移出书架' : '加入书架'}
-                  </button>
-                </div>
-              );
-            })}
+            {visibleResults.map(renderResultCard)}
           </div>
         )}
       </section>

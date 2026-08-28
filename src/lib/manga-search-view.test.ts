@@ -104,6 +104,18 @@ describe('作者／上傳者解析與篩選', () => {
     ).toEqual(['尾田荣一郎', '鳥山明']);
   });
 
+  it.each(['N / A', 'N /A', 'N/ A'])(
+    '多人欄位裡的空白變體「%s」也要被忽略',
+    (placeholder) => {
+      expect(
+        getMangaCreators({
+          ...item('s1', '哔咔', '2', 'T'),
+          author: `尾田，${placeholder}，鳥山`,
+        })
+      ).toEqual(['尾田', '鳥山']);
+    }
+  );
+
   it('ASCII 佔位值與 exact filter 不受瀏覽器 locale 影響', () => {
     /*
      * toLocaleLowerCase() 會採瀏覽器預設 locale；tr-TR 會把 AI 轉成 aı，

@@ -65,10 +65,23 @@ function splitCreatorField(raw: string): string[] {
        * 只有「這一段目前正好是 N」且右側是「A + delimiter/end」才是 N/A。
        * X/A社、X/A&B、Lyco./KARAi、mg_cls/白 都會走 flush，正常拆分。
        * 未知 / N/A 的第一個 slash 拆分未知，第二個 slash 才保護 N/A。
+       *
+       * 不用 raw.slice(index + 1)：逐 slash 配置剩餘字串在長髒資料下會退化成
+       * O(n × slash 數)。索引往右跳空白與 A，不建立 substring。
        */
-      const right = raw.slice(index + 1);
-      const isNa = current.trim().toLowerCase() === 'n' &&
-        /^\s*a(?=$|[\s,，、&/])/i.test(right);
+      let rightIndex = index + 1;
+      while (rightIndex < raw.length && /\s/.test(raw[rightIndex])) {
+        rightIndex += 1;
+      }
+      const rightIsA = raw[rightIndex]?.toLowerCase() === 'a';
+      let afterA = rightIndex + 1;
+      while (afterA < raw.length && /\s/.test(raw[afterA])) {
+        afterA += 1;
+      }
+      const rightEndsToken =
+        afterA >= raw.length || ',，、&/'.includes(raw[afterA]);
+      const isNa =
+        current.trim().toLowerCase() === 'n' && rightIsA && rightEndsToken;
       if (isNa) {
         current += char;
       } else {
@@ -107,10 +120,14 @@ export function getMangaCreators(item: MangaSearchItem): string[] {
     for (const part of splitCreatorField(rawName)) {
       const name = part.trim();
       const normalized = name.toLowerCase();
+      // ignore 查表要與整欄 guard 一樣移除空白，否則 scanner 保護下來的
+      // `N / A`／`N /A`／`N/ A` 會變成假作者按鈕。dedupe key 仍保留空白：
+      // 合法名稱 `A B` 與 `AB` 不該被合併。
+      const ignoredKey = name.replace(/\s+/g, '').toLowerCase();
       if (
         !name ||
         name.length > MAX_KEYWORD_LENGTH ||
-        IGNORED_CREATORS.has(normalized) ||
+        IGNORED_CREATORS.has(ignoredKey) ||
         seen.has(normalized)
       ) {
         continue;

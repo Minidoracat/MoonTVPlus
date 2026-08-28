@@ -309,6 +309,16 @@ export interface MangaSearchFailure {
   sourceId: string;
   sourceName: string;
   error: string;
+  /**
+   * 這顆來源是「超過 per-source deadline 被砍」還是「真的壞了」。
+   *
+   * 兩者對使用者的意義不同：超時多半是暫時變慢（下次可能就好），
+   * 來源故障則是持續性的。前端的失敗橫幅要能分辨，所以這個欄位是**必填**
+   * —— 先前只有 SSE 路徑送出它，`searchManga` 明明手上就有 `outcome.timedOut`
+   * 卻沒帶進來，而型別沒宣告這個欄位，於是前端讀到的永遠是 undefined，
+   * 「含 N 个超时」恆為 0 而 tsc 全綠。
+   */
+  timedOut: boolean;
 }
 
 export interface MangaSourceMeasurement {

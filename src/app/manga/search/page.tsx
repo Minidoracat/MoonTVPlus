@@ -14,6 +14,7 @@ import {
 } from '@/lib/manga-source-health';
 import {
   MangaSearchItem,
+  type MangaSearchFailure,
   MangaShelfItem,
   MangaSource,
   type MangaSourceProbeSummary,
@@ -27,20 +28,13 @@ const MANGA_SEARCH_STATE_KEY = 'manga_search_state';
 /** 結果的排列方式。arrival 是既有行為：誰先回應誰在前。 */
 type MangaResultSort = 'arrival' | 'source' | 'title';
 
-/**
- * 一顆來源這次搜尋失敗的紀錄。
+/*
+ * 失敗來源的形狀直接沿用後端的 MangaSearchFailure，不在這裡另立一份。
  *
- * SSE 的 source_error 原本只寫進 health 量測（供 picker 顯示燈號），
- * 沒有留給畫面用。放寬來源上限後失敗來源會變多（實測 51 顆裡有 8 顆
- * 搜尋直接失敗、2 顆超過 per-source deadline），使用者需要知道
- * 「不是沒有結果，是這幾顆沒回來」。
+ * 先前這裡自訂了一個同名同形的 interface，其中 timedOut 寫成 optional ——
+ * 而後端當時根本沒有這個欄位，於是「含 N 个超时」恆為 0 而 tsc 全綠。
+ * 共用同一個型別才會讓兩端漂移編不過。
  */
-interface MangaSearchFailedSource {
-  sourceId: string;
-  sourceName: string;
-  error: string;
-  timedOut: boolean;
-}
 
 function MangaCardSkeleton({ withButton = false }: { withButton?: boolean }) {
   return (
@@ -93,7 +87,7 @@ export default function MangaSearchPage() {
   >({});
   const pendingHealthRef = useRef<MangaSourceHealthEntry[]>([]);
   const [maxSources, setMaxSources] = useState<number | undefined>(undefined);
-  const [failedSources, setFailedSources] = useState<MangaSearchFailedSource[]>([]);
+  const [failedSources, setFailedSources] = useState<MangaSearchFailure[]>([]);
   /** 空陣列 = 不篩選（顯示全部來源的結果） */
   const [sourceFilter, setSourceFilter] = useState<string[]>([]);
   const [sortMode, setSortMode] = useState<MangaResultSort>('arrival');
@@ -402,14 +396,12 @@ export default function MangaSearchPage() {
         // 非流式路徑也要把失敗來源留給畫面，兩條路徑的可見度要一致
         if (Array.isArray(data.failedSources)) {
           setFailedSources(
-            data.failedSources.map(
-              (f: { sourceId?: string; sourceName?: string; error?: string; timedOut?: boolean }) => ({
-                sourceId: String(f.sourceId || ''),
-                sourceName: String(f.sourceName || f.sourceId || '未知来源'),
-                error: String(f.error || '搜索失败').split('\n')[0].slice(0, 160),
-                timedOut: f.timedOut === true,
-              })
-            )
+            (data.failedSources as MangaSearchFailure[]).map((f) => ({
+              sourceId: String(f.sourceId || ''),
+              sourceName: String(f.sourceName || f.sourceId || '未知来源'),
+              error: String(f.error || '搜索失败').split('\n')[0].slice(0, 160),
+              timedOut: f.timedOut === true,
+            }))
           );
         }
         // 非流式路徑同樣要累積來源健康度，否則關閉流式搜尋後速度標記永遠不更新
@@ -474,6 +466,16 @@ export default function MangaSearchPage() {
       setTotalSources(0);
       setCompletedSources(0);
       setError('');
+      /*
+       * 失敗來源與篩選也要清。這個分支是「同一個頁面實例導航回沒有 q 的
+       * /manga/search」（側邊欄的「搜索」連結就是裸路徑），元件不會 remount，
+       * 所以 state 全都留著。漏清的話畫面下半顯示「请输入关键词开始搜索漫画」，
+       * 上方卻掛著上一次搜尋的「N 个来源没有回应」橫幅，展開還能列出細節 ——
+       * 使用者會把它當成這次（還沒發生的）搜尋的狀態。
+       */
+      setFailedSources([]);
+      setShowFailedDetail(false);
+      setSourceFilter([]);
       return;
     }
 
@@ -507,10 +509,17 @@ export default function MangaSearchPage() {
   }, [lastSearchedQuery, lastSearchedSourceId]);
 
   /**
-   * 每個有結果的來源與其筆數，供篩選 chip 顯示。
+   * 每個有結果的來源與其筆數，供篩選 chip 與分組區塊使用。
    *
-   * 依筆數由多到少排：實測單一來源最多回 100 筆（包子漫画每次都接近上限），
-   * 一顆就佔全部結果的四到五成，把它排在前面比字典序有用。
+   * **串流期間刻意不排序。** Map 的迭代是插入順序，也就是各來源首次回應的
+   * 順序，在串流中是穩定的（新來源只加在尾端）。依筆數排的話 chip 會在
+   * 3 秒內重排三十幾次（單一來源一次進 100 筆就從隊尾跳到隊首），而使用者
+   * 若在 mousedown 與 mouseup 之間遇上重排，button 節點被移走、兩個事件的
+   * target 不同，瀏覽器會把 click 派送到最近共同祖先（沒有 handler）——
+   * 點擊被靜默吞掉，篩選沒套上。實測串流中 chip 前五順序變動 13 次。
+   *
+   * 串流結束後才切回筆數降序：單源最多回 100 筆、一顆就佔四到五成，
+   * 把量多的排前面比首次回應順序有用，而這時只重排一次。
    */
   const sourceBuckets = useMemo(() => {
     const counts = new Map<string, { sourceId: string; sourceName: string; count: number }>();
@@ -526,8 +535,10 @@ export default function MangaSearchPage() {
         });
       }
     }
-    return Array.from(counts.values()).sort((a, b) => b.count - a.count);
-  }, [results]);
+    const buckets = Array.from(counts.values());
+    if (loading) return buckets;
+    return buckets.sort((a, b) => b.count - a.count);
+  }, [results, loading]);
 
   /** 套用來源篩選與排序後、真正要畫出來的結果 */
   const visibleResults = useMemo(() => {
@@ -553,8 +564,12 @@ export default function MangaSearchPage() {
   }, [results, sourceFilter, sortMode]);
 
   /**
-   * 分組模式下的區塊。區塊順序沿用 sourceBuckets（筆數多的在前），
-   * 區塊內順序沿用 visibleResults 已套好的排序。
+   * 分組模式下的區塊。
+   *
+   * 區塊順序要跟著 sortMode 走：分組後每一組內部的來源都相同，所以
+   * 「來源名稱」排序若只作用在組內就完全看不出效果。選了它就改排區塊，
+   * 其餘模式沿用 sourceBuckets 的順序（串流中是首次回應順序、結束後是
+   * 筆數降序）。組內順序一律沿用 visibleResults 已套好的排序。
    */
   const groupedResults = useMemo(() => {
     if (!groupBySource) return [];
@@ -564,13 +579,17 @@ export default function MangaSearchPage() {
       if (list) list.push(item);
       else bySource.set(item.sourceId, [item]);
     }
-    return sourceBuckets
-      .filter((bucket) => bySource.has(bucket.sourceId))
-      .map((bucket) => ({
-        ...bucket,
-        items: bySource.get(bucket.sourceId) as MangaSearchItem[],
-      }));
-  }, [groupBySource, visibleResults, sourceBuckets]);
+    const ordered = sourceBuckets.filter((bucket) => bySource.has(bucket.sourceId));
+    // 複製再排：sourceBuckets 是 memo 的回傳值，chip 也在用它
+    const blocks =
+      sortMode === 'source'
+        ? [...ordered].sort((a, b) => a.sourceName.localeCompare(b.sourceName, 'zh-Hant'))
+        : ordered;
+    return blocks.map((bucket) => ({
+      ...bucket,
+      items: bySource.get(bucket.sourceId) as MangaSearchItem[],
+    }));
+  }, [groupBySource, visibleResults, sourceBuckets, sortMode]);
 
   const toggleShelf = async (item: MangaSearchItem) => {
     const key = `${item.sourceId}+${item.id}`;

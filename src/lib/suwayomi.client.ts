@@ -974,6 +974,9 @@ ${fields}
           sourceId: String(outcome.source.id),
           sourceName: outcome.sourceName,
           error: outcome.error,
+          // 上一行的 measurements 就用了 outcome.timedOut，這裡先前漏帶，
+          // 導致非流式路徑的失敗橫幅永遠分不出超時與故障
+          timedOut: outcome.timedOut,
         });
         continue;
       }

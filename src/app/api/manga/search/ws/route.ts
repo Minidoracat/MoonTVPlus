@@ -5,7 +5,10 @@ import {
   parseMangaPage,
   parseMangaSourceIds,
 } from '@/lib/manga-search-params';
-import { isAllMangaSourcesFailed } from '@/lib/manga.types';
+import {
+  isAllMangaSourcesFailed,
+  type MangaSearchFailure,
+} from '@/lib/manga.types';
 import { suwayomiClient } from '@/lib/suwayomi.client';
 
 import { getAuthorizedUsername } from '../../_utils';
@@ -63,7 +66,12 @@ export async function GET(request: NextRequest) {
         const sources = await suwayomiClient.getSearchSources(sourceIds);
         let completedSources = 0;
         let totalResults = 0;
-        const failedSources: Array<{ sourceId: string; sourceName: string; error: string }> = [];
+        /*
+         * 用 MangaSearchFailure 而不是就地寫 inline 型別：這個陣列會在
+         * complete 事件送給前端，形狀必須與非流式路徑的 failedSources 一致。
+         * inline 型別漏了 timedOut 而 tsc 不會抱怨，正是兩條路徑漂移的成因。
+         */
+        const failedSources: MangaSearchFailure[] = [];
 
         send({ type: 'start', totalSources: sources.length });
 
@@ -96,6 +104,7 @@ export async function GET(request: NextRequest) {
                 sourceId: progress.sourceId,
                 sourceName: progress.sourceName,
                 error: outcome.error,
+                timedOut: outcome.timedOut,
               });
               send({
                 type: 'source_error',

@@ -19,6 +19,7 @@ import { getConfig, isDegradedConfigObject } from '@/lib/config';
 import {
   isMangaSourceAllowed,
   MANGA_DISABLE_ALL_SENTINEL,
+  matchesSourceLang,
 } from '@/lib/manga.types';
 import { SuwayomiClient } from '@/lib/suwayomi.client';
 
@@ -187,5 +188,49 @@ describe('assertSourceAllowed 對被停用的來源必須拒絕', () => {
     setPolicy([], ['b']);
     const ids = (await client.getSearchSources(['a', 'b'])).map((s) => s.id);
     expect(ids).toEqual(['a']);
+  });
+});
+
+describe('matchesSourceLang（來源語言可見性的唯一謂詞）', () => {
+  it('不指定語言時全部通過', () => {
+    expect(matchesSourceLang('zh', undefined)).toBe(true);
+    expect(matchesSourceLang('en', undefined)).toBe(true);
+    expect(matchesSourceLang(undefined, undefined)).toBe(true);
+  });
+
+  it('zh 涵蓋 zh-Hant 與 zh-Hans', () => {
+    /*
+     * 這是這個函式存在的理由。精確比對時 DefaultLang=zh 會把繁體與簡體
+     * 來源整批排除，而它們既不參與預設搜尋、也不出現在使用者端的來源清單
+     * —— 在 UI 上完全不可達。實測被排除的 6 顆裡 NoyAcg（zh-Hant）
+     * 每次搜尋約 20 筆繁體結果。
+     */
+    expect(matchesSourceLang('zh', 'zh')).toBe(true);
+    expect(matchesSourceLang('zh-Hant', 'zh')).toBe(true);
+    expect(matchesSourceLang('zh-Hans', 'zh')).toBe(true);
+  });
+
+  it('只放寬「更廣的查詢涵蓋更窄的標籤」，不做任意前綴', () => {
+    // zhx 不是 zh 的子標籤，必須是 `zh-` 開頭
+    expect(matchesSourceLang('zhx', 'zh')).toBe(false);
+    expect(matchesSourceLang('zhuang', 'zh')).toBe(false);
+    // localsourcelang 以 'l' 開頭，不該被 'lo' 之類誤匹配
+    expect(matchesSourceLang('localsourcelang', 'zh')).toBe(false);
+  });
+
+  it('更精確的查詢不被放寬回上層', () => {
+    // 指定 zh-Hant 時不該回 zh 或 zh-Hans 的來源
+    expect(matchesSourceLang('zh-Hant', 'zh-Hant')).toBe(true);
+    expect(matchesSourceLang('zh', 'zh-Hant')).toBe(false);
+    expect(matchesSourceLang('zh-Hans', 'zh-Hant')).toBe(false);
+  });
+
+  it('來源沒有 lang 時，只有「不指定語言」才通過', () => {
+    expect(matchesSourceLang(undefined, 'zh')).toBe(false);
+    expect(matchesSourceLang('', 'zh')).toBe(false);
+  });
+
+  it('不做大小寫正規化（刻意，會牽動快取 key）', () => {
+    expect(matchesSourceLang('zh-Hant', 'zh-hant')).toBe(false);
   });
 });

@@ -7,6 +7,7 @@ import {
   buildFilterChangeInputs,
   isMangaSourceAllowed,
   MANGA_DISABLE_ALL_SENTINEL,
+  matchesSourceLang,
   MangaChapter,
   MangaDetail,
   MangaFilterSelection,
@@ -684,7 +685,9 @@ ${fields}
       }
     }
 
-    const filtered = nodes.filter((item) => !lang || item.lang === lang);
+    // 前綴匹配（zh 涵蓋 zh-Hant／zh-Hans）；判斷一律走 matchesSourceLang，
+    // 與下面的 isMangaSourceAllowed 同理 —— 不在這裡另寫一份比對邏輯。
+    const filtered = nodes.filter((item) => matchesSourceLang(item.lang, lang));
     // 判斷一律走 isMangaSourceAllowed（與 admin 面板共用同一份），
     // 不要在這裡另寫一份布林邏輯 —— 兩份會漂移。
     const scoped = unscoped

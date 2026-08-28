@@ -31,6 +31,32 @@ export function isMangaSourceAllowed(
   return true;
 }
 
+/**
+ * 來源語言是否符合要求。**唯一的判斷來源。**
+ *
+ * 用前綴匹配而不是精確比對：Suwayomi 的來源標籤裡 `zh`、`zh-Hant`、`zh-Hans`
+ * 是三個獨立值，精確比對會讓 `DefaultLang=zh` 把繁體與簡體來源整批排除 ——
+ * 而那些來源既不參與預設搜尋，也不會出現在 `/api/manga/sources` 的清單，
+ * 等於在 UI 上完全不可達。實測被排除的 6 顆裡有 2 顆真的有結果，其中
+ * NoyAcg 是繁體來源（每次搜尋約 20 筆繁體標題）。
+ *
+ * 只放寬「更廣的查詢涵蓋更窄的標籤」這一個方向：
+ *   `zh` 匹配 `zh` / `zh-Hant` / `zh-Hans`
+ *   `zh` **不**匹配 `zhx`（必須是 `zh-` 開頭，不是任意 `zh` 開頭）
+ *   `zh-Hant` 只匹配 `zh-Hant`（更精確的查詢不被放寬回 `zh`）
+ *
+ * 刻意不做大小寫正規化：那會需要同步改 getSources 的快取 key，
+ * 是另一件事。目前上游回的標籤大小寫固定（`zh-Hant`）。
+ */
+export function matchesSourceLang(
+  sourceLang: string | undefined,
+  wanted: string | undefined
+): boolean {
+  if (!wanted) return true;
+  if (!sourceLang) return false;
+  return sourceLang === wanted || sourceLang.startsWith(`${wanted}-`);
+}
+
 export type MangaContentWarning = 'SAFE' | 'MIXED' | 'NSFW';
 
 export interface MangaSource {

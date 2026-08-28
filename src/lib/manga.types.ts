@@ -132,11 +132,15 @@ export interface SuwayomiFilterChange {
   selectState?: number;
   sortState?: { index: number; ascending: boolean };
   checkBoxState?: boolean;
-  groupChange?: {
-    position: number;
-    checkBoxState?: boolean;
-    selectState?: number;
-  };
+  /**
+   * 群組內單一子項的變更。checkBoxState 與 selectState 互斥、且必須恰好給一個 ——
+   * 用 union 而非兩個各自 optional 的欄位，「都不給」與「都給」才無法編譯，
+   * 不會靜默送出上游無從解讀的請求。
+   */
+  groupChange?: { position: number } & (
+    | { checkBoxState: boolean; selectState?: never }
+    | { selectState: number; checkBoxState?: never }
+  );
 }
 
 /**

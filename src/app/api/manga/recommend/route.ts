@@ -15,6 +15,11 @@ export const runtime = 'nodejs';
  * 對漫畫站發任意長度的查詢。200 對真實書名已非常寬鬆。
  */
 const MAX_KEYWORD_LENGTH = 200;
+/**
+ * 分頁上限。漫畫來源的實際頁數遠低於此，這個值只是為了讓極大整數
+ * 不會原樣送進上游 GraphQL。
+ */
+const MAX_PAGE = 10000;
 
 export async function GET(request: NextRequest) {
   const username = await getAuthorizedUsername(request);
@@ -23,7 +28,7 @@ export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);
     const sourceId = searchParams.get('sourceId')?.trim();
-    const page = Number(searchParams.get('page') || '1');
+    const pageParam = Number(searchParams.get('page') || '1');
     const typeParam = searchParams.get('type')?.trim().toUpperCase();
     const type: MangaRecommendType = typeParam === 'LATEST' ? 'LATEST' : 'POPULAR';
     const keyword = searchParams.get('q')?.trim() || '';
@@ -34,6 +39,12 @@ export async function GET(request: NextRequest) {
 
     if (keyword.length > MAX_KEYWORD_LENGTH) {
       return NextResponse.json({ error: '搜索关键词过长' }, { status: 400 });
+    }
+
+    // page 會直接進 GraphQL variables：NaN 經 JSON.stringify 變成 null，
+    // 負數／浮點數／極大整數則原樣送給來源，都是上游無從處理的輸入。
+    if (!Number.isInteger(pageParam) || pageParam < 1 || pageParam > MAX_PAGE) {
+      return NextResponse.json({ error: 'page 参数无效' }, { status: 400 });
     }
 
     const filters = parseMangaFilterSelections(searchParams.get('filters'));
@@ -47,7 +58,7 @@ export async function GET(request: NextRequest) {
     const result = await suwayomiClient.getRecommendedManga(
       sourceId,
       type,
-      page,
+      pageParam,
       filters,
       keyword
     );

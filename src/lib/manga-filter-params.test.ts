@@ -45,6 +45,44 @@ describe('buildFilterChangeInputs', () => {
     ]);
   });
 
+  it('group_select 轉巢狀 groupChange，用 selectState 而非 checkBoxState', () => {
+    // 把 position 與 innerPosition 對調、或把 selectState 誤寫成 checkBoxState，
+    // 兩者都能通過 tsc 且不影響其他測試 —— 這裡把它們同時釘住
+    expect(
+      buildFilterChangeInputs([
+        { position: 7, kind: 'group_select', innerPosition: 2, index: 5 },
+      ])
+    ).toEqual([{ position: 7, groupChange: { position: 2, selectState: 5 } }]);
+  });
+
+  it('同一群組的多個下拉各自成一筆，不互相覆蓋', () => {
+    // 喜漫的「分组标签」群組內是 4 個 SelectFilter，共用頂層 position。
+    // 只用 position 當識別鍵會讓它們蓋掉彼此。
+    expect(
+      buildFilterChangeInputs([
+        { position: 7, kind: 'group_select', innerPosition: 0, index: 1 },
+        { position: 7, kind: 'group_select', innerPosition: 3, index: 2 },
+      ])
+    ).toEqual([
+      { position: 7, groupChange: { position: 0, selectState: 1 } },
+      { position: 7, groupChange: { position: 3, selectState: 2 } },
+    ]);
+  });
+
+  it('同一 position 的 group 勾選與 group_select 下拉並存', () => {
+    // GroupFilter 現在會在同一個頂層 position 吐出兩種 kind，
+    // 兩者必須都送出去，不能互斥
+    expect(
+      buildFilterChangeInputs([
+        { position: 1, kind: 'group', positions: [0] },
+        { position: 1, kind: 'group_select', innerPosition: 2, index: 4 },
+      ])
+    ).toEqual([
+      { position: 1, groupChange: { position: 0, checkBoxState: true } },
+      { position: 1, groupChange: { position: 2, selectState: 4 } },
+    ]);
+  });
+
   it('混合多種 kind 保持順序', () => {
     const out = buildFilterChangeInputs([
       { position: 2, kind: 'select', index: 0 },
@@ -79,6 +117,18 @@ describe('parseMangaFilterSelections', () => {
     ).toEqual([{ position: 3, kind: 'checkbox', checked: true }]);
   });
 
+  it('接受合法的 group_select 選擇', () => {
+    expect(
+      parseMangaFilterSelections(
+        JSON.stringify([
+          { position: 7, kind: 'group_select', innerPosition: 3, index: 2 },
+        ])
+      )
+    ).toEqual([
+      { position: 7, kind: 'group_select', innerPosition: 3, index: 2 },
+    ]);
+  });
+
   it.each([
     ['group 空 positions', [{ position: 1, kind: 'group', positions: [] }]],
     ['group positions 含負數', [{ position: 1, kind: 'group', positions: [-1] }]],
@@ -89,6 +139,22 @@ describe('parseMangaFilterSelections', () => {
     ['checkbox checked 非布林', [{ position: 1, kind: 'checkbox', checked: 'yes' }]],
     ['未知 kind', [{ position: 1, kind: 'text', value: 'x' }]],
     ['select 缺 index', [{ position: 1, kind: 'select' }]],
+    [
+      'group_select 缺 innerPosition',
+      [{ position: 1, kind: 'group_select', index: 2 }],
+    ],
+    [
+      'group_select innerPosition 為負',
+      [{ position: 1, kind: 'group_select', innerPosition: -1, index: 2 }],
+    ],
+    [
+      'group_select innerPosition 為小數',
+      [{ position: 1, kind: 'group_select', innerPosition: 1.5, index: 2 }],
+    ],
+    [
+      'group_select 缺 index',
+      [{ position: 1, kind: 'group_select', innerPosition: 0 }],
+    ],
   ])('%s → 整包拒絕', (_label, payload) => {
     expect(parseMangaFilterSelections(JSON.stringify(payload))).toBeNull();
   });

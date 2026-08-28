@@ -138,6 +138,14 @@ interface SearchDeadlineSentinel {
 const SEARCH_DEADLINE: SearchDeadlineSentinel = { deadlineReached: true };
 
 const suwayomiSessionCache = new Map<string, SuwayomiSessionCacheEntry>();
+/**
+ * 已警告過的「無法渲染的 filter」清單，用來去重。
+ *
+ * `getSourceFilters` 刻意沒有快取（管理員在 Suwayomi 改了 filter 設定要能
+ * 立即生效），而 UI 每次切換來源都會重打一次，同一顆來源的同一份清單
+ * 印一次就夠。key 含內容，來源升級後清單變了仍會再提醒一次。
+ */
+const warnedDroppedFilters = new Set<string>();
 
 function normalizeSuwayomiAuthMode(value?: string | null): 'none' | 'basic_auth' | 'simple_login' {
   if (value === 'basic_auth' || value === 'simple_login') {
@@ -1079,11 +1087,19 @@ ${fields}
         filter.__typename === 'SelectFilter' ||
         filter.__typename === 'SortFilter'
       ) {
-        if (!filter.name) return;
+        // 型別支援但內容不合格同樣是「功能被丟棄」，靜默 return 會讓
+        // 「來源明明有這個下拉、UI 卻沒有」再次變成無線索的問題。
+        if (!filter.name) {
+          dropped.push(`${filter.__typename}（第 ${position} 項）缺少名稱`);
+          return;
+        }
         const values = (filter.values || []).filter(
           (v): v is string => typeof v === 'string'
         );
-        if (values.length === 0) return;
+        if (values.length === 0) {
+          dropped.push(`${filter.__typename}「${filter.name}」沒有可選值`);
+          return;
+        }
         options.push({
           position,
           kind: filter.__typename === 'SelectFilter' ? 'select' : 'sort',
@@ -1094,7 +1110,10 @@ ${fields}
       }
 
       if (filter.__typename === 'CheckBoxFilter') {
-        if (!filter.name) return;
+        if (!filter.name) {
+          dropped.push(`CheckBoxFilter（第 ${position} 項）缺少名稱`);
+          return;
+        }
         options.push({ position, kind: 'checkbox', name: filter.name });
         return;
       }
@@ -1102,25 +1121,59 @@ ${fields}
       if (filter.__typename === 'GroupFilter') {
         const groupName = filter.name || '(未命名群組)';
         // 群組內取 CheckBox（→ chip 多選）與 Select（→ 一般下拉，實測喜漫的
-        // 「分组标签」群組內是 4 個 SelectFilter）。position 必須是**群組內
-        // 原始位置**：群組內混有其他型別時，用過濾後的索引會讓 groupChange
+        // 「分组标签」群組內是 4 個 SelectFilter）。innerPosition 必須是**群組
+        // 內原始位置**：群組內混有其他型別時，用過濾後的索引會讓 groupChange
         // 改錯項。
-        const indexed = (filter.filters || []).map((item, innerPosition) => ({
-          item,
-          innerPosition,
-        }));
+        const checkboxes: { position: number; name: string }[] = [];
+        // 先收集再 push，是為了維持「群組 chip 在群組內下拉之前」的顯示順序
+        const innerSelects: MangaSourceFilterOption[] = [];
 
-        const checkboxes = indexed
-          .filter(
-            ({ item }) =>
-              item.__typename === 'CheckBoxFilter' &&
-              typeof item.name === 'string' &&
-              item.name.length > 0
-          )
-          .map(({ item, innerPosition }) => ({
-            position: innerPosition,
-            name: item.name as string,
-          }));
+        /*
+         * 逐項判斷，而不是「整組零可渲染才記一筆」：混合群組
+         * （例如 [CheckBoxFilter, TextFilter]）只要有一項渲染得出來，
+         * 其餘有功能意義的項目就會既不進 options 也不進 dropped 而靜默消失。
+         * 逐項判斷也順帶讓「只含 Header/Separator 的純裝飾群組」不再被誤報。
+         */
+        (filter.filters || []).forEach((item, innerPosition) => {
+          const innerType = item.__typename || 'unknown';
+          if (DECORATIVE.has(innerType)) return;
+
+          if (innerType === 'CheckBoxFilter') {
+            if (typeof item.name === 'string' && item.name.length > 0) {
+              checkboxes.push({ position: innerPosition, name: item.name });
+            } else {
+              dropped.push(`群組「${groupName}」內 CheckBoxFilter 缺少名稱`);
+            }
+            return;
+          }
+
+          if (innerType === 'SelectFilter') {
+            if (typeof item.name !== 'string' || item.name.length === 0) {
+              dropped.push(`群組「${groupName}」內 SelectFilter 缺少名稱`);
+              return;
+            }
+            const values = (item.values || []).filter(
+              (v): v is string => typeof v === 'string'
+            );
+            if (values.length === 0) {
+              dropped.push(
+                `群組「${groupName}」內 SelectFilter「${item.name}」沒有可選值`
+              );
+              return;
+            }
+            innerSelects.push({
+              position,
+              kind: 'group_select',
+              innerPosition,
+              name: item.name,
+              values,
+            });
+            return;
+          }
+
+          dropped.push(`群組「${groupName}」內 ${innerType}`);
+        });
+
         if (checkboxes.length > 0) {
           options.push({
             position,
@@ -1129,37 +1182,7 @@ ${fields}
             options: checkboxes,
           });
         }
-
-        let innerSelects = 0;
-        for (const { item, innerPosition } of indexed) {
-          if (item.__typename !== 'SelectFilter') continue;
-          if (typeof item.name !== 'string' || item.name.length === 0) continue;
-          const values = (item.values || []).filter(
-            (v): v is string => typeof v === 'string'
-          );
-          if (values.length === 0) continue;
-          innerSelects += 1;
-          options.push({
-            position,
-            kind: 'group_select',
-            innerPosition,
-            name: item.name,
-            values,
-          });
-        }
-
-        // 群組有內容但我們一項都渲染不出來 —— 使用者會看到「這顆來源沒有
-        // 分類可選」，而實際上來源明明有。記下來，下次有人問「為什麼這顆
-        // 沒有分類」才有線索，不用重新 introspect。
-        // 喜漫的 11 個群組內 SelectFilter 先前就是這樣靜默消失的。
-        if (checkboxes.length === 0 && innerSelects === 0 && indexed.length > 0) {
-          const innerTypes = Array.from(
-            new Set(indexed.map(({ item }) => item.__typename || 'unknown'))
-          ).join(', ');
-          dropped.push(
-            `群組「${groupName}」有 ${indexed.length} 項但無可渲染型別（內含 ${innerTypes}）`
-          );
-        }
+        options.push(...innerSelects);
         return;
       }
 
@@ -1174,9 +1197,13 @@ ${fields}
     });
 
     if (dropped.length > 0) {
-      console.warn(
-        `[Suwayomi] 來源 ${sourceId} 有無法渲染的 filter，已略過：${dropped.join('；')}`
-      );
+      const warnKey = `${sourceId}|${dropped.join('；')}`;
+      if (!warnedDroppedFilters.has(warnKey)) {
+        warnedDroppedFilters.add(warnKey);
+        console.warn(
+          `[Suwayomi] 來源 ${sourceId} 有無法渲染的 filter，已略過：${dropped.join('；')}`
+        );
+      }
     }
     return options;
   }

@@ -82,6 +82,8 @@ export default function MangaRecommendPage() {
   const [shelf, setShelf] = useState<Record<string, MangaShelfItem>>({});
   const loadMoreRef = useRef<HTMLDivElement | null>(null);
   const recommendRequestRef = useRef(0);
+  /** 分辨「來源剛換」與「同來源內條件變更」：前者不能沿用舊來源的 filter/keyword */
+  const prevSourceRef = useRef(sourceId);
   const [sourceFilters, setSourceFilters] = useState<MangaSourceFilterOption[]>([]);
   /** 源內搜尋：輸入框內容與「已提交」的關鍵字分開 —— 打字過程中不該每個字都打上游 */
   const [keywordInput, setKeywordInput] = useState('');
@@ -172,8 +174,19 @@ export default function MangaRecommendPage() {
     getAllMangaShelf().then(setShelf).catch(() => undefined);
   }, []);
 
-  const fetchRecommend = useCallback(async (nextPage: number, append: boolean) => {
+  const fetchRecommend = useCallback(async (
+    nextPage: number,
+    append: boolean,
+    /** 換來源時呼叫端必須明確傳入，不能信任 closure（見下方註解） */
+    overrides?: { filters?: MangaFilterSelection[]; keyword?: string }
+  ) => {
     if (!sourceId) return;
+
+    /* effect 裡的 setState 不會改寫「同一輪 render 已建立的 closure」。
+       換來源時 sourceId 已是新值，filterSelections/keyword 卻還是舊來源的，
+       照送就會把使用者在前一個來源打的關鍵字洩漏給他沒選擇的新來源。 */
+    const activeFilters = overrides?.filters ?? filterSelections;
+    const activeKeyword = overrides?.keyword ?? keyword;
 
     const requestId = ++recommendRequestRef.current;
 
@@ -190,11 +203,11 @@ export default function MangaRecommendPage() {
         type: recommendType,
         page: String(nextPage),
       });
-      if (filterSelections.length > 0) {
-        params.set('filters', JSON.stringify(filterSelections));
+      if (activeFilters.length > 0) {
+        params.set('filters', JSON.stringify(activeFilters));
       }
-      if (keyword) {
-        params.set('q', keyword);
+      if (activeKeyword) {
+        params.set('q', activeKeyword);
       }
       const res = await fetch(`/api/manga/recommend?${params.toString()}`);
       if (recommendRequestRef.current !== requestId) return;
@@ -240,6 +253,8 @@ export default function MangaRecommendPage() {
 
   useEffect(() => {
     recommendRequestRef.current += 1;
+    const sourceJustChanged = prevSourceRef.current !== sourceId;
+    prevSourceRef.current = sourceId;
     if (!sourceId) {
       setResult({ mangas: [], hasNextPage: false });
       setPage(1);
@@ -247,7 +262,11 @@ export default function MangaRecommendPage() {
       setLoadingMore(false);
       return;
     }
-    void fetchRecommend(1, false);
+    void fetchRecommend(
+      1,
+      false,
+      sourceJustChanged ? { filters: [], keyword: '' } : undefined
+    );
   }, [fetchRecommend, sourceId]);
 
   useEffect(() => {
@@ -444,7 +463,12 @@ export default function MangaRecommendPage() {
                           const raw = event.target.value;
                           setFilterSelections((prev) => {
                             const rest = prev.filter(
-                              (item) => item.position !== filter.position
+                              // kind 也要比：GroupFilter 現在會在同一個頂層
+                              // position 吐出多筆 group/group_select，只比
+                              // position 會把它們一起清掉。
+                              (item) =>
+                                item.position !== filter.position ||
+                                (item.kind !== 'select' && item.kind !== 'sort')
                             );
                             if (raw === '') return rest;
                             const index = Number(raw);
@@ -575,7 +599,10 @@ export default function MangaRecommendPage() {
                           const next = event.target.checked;
                           setFilterSelections((prev) => {
                             const rest = prev.filter(
-                              (item) => item.position !== filter.position
+                              // 同 position 可能還有 group/group_select，見上方註解
+                              (item) =>
+                                item.position !== filter.position ||
+                                item.kind !== 'checkbox'
                             );
                             // 未勾 = 不送（來源預設值），不送 checked: false
                             return next

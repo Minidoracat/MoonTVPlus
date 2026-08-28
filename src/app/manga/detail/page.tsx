@@ -6,6 +6,10 @@ import { useSearchParams } from 'next/navigation';
 import { useEffect, useMemo, useRef, useState } from 'react';
 
 import { deleteMangaShelf, getAllMangaReadRecords, getAllMangaShelf, saveMangaShelf } from '@/lib/db.client';
+import {
+  getMangaCreatorGroups,
+  type MangaCreatorRole,
+} from '@/lib/manga-search-view';
 import { MangaChapter, MangaDetail, MangaReadRecord, MangaShelfItem } from '@/lib/manga.types';
 
 import ProxyImage from '@/components/ProxyImage';
@@ -65,6 +69,20 @@ function formatChapterMeta(chapter: MangaChapter): string | null {
   }
 
   return null;
+}
+
+function creatorSearchHref(
+  sourceId: string,
+  creator: string,
+  role: MangaCreatorRole
+): string {
+  const params = new URLSearchParams({
+    q: creator,
+    sourceId,
+    creator,
+    creatorRole: role,
+  });
+  return `/manga/search?${params.toString()}`;
 }
 
 export default function MangaDetailPage() {
@@ -217,6 +235,8 @@ export default function MangaDetailPage() {
 
   if (!detail) return <MangaDetailSkeleton />;
 
+  const creatorGroups = getMangaCreatorGroups(detail);
+
 
   return (
     <div className='space-y-6'>
@@ -235,9 +255,32 @@ export default function MangaDetailPage() {
               <span className='rounded-full bg-sky-50 px-3 py-1 text-sky-700 dark:bg-sky-900/30 dark:text-sky-300'>
                 {detail.sourceName}
               </span>
-              {detail.author && <span className='rounded-full bg-gray-100 px-3 py-1 dark:bg-gray-800'>{detail.author}</span>}
-              {detail.status && <span className='rounded-full bg-gray-100 px-3 py-1 dark:bg-gray-800'>{detail.status}</span>}
+              {detail.status && (
+                <span className='rounded-full bg-gray-100 px-3 py-1 dark:bg-gray-800'>
+                  {detail.status}
+                </span>
+              )}
             </div>
+            {creatorGroups.map((group) => (
+              <div
+                key={group.role}
+                className='mt-3 flex flex-wrap items-center gap-2 text-xs'
+              >
+                <span className='text-gray-500 dark:text-gray-400'>
+                  {group.label}
+                </span>
+                {group.creators.map((creator) => (
+                  <Link
+                    key={creator.toLowerCase()}
+                    href={creatorSearchHref(sourceId, creator, group.role)}
+                    title={`搜索 ${creator} 在 ${detail.sourceName} 的全部${group.label}作品`}
+                    className='inline-flex min-h-9 max-w-full items-center truncate rounded-full border border-gray-200 px-3 text-sky-700 transition-colors hover:border-sky-500 hover:bg-sky-50 dark:border-gray-700 dark:text-sky-300 dark:hover:border-sky-500 dark:hover:bg-sky-950/40'
+                  >
+                    {creator}
+                  </Link>
+                ))}
+              </div>
+            ))}
           </div>
           {detail.description && <p className='text-sm leading-7 text-gray-600 dark:text-gray-300'>{detail.description}</p>}
           <div className='flex flex-wrap gap-3'>

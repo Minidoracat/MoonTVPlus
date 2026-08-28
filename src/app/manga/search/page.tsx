@@ -14,9 +14,10 @@ import {
 } from '@/lib/manga-source-health';
 import {
   buildSourceBuckets,
-  getMangaCreators,
+  getMangaCreatorGroups,
   groupResultsBySource,
   type MangaCreatorFilter,
+  type MangaCreatorRole,
   type MangaResultSort,
   selectVisibleResults,
 } from '@/lib/manga-search-view';
@@ -63,6 +64,11 @@ export default function MangaSearchPage() {
   const urlQuery = searchParams.get('q')?.trim() || '';
   const urlSourceId = searchParams.get('sourceIds') || searchParams.get('sourceId') || '';
   const urlCreator = searchParams.get('creator')?.trim() || '';
+  const rawCreatorRole = searchParams.get('creatorRole');
+  const urlCreatorRole: MangaCreatorRole | undefined =
+    rawCreatorRole === 'author' || rawCreatorRole === 'artist'
+      ? rawCreatorRole
+      : undefined;
 
   const [query, setQuery] = useState('');
   const [sources, setSources] = useState<MangaSource[]>([]);
@@ -512,9 +518,10 @@ export default function MangaSearchPage() {
     if (lastSearchedQuery) params.set('q', lastSearchedQuery);
     if (lastSearchedSourceId) params.set('sourceId', lastSearchedSourceId);
     if (urlCreator) params.set('creator', urlCreator);
+    if (urlCreatorRole) params.set('creatorRole', urlCreatorRole);
     const queryString = params.toString();
     return queryString ? `/manga/search?${queryString}` : '/manga/search';
-  }, [lastSearchedQuery, lastSearchedSourceId, urlCreator]);
+  }, [lastSearchedQuery, lastSearchedSourceId, urlCreator, urlCreatorRole]);
 
   /**
    * creator filter 完全由 URL 推導，不再維護第二份 state。
@@ -524,8 +531,12 @@ export default function MangaSearchPage() {
   const creatorFilter = useMemo<MangaCreatorFilter | null>(() => {
     const ids = urlSourceId.split(',').map((id) => id.trim()).filter(Boolean);
     if (!urlCreator || ids.length !== 1) return null;
-    return { sourceId: ids[0], name: urlCreator };
-  }, [urlCreator, urlSourceId]);
+    return {
+      sourceId: ids[0],
+      name: urlCreator,
+      role: urlCreatorRole,
+    };
+  }, [urlCreator, urlCreatorRole, urlSourceId]);
 
   /** 篩選橫幅上的來源名稱：管理員設定的 displayName 優先，其次原始名稱 */
   const creatorSource = creatorFilter
@@ -555,16 +566,21 @@ export default function MangaSearchPage() {
     [groupBySource, visibleResults, sourceBuckets, sortMode]
   );
 
-  /** 點作者／上傳者：限定同一來源重新搜尋，再由 creatorFilter exact 收斂 */
-  const searchCreator = (item: MangaSearchItem, creator: string) => {
+  /** 點作者／繪師：限定同一來源重新搜尋，再由 creatorFilter exact 收斂 */
+  const searchCreator = (
+    item: MangaSearchItem,
+    creator: string,
+    role: MangaCreatorRole
+  ) => {
     const params = new URLSearchParams({
       q: creator,
       sourceId: item.sourceId,
       creator,
+      creatorRole: role,
     });
-    // 這是從目前結果集鑽進作者作品，不是「改寫目前搜尋」；push 才讓瀏覽器
-    // 上一頁能回到原關鍵字。用 replace 會讓誤觸一顆密集排列的 chip 後，
-    // 原本數百筆結果的 URL 從 history 消失，頁內也沒有路徑能還原。
+    // 這是從目前結果集鑽進作者／繪師作品，不是「改寫目前搜尋」；push 才讓
+    // 瀏覽器上一頁能回到原關鍵字。用 replace 會讓誤觸一顆密集排列的 chip
+    // 後，原本數百筆結果的 URL 從 history 消失。
     router.push(`/manga/search?${params.toString()}`);
   };
 
@@ -606,7 +622,7 @@ export default function MangaSearchPage() {
   /** 分組模式與平鋪模式共用同一份卡片渲染，避免兩邊各改一次而長歪 */
   const renderResultCard = (item: MangaSearchItem) => {
     const key = `${item.sourceId}+${item.id}`;
-    const creators = getMangaCreators(item);
+    const creatorGroups = getMangaCreatorGroups(item);
     return (
       <div key={key} className='space-y-2'>
         <MangaCard
@@ -614,24 +630,27 @@ export default function MangaSearchPage() {
           href={`/manga/detail?mangaId=${item.id}&sourceId=${item.sourceId}&title=${encodeURIComponent(item.title)}&cover=${encodeURIComponent(item.cover)}&sourceName=${encodeURIComponent(item.sourceName)}&description=${encodeURIComponent(item.description || '')}&author=${encodeURIComponent(item.author || '')}&status=${encodeURIComponent(item.status || '')}&returnTo=${encodeURIComponent(returnTo)}`}
           subtitle={item.author || item.status || item.description}
         />
-        {creators.length > 0 && (
-          <div className='flex flex-wrap items-center gap-1.5'>
+        {creatorGroups.map((group) => (
+          <div
+            key={group.role}
+            className='flex flex-wrap items-center gap-1.5'
+          >
             <span className='text-[11px] text-gray-500 dark:text-gray-400'>
-              作者／上传者
+              {group.label}
             </span>
-            {creators.map((creator) => (
+            {group.creators.map((creator) => (
               <button
                 key={creator.toLowerCase()}
                 type='button'
-                onClick={() => searchCreator(item, creator)}
-                title={`搜索 ${creator} 在 ${item.sourceName} 的全部作品`}
+                onClick={() => searchCreator(item, creator, group.role)}
+                title={`搜索 ${creator} 在 ${item.sourceName} 的全部${group.label}作品`}
                 className='min-h-8 max-w-full truncate rounded-full border border-gray-200 px-2.5 text-[11px] text-sky-700 transition-colors hover:border-sky-500 hover:bg-sky-50 dark:border-gray-700 dark:text-sky-300 dark:hover:border-sky-500 dark:hover:bg-sky-950/40'
               >
                 {creator}
               </button>
             ))}
           </div>
-        )}
+        ))}
         <button
           type='button'
           onClick={() => toggleShelf(item)}
@@ -651,7 +670,7 @@ export default function MangaSearchPage() {
             <input
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              placeholder='搜索漫画标题、作者或上传者'
+              placeholder='搜索漫画标题、作者或绘师'
               className='w-full rounded-2xl border border-gray-200 bg-gray-50 px-4 py-3 text-sm outline-none transition focus:border-sky-500 dark:border-gray-700 dark:bg-gray-900'
             />
           </div>
@@ -719,7 +738,12 @@ export default function MangaSearchPage() {
         {creatorFilter && (
           <div className='mb-3 flex flex-wrap items-center gap-2 rounded-2xl bg-sky-50 px-4 py-3 text-xs text-sky-800 dark:bg-sky-950/30 dark:text-sky-200'>
             <span>
-              作者／上传者：<strong>{creatorFilter.name}</strong>
+              {creatorFilter.role === 'artist'
+                ? '繪師'
+                : creatorFilter.role === 'author'
+                  ? '作者'
+                  : '作者／繪師'}
+              ：<strong>{creatorFilter.name}</strong>
             </span>
             <span className='text-sky-600/70 dark:text-sky-300/70'>
               {creatorSource?.displayName ||
@@ -731,7 +755,7 @@ export default function MangaSearchPage() {
               onClick={clearCreatorFilter}
               className='min-h-8 rounded-full border border-sky-300 px-3 font-medium transition-colors hover:border-sky-500 hover:bg-white/70 dark:border-sky-700 dark:hover:border-sky-500 dark:hover:bg-sky-950/50'
             >
-              清除作者筛选
+              清除{creatorFilter.role === 'artist' ? '繪師' : '作者'}筛选
             </button>
           </div>
         )}

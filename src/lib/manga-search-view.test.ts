@@ -12,6 +12,7 @@ import type { MangaSearchItem } from '@/lib/manga.types';
 import { MAX_KEYWORD_LENGTH } from '@/lib/manga-search-params';
 import {
   buildSourceBuckets,
+  getMangaCreatorGroups,
   getMangaCreators,
   groupResultsBySource,
   matchesMangaCreator,
@@ -53,6 +54,60 @@ describe('作者／上傳者解析與篩選', () => {
       '鳥山明',
       '荒木飛呂彥',
     ]);
+  });
+
+  it('author 與 artist 依欄位分成「作者」與「繪師」', () => {
+    const manga = {
+      ...item('s1', '來源', '1', 'T'),
+      author: '作者甲，兩邊同名',
+      artist: '繪師乙，兩邊同名',
+    };
+    expect(getMangaCreatorGroups(manga)).toEqual([
+      {
+        role: 'author',
+        label: '作者',
+        creators: ['作者甲', '兩邊同名'],
+      },
+      {
+        role: 'artist',
+        label: '繪師',
+        creators: ['繪師乙', '兩邊同名'],
+      },
+    ]);
+    // 舊合併 helper 仍跨欄位去重，相容既有呼叫端
+    expect(getMangaCreators(manga)).toEqual([
+      '作者甲',
+      '兩邊同名',
+      '繪師乙',
+    ]);
+  });
+
+  it('creatorRole 只比對對應欄位；舊 URL 無 role 時相容兩欄', () => {
+    const manga = {
+      ...item('s1', '來源', '1', 'T'),
+      author: '同名者',
+      artist: '繪師乙',
+    };
+    expect(
+      matchesMangaCreator(manga, {
+        sourceId: 's1',
+        name: '繪師乙',
+        role: 'author',
+      })
+    ).toBe(false);
+    expect(
+      matchesMangaCreator(manga, {
+        sourceId: 's1',
+        name: '繪師乙',
+        role: 'artist',
+      })
+    ).toBe(true);
+    expect(
+      matchesMangaCreator(manga, {
+        sourceId: 's1',
+        name: '繪師乙',
+      })
+    ).toBe(true);
   });
 
   it('不按空白拆英文／韓文名稱', () => {

@@ -24,9 +24,19 @@ export interface MangaSourceGroup extends MangaSourceBucket {
   items: MangaSearchItem[];
 }
 
+export type MangaCreatorRole = 'author' | 'artist';
+
 export interface MangaCreatorFilter {
   sourceId: string;
   name: string;
+  /** 舊 URL 沒有 role 時相容：undefined 代表 author/artist 兩欄都比 */
+  role?: MangaCreatorRole;
+}
+
+export interface MangaCreatorGroup {
+  role: MangaCreatorRole;
+  label: '作者' | '繪師';
+  creators: string[];
 }
 
 /** 不具可搜尋意義的上游佔位值，不渲染成 creator 按鈕 */
@@ -95,51 +105,77 @@ function splitCreatorField(raw: string): string[] {
   return parts;
 }
 
+/** 解析單一 author 或 artist 欄位，保留欄位角色、不在這裡混合兩者 */
+function getCreatorsFromField(raw: string | undefined): string[] {
+  if (!raw) return [];
+  const seen = new Set<string>();
+  const creators: string[] = [];
+  for (const part of splitCreatorField(raw.trim())) {
+    const name = part.trim();
+    const normalized = name.toLowerCase();
+    // ignore 查表移除空白，讓 scanner 保護下來的 `N / A`／`N /A`／`N/ A`
+    // 仍命中 n/a；dedupe key 刻意保留空白，合法名稱 `A B` 與 `AB`
+    // 不應該被合併。
+    const ignoredKey = name.replace(/\s+/g, '').toLowerCase();
+    if (
+      !name ||
+      name.length > MAX_KEYWORD_LENGTH ||
+      IGNORED_CREATORS.has(ignoredKey) ||
+      seen.has(normalized)
+    ) {
+      continue;
+    }
+    seen.add(normalized);
+    creators.push(name);
+  }
+  return creators;
+}
+
 /**
- * 從 Suwayomi 的 author / artist 欄位取出可點擊的作者／上傳者。
- *
- * 上游沒有獨立的 uploader 欄位；不同 extension 會把作者、繪師、社團或
- * 上傳者塞進 author／artist。UI 統一叫「作者／上傳者」，不假裝能分辨角色。
- * 超過搜尋 API q 上限的單一名字不做按鈕，避免顯示一顆點了必定 400 的操作。
+ * 依 Suwayomi 欄位語意分開回傳：author 是「作者」，artist 是「繪師」。
+ * 上游沒有 uploader 欄位，所以 UI 不再把 author 模糊標成「作者／上傳者」。
  */
+export function getMangaCreatorGroups(
+  item: MangaSearchItem
+): MangaCreatorGroup[] {
+  const groups: MangaCreatorGroup[] = [];
+  const authors = getCreatorsFromField(item.author);
+  const artists = getCreatorsFromField(item.artist);
+  if (authors.length > 0) {
+    groups.push({ role: 'author', label: '作者', creators: authors });
+  }
+  if (artists.length > 0) {
+    groups.push({ role: 'artist', label: '繪師', creators: artists });
+  }
+  return groups;
+}
+
+/** 相容舊呼叫端：合併 author/artist 並跨欄位去重 */
 export function getMangaCreators(item: MangaSearchItem): string[] {
   const seen = new Set<string>();
   const creators: string[] = [];
-  for (const raw of [item.author, item.artist]) {
-    if (!raw) continue;
-    const rawName = raw.trim();
-    for (const part of splitCreatorField(rawName)) {
-      const name = part.trim();
-      const normalized = name.toLowerCase();
-      // ignore 查表移除空白，讓 scanner 保護下來的 `N / A`／`N /A`／`N/ A`
-      // 仍命中 n/a；dedupe key 刻意保留空白，合法名稱 `A B` 與 `AB`
-      // 不應該被合併。
-      const ignoredKey = name.replace(/\s+/g, '').toLowerCase();
-      if (
-        !name ||
-        name.length > MAX_KEYWORD_LENGTH ||
-        IGNORED_CREATORS.has(ignoredKey) ||
-        seen.has(normalized)
-      ) {
-        continue;
-      }
-      seen.add(normalized);
+  for (const group of getMangaCreatorGroups(item)) {
+    for (const name of group.creators) {
+      const key = name.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
       creators.push(name);
     }
   }
   return creators;
 }
 
-/** creator filter 用 exact、case-insensitive 比對；來源也必須一致 */
+/** creator filter 用 exact、case-insensitive 比對；來源與角色都必須一致 */
 export function matchesMangaCreator(
   item: MangaSearchItem,
   filter: MangaCreatorFilter
 ): boolean {
   if (item.sourceId !== filter.sourceId) return false;
   const wanted = filter.name.trim().toLowerCase();
-  return getMangaCreators(item).some(
-    (creator) => creator.toLowerCase() === wanted
-  );
+  const creators = filter.role
+    ? getCreatorsFromField(item[filter.role])
+    : getMangaCreators(item);
+  return creators.some((creator) => creator.toLowerCase() === wanted);
 }
 
 /**

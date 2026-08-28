@@ -1208,11 +1208,21 @@ ${fields}
     }
   }
 
+  /**
+   * 單一來源的瀏覽／搜尋。
+   *
+   * `keyword` 讓推薦頁能在**該來源內**搜尋並同時套用它自己的 filter ——
+   * 有些來源的 filter 本身就是為關鍵字設計的（實測禁漫天堂有「搜索范围」：
+   * 站内搜索／作品／作者／标签／登场人物），沒有關鍵字時那個 filter 完全
+   * 沒有作用。與 /manga/search 的多源 fan-out 互補：那邊是廣度（多選來源、
+   * 不套 filter），這邊是深度（單源 + 該源完整 filter）。
+   */
   async getRecommendedManga(
     sourceId: string,
     type: MangaRecommendType = 'POPULAR',
     page = 1,
-    filters: MangaFilterSelection[] = []
+    filters: MangaFilterSelection[] = [],
+    keyword = ''
   ): Promise<MangaRecommendResult> {
     if (!sourceId) {
       return { mangas: [], hasNextPage: false };
@@ -1254,13 +1264,17 @@ ${fields}
     //
     // serverBaseUrl 必須進 key：換 Suwayomi 伺服器後同一組參數是不同內容。
     const resolvedForCache = await resolveSuwayomiConfig(this.options);
-    // filters 直接以「實際會送出的 FilterChangeInput」為 key：union 化之後
-    // 各 kind 的欄位不同（group 是 positions 陣列），逐欄拼 key 容易漏
+    // keyword 與 filters 任一存在就必須走 SEARCH，且兩者都要進快取 key ——
+    // 只看 filters 的話，「只輸關鍵字不套 filter」會走 POPULAR（關鍵字被
+    // 忽略）並命中沒有關鍵字的舊快取。
+    const trimmedKeyword = keyword.trim();
+    const useSearch = filters.length > 0 || trimmedKeyword.length > 0;
     const cacheKey = JSON.stringify([
       resolvedForCache.serverBaseUrl,
       sourceId,
-      filters.length > 0 ? 'SEARCH' : type,
+      useSearch ? 'SEARCH' : type,
       page,
+      trimmedKeyword,
       buildFilterChangeInputs(filters),
     ]);
     const cachedHit = this.recommendCache.get(cacheKey);
@@ -1293,22 +1307,22 @@ ${fields}
       }>(
         query,
         {
-          input:
-            filters.length > 0
-              ? {
-                  // Suwayomi 只在 SEARCH 模式套用 filters；POPULAR/LATEST 會忽略。
-                  // 空 query + filters = 以該來源自己的分類／排序瀏覽。
-                  type: 'SEARCH',
-                  source: sourceId,
-                  page,
-                  query: '',
-                  filters: buildFilterChangeInputs(filters),
-                }
-              : {
-                  type,
-                  source: sourceId,
-                  page,
-                },
+          input: useSearch
+            ? {
+                // Suwayomi 只在 SEARCH 模式套用 filters；POPULAR/LATEST 會忽略。
+                // 空 query + filters = 以該來源自己的分類／排序瀏覽；
+                // 有 query 則是在這個來源內搜尋（可同時套 filter）。
+                type: 'SEARCH',
+                source: sourceId,
+                page,
+                query: trimmedKeyword,
+                filters: buildFilterChangeInputs(filters),
+              }
+            : {
+                type,
+                source: sourceId,
+                page,
+              },
         },
         'GET_SOURCE_MANGAS_FETCH'
       );

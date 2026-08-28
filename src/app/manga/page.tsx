@@ -1,6 +1,6 @@
 'use client';
 
-import { Flame, Sparkles } from 'lucide-react';
+import { Flame, Search, Sparkles } from 'lucide-react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
@@ -83,6 +83,9 @@ export default function MangaRecommendPage() {
   const loadMoreRef = useRef<HTMLDivElement | null>(null);
   const recommendRequestRef = useRef(0);
   const [sourceFilters, setSourceFilters] = useState<MangaSourceFilterOption[]>([]);
+  /** 源內搜尋：輸入框內容與「已提交」的關鍵字分開 —— 打字過程中不該每個字都打上游 */
+  const [keywordInput, setKeywordInput] = useState('');
+  const [keyword, setKeyword] = useState('');
   const [filterSelections, setFilterSelections] = useState<MangaFilterSelection[]>([]);
   const [filtersError, setFiltersError] = useState('');
 
@@ -90,6 +93,9 @@ export default function MangaRecommendPage() {
     setSourceFilters([]);
     setFilterSelections([]);
     setFiltersError('');
+    // 關鍵字也要跟著清：換來源後同一個關鍵字的搜尋範圍／分類語意都變了
+    setKeywordInput('');
+    setKeyword('');
     if (!sourceId) return;
 
     let cancelled = false;
@@ -187,6 +193,9 @@ export default function MangaRecommendPage() {
       if (filterSelections.length > 0) {
         params.set('filters', JSON.stringify(filterSelections));
       }
+      if (keyword) {
+        params.set('q', keyword);
+      }
       const res = await fetch(`/api/manga/recommend?${params.toString()}`);
       if (recommendRequestRef.current !== requestId) return;
 
@@ -211,7 +220,7 @@ export default function MangaRecommendPage() {
         setLoadingMore(false);
       }
     }
-  }, [filterSelections, recommendType, sourceId]);
+  }, [filterSelections, keyword, recommendType, sourceId]);
 
   const listHref = useMemo(
     () => mangaHomeHref(sourceId, recommendType),
@@ -311,11 +320,65 @@ export default function MangaRecommendPage() {
           )}
         </div>
 
+        {/* 源內搜尋：這個來源自己的 filter 有些就是為關鍵字設計的
+            （實測禁漫天堂有「搜索范围」：站内搜索／作品／作者／标签／
+            登场人物），沒有關鍵字時那些 filter 完全沒作用。
+            與 /manga/search 互補：那邊是多源廣度、不套 filter。
+            關鍵字刻意不進 URL —— /manga?q= 是既有的「跳去多源搜尋」入口，
+            且 filter 本來就不進 URL，兩者行為一致。 */}
+        {sourceId && (
+          <div className='space-y-2'>
+            <label
+              htmlFor='manga-source-keyword'
+              className='block text-sm font-medium text-gray-700 dark:text-gray-200'
+            >
+              在本源搜尋
+            </label>
+            <form
+              className='flex gap-2'
+              onSubmit={(event) => {
+                event.preventDefault();
+                setKeyword(keywordInput.trim());
+              }}
+            >
+              <input
+                id='manga-source-keyword'
+                value={keywordInput}
+                onChange={(event) => setKeywordInput(event.target.value)}
+                placeholder='輸入關鍵字，可搭配下方分類／搜尋範圍'
+                maxLength={200}
+                className='h-11 min-w-0 flex-1 rounded-2xl border border-gray-200 bg-gray-50 px-3 text-sm text-gray-900 outline-none transition-colors duration-200 focus:border-sky-500 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-100'
+              />
+              <button
+                type='submit'
+                className='inline-flex min-h-11 cursor-pointer items-center gap-2 rounded-2xl bg-sky-600 px-4 text-sm font-medium text-white transition-colors duration-200 hover:bg-sky-700 focus:outline-none focus:ring-2 focus:ring-sky-500'
+              >
+                <Search aria-hidden='true' className='h-4 w-4' />
+                搜尋
+              </button>
+              {keyword && (
+                <button
+                  type='button'
+                  onClick={() => {
+                    setKeywordInput('');
+                    setKeyword('');
+                  }}
+                  className='min-h-11 cursor-pointer rounded-2xl border border-gray-200 px-3 text-sm text-gray-700 transition-colors duration-200 hover:border-sky-500 hover:text-sky-600 dark:border-gray-700 dark:text-gray-200'
+                >
+                  清除
+                </button>
+              )}
+            </form>
+          </div>
+        )}
+
         <div className='space-y-2'>
           <div className='text-sm font-medium text-gray-700 dark:text-gray-200'>推荐类型</div>
-          {filterSelections.length > 0 ? (
+          {filterSelections.length > 0 || keyword ? (
             <p className='rounded-2xl bg-gray-100 px-4 py-3 text-xs text-gray-600 dark:bg-gray-900 dark:text-gray-300'>
-              已套用本源分类／排序，结果由该来源的筛选决定；清除筛选后可再切换热门／最新。
+              {keyword
+                ? `正在本源搜尋「${keyword}」，结果由关键字与筛选决定；清除后可再切换热门／最新。`
+                : '已套用本源分类／排序，结果由该来源的筛选决定；清除筛选后可再切换热门／最新。'}
             </p>
           ) : (
             <CapsuleSwitch
@@ -638,11 +701,13 @@ export default function MangaRecommendPage() {
                       href={`/manga/detail?mangaId=${item.id}&sourceId=${item.sourceId}&title=${encodeURIComponent(item.title)}&cover=${encodeURIComponent(item.cover)}&sourceName=${encodeURIComponent(item.sourceName)}&description=${encodeURIComponent(item.description || '')}&author=${encodeURIComponent(item.author || '')}&status=${encodeURIComponent(item.status || '')}&returnTo=${encodeURIComponent(listHref)}`}
                       subtitle={item.author || item.status || item.description}
                       badge={
-                        filterSelections.length > 0
-                          ? '筛选'
-                          : recommendType === 'POPULAR'
-                            ? '热门'
-                            : '最新'
+                        keyword
+                          ? '搜尋'
+                          : filterSelections.length > 0
+                            ? '筛选'
+                            : recommendType === 'POPULAR'
+                              ? '热门'
+                              : '最新'
                       }
                     />
                     <button

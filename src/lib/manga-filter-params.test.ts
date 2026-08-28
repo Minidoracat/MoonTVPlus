@@ -606,4 +606,46 @@ describe('isSameFilterControl', () => {
       errSpy.mockRestore();
     }
   });
+
+  it('upsertFilterSelection：錯誤訊息要能分辨 group_select 的 innerPosition', () => {
+    /*
+     * group_select 是唯一有第三個識別鍵的 kind，而「control 是 inner 0、
+     * next 抄成 inner 3」正是最可能的不一致（本檔上面第一個不一致案例就是它）。
+     * 訊息若只印 kind 與 position，兩邊會是完全相同的字串
+     * 「kind=group_select position=7」—— production 的 console.error 是那條
+     * 路徑唯一的訊號，對最可能的案例失去鑑別力就等於廢掉記錄這一半。
+     */
+    let thrown = '';
+    try {
+      upsertFilterSelection([], innerSelect0, {
+        position: 7,
+        kind: 'group_select',
+        innerPosition: 3,
+        index: 5,
+      });
+    } catch (e) {
+      thrown = (e as Error).message;
+    }
+    expect(thrown).toContain('不屬於 control');
+    expect(thrown).toContain(
+      'control kind=group_select position=7 innerPosition=0'
+    );
+    expect(thrown).toContain(
+      'next kind=group_select position=7 innerPosition=3'
+    );
+
+    // 沒有 innerPosition 的 kind 不該憑空印出這個欄位
+    let topLevel = '';
+    try {
+      upsertFilterSelection([], selectControl, {
+        position: 2,
+        kind: 'select',
+        index: 0,
+      });
+    } catch (e) {
+      topLevel = (e as Error).message;
+    }
+    expect(topLevel).toContain('control kind=select position=1,');
+    expect(topLevel).not.toContain('innerPosition');
+  });
 });

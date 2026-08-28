@@ -155,6 +155,22 @@ export function isSameFilterControl(
 }
 
 /**
+ * 把控制項／選擇的識別鍵格式化成可讀字串，只給錯誤訊息用。
+ *
+ * **一定要含 innerPosition。** group_select 是唯一有第三個識別鍵的 kind，
+ * 而「control 是 inner 0、next 抄成 inner 3」正是最可能的不一致；少了它，
+ * 兩邊會印成完全相同的 `kind=group_select position=7`，讀 log 的人無從
+ * 判斷哪裡不符。production 的 console.error 是那條路徑唯一的訊號。
+ */
+function formatFilterIdentity(
+  target: MangaSourceFilterOption | MangaFilterSelection
+): string {
+  const inner =
+    'innerPosition' in target ? ` innerPosition=${target.innerPosition}` : '';
+  return `kind=${target.kind} position=${target.position}${inner}`;
+}
+
+/**
  * 把某個控制項的新選擇寫進 selections，同時移除該控制項的舊選擇。
  *
  * `next` 為 `null` 代表這個控制項回到未選狀態（下拉選了空白、checkbox 取消
@@ -174,8 +190,8 @@ export function upsertFilterSelection(
   if (next && !isSameFilterControl(next, control)) {
     const message =
       'upsertFilterSelection: next 不屬於 control' +
-      `（control kind=${control.kind} position=${control.position}` +
-      `, next kind=${next.kind} position=${next.position}）`;
+      `（control ${formatFilterIdentity(control)}` +
+      `, next ${formatFilterIdentity(next)}）`;
     /*
      * next 的識別鍵（position / kind / innerPosition）必須指向 control 自己。
      * 不一致時舊值會被移除、新值掛到另一個識別鍵上：畫面顯示這個控制項未選，

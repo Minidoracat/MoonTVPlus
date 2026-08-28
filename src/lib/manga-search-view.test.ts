@@ -11,7 +11,9 @@
 import type { MangaSearchItem } from '@/lib/manga.types';
 import {
   buildSourceBuckets,
+  getMangaCreators,
   groupResultsBySource,
+  matchesMangaCreator,
   selectVisibleResults,
 } from '@/lib/manga-search-view';
 
@@ -35,6 +37,86 @@ const SLOW_FIRST: MangaSearchItem[] = [
   item('s2', '包子漫画', 'b3', '海贼王'),
   item('s3', '禁漫天堂', 'c1', 'Zebra'),
 ];
+
+describe('作者／上傳者解析與篩選', () => {
+  it('合併 author / artist，拆常見分隔符並去重', () => {
+    const manga = {
+      ...item('s1', '禁漫', '1', 'T'),
+      author: '尾田榮一郎，井上雄彥 / BRAVE HEART petit',
+      artist: '尾田榮一郎&鳥山明、荒木飛呂彥',
+    };
+    expect(getMangaCreators(manga)).toEqual([
+      '尾田榮一郎',
+      '井上雄彥',
+      'BRAVE HEART petit',
+      '鳥山明',
+      '荒木飛呂彥',
+    ]);
+  });
+
+  it('不按空白拆英文／韓文名稱', () => {
+    const manga = {
+      ...item('s1', '哔咔', '1', 'T'),
+      author: 'BRAVE HEART petit',
+    };
+    expect(getMangaCreators(manga)).toEqual(['BRAVE HEART petit']);
+  });
+
+  it.each(['N/A', 'n/a', '佚名', '未知', 'AI', '-', '無'])(
+    '忽略沒有搜尋意義的上游佔位值「%s」',
+    (author) => {
+      expect(
+        getMangaCreators({
+          ...item('s1', '禁漫', '1', 'T'),
+          author,
+        })
+      ).toEqual([]);
+    }
+  );
+
+  it('超過搜尋 API q 上限的值不做可點按鈕', () => {
+    expect(
+      getMangaCreators({
+        ...item('s1', '禁漫', '1', 'T'),
+        author: 'x'.repeat(201),
+      })
+    ).toEqual([]);
+  });
+
+  it('creator filter 同時比對來源與 exact creator 名稱', () => {
+    const results: MangaSearchItem[] = [
+      { ...item('s1', '哔咔', '1', 'A'), author: 'Q同人' },
+      { ...item('s1', '哔咔', '2', 'B'), author: 'Q同人，另一位' },
+      { ...item('s1', '哔咔', '3', 'C'), author: 'Q同人社' },
+      { ...item('s2', 'NoyAcg', '4', 'D'), author: 'Q同人' },
+      { ...item('s1', '哔咔', '5', 'E'), author: 'q同人' },
+    ];
+    const filter = { sourceId: 's1', name: 'Q同人' };
+    expect(results.filter((manga) => matchesMangaCreator(manga, filter)).map((m) => m.id))
+      .toEqual(['1', '2', '5']);
+    expect(
+      selectVisibleResults(results, {
+        sourceFilter: [],
+        sortMode: 'arrival',
+        creatorFilter: filter,
+      }).map((manga) => manga.id)
+    ).toEqual(['1', '2', '5']);
+  });
+
+  it('creator filter 與來源 filter 可以並用', () => {
+    const results: MangaSearchItem[] = [
+      { ...item('s1', '哔咔', '1', 'A'), author: 'Q同人' },
+      { ...item('s2', 'NoyAcg', '2', 'B'), author: 'Q同人' },
+    ];
+    expect(
+      selectVisibleResults(results, {
+        sourceFilter: ['s2'],
+        sortMode: 'arrival',
+        creatorFilter: { sourceId: 's1', name: 'Q同人' },
+      })
+    ).toEqual([]);
+  });
+});
 
 describe('buildSourceBuckets', () => {
   it('串流期間維持首次回應順序，不依筆數重排', () => {

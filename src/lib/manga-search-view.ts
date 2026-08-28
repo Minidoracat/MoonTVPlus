@@ -23,6 +23,72 @@ export interface MangaSourceGroup extends MangaSourceBucket {
   items: MangaSearchItem[];
 }
 
+export interface MangaCreatorFilter {
+  sourceId: string;
+  name: string;
+}
+
+/** 不具可搜尋意義的上游佔位值，不渲染成 creator 按鈕 */
+const IGNORED_CREATORS = new Set([
+  'n/a',
+  'na',
+  'unknown',
+  '未知',
+  '佚名',
+  '无',
+  '無',
+  '-',
+  'ai',
+]);
+
+/**
+ * 從 Suwayomi 的 author / artist 欄位取出可點擊的作者／上傳者。
+ *
+ * 上游沒有獨立的 uploader 欄位；不同 extension 會把作者、繪師、社團或
+ * 上傳者塞進 author／artist。UI 統一叫「作者／上傳者」，不假裝能分辨角色。
+ *
+ * 多人欄位用常見分隔符拆開。刻意不按空白拆 —— `BRAVE HEART petit`、
+ * 韓文／英文作者名本身會有空白。超過 200 字不做按鈕，因為搜尋 API 的 q
+ * 上限就是 200，顯示一顆點了必定 400 的按鈕沒有意義。
+ */
+export function getMangaCreators(item: MangaSearchItem): string[] {
+  const seen = new Set<string>();
+  const creators: string[] = [];
+  for (const raw of [item.author, item.artist]) {
+    if (!raw) continue;
+    const rawName = raw.trim();
+    // `N/A` 含分隔符 `/`，必須在拆分之前先判整個原始值
+    if (IGNORED_CREATORS.has(rawName.toLocaleLowerCase())) continue;
+    for (const part of rawName.split(/[,，、/&]+/)) {
+      const name = part.trim();
+      const normalized = name.toLocaleLowerCase();
+      if (
+        !name ||
+        name.length > 200 ||
+        IGNORED_CREATORS.has(normalized) ||
+        seen.has(normalized)
+      ) {
+        continue;
+      }
+      seen.add(normalized);
+      creators.push(name);
+    }
+  }
+  return creators;
+}
+
+/** creator filter 用 exact、case-insensitive 比對；來源也必須一致 */
+export function matchesMangaCreator(
+  item: MangaSearchItem,
+  filter: MangaCreatorFilter
+): boolean {
+  if (item.sourceId !== filter.sourceId) return false;
+  const wanted = filter.name.trim().toLocaleLowerCase();
+  return getMangaCreators(item).some(
+    (creator) => creator.toLocaleLowerCase() === wanted
+  );
+}
+
 /**
  * 每個有結果的來源與其筆數，供篩選 chip 與分組區塊使用。
  *
@@ -59,19 +125,29 @@ export function buildSourceBuckets(
 }
 
 /**
- * 套用來源篩選與排序後、真正要畫出來的結果。
+ * 套用來源／作者篩選與排序後、真正要畫出來的結果。
  *
  * `sourceFilter` 為空陣列代表不篩選（顯示全部）。
+ * creator filter 會同時比對來源與 exact creator 名稱：點作者後我們先限定
+ * 同一來源重新搜尋，再用這層收斂，避免來源的模糊搜尋混入標題剛好含作者名、
+ * 但 author 欄不是該作者的作品。
  */
 export function selectVisibleResults(
   results: MangaSearchItem[],
-  options: { sourceFilter: string[]; sortMode: MangaResultSort }
+  options: {
+    sourceFilter: string[];
+    sortMode: MangaResultSort;
+    creatorFilter?: MangaCreatorFilter | null;
+  }
 ): MangaSearchItem[] {
-  const { sourceFilter, sortMode } = options;
+  const { sourceFilter, sortMode, creatorFilter } = options;
   const allowed = sourceFilter.length > 0 ? new Set(sourceFilter) : null;
-  const filtered = allowed
+  const sourceFiltered = allowed
     ? results.filter((item) => allowed.has(item.sourceId))
     : results;
+  const filtered = creatorFilter
+    ? sourceFiltered.filter((item) => matchesMangaCreator(item, creatorFilter))
+    : sourceFiltered;
   if (sortMode === 'arrival') return filtered;
   /*
    * 一定要複製再排。無篩選時 `filtered` 就是傳入的 `results` 本身，而那是

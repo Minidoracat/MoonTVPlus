@@ -14,7 +14,9 @@ import {
 } from '@/lib/manga-source-health';
 import {
   buildSourceBuckets,
+  getMangaCreators,
   groupResultsBySource,
+  type MangaCreatorFilter,
   type MangaResultSort,
   selectVisibleResults,
 } from '@/lib/manga-search-view';
@@ -60,6 +62,7 @@ export default function MangaSearchPage() {
   const searchParams = useSearchParams();
   const urlQuery = searchParams.get('q')?.trim() || '';
   const urlSourceId = searchParams.get('sourceIds') || searchParams.get('sourceId') || '';
+  const urlCreator = searchParams.get('creator')?.trim() || '';
 
   const [query, setQuery] = useState('');
   const [sources, setSources] = useState<MangaSource[]>([]);
@@ -496,10 +499,15 @@ export default function MangaSearchPage() {
     const params = new URLSearchParams({ q: trimmedQuery });
     if (sourceId) params.set('sourceId', sourceId);
     const nextUrl = `/manga/search?${params.toString()}`;
-    if (urlQuery === trimmedQuery && urlSourceId === sourceId) {
+    if (
+      urlQuery === trimmedQuery &&
+      urlSourceId === sourceId &&
+      !urlCreator
+    ) {
       await performSearch(trimmedQuery, sourceId, { forceRefresh: true });
     } else {
       forceNextUrlSearchRef.current = true;
+      // 一般搜尋刻意不帶 creator：使用者手動改關鍵字／來源就代表離開作者篩選
       router.replace(nextUrl);
     }
   };
@@ -508,9 +516,21 @@ export default function MangaSearchPage() {
     const params = new URLSearchParams();
     if (lastSearchedQuery) params.set('q', lastSearchedQuery);
     if (lastSearchedSourceId) params.set('sourceId', lastSearchedSourceId);
+    if (urlCreator) params.set('creator', urlCreator);
     const queryString = params.toString();
     return queryString ? `/manga/search?${queryString}` : '/manga/search';
-  }, [lastSearchedQuery, lastSearchedSourceId]);
+  }, [lastSearchedQuery, lastSearchedSourceId, urlCreator]);
+
+  /**
+   * creator filter 完全由 URL 推導，不再維護第二份 state。
+   * 點作者時 URL 一定只帶單一 sourceId；手動竄改成多來源則不套 creator
+   * exact filter，避免一個來源的作者名誤套到另一顆來源。
+   */
+  const creatorFilter = useMemo<MangaCreatorFilter | null>(() => {
+    const ids = urlSourceId.split(',').map((id) => id.trim()).filter(Boolean);
+    if (!urlCreator || ids.length !== 1) return null;
+    return { sourceId: ids[0], name: urlCreator };
+  }, [urlCreator, urlSourceId]);
 
   const sourceBuckets = useMemo(
     () => buildSourceBuckets(results, { streaming: loading }),
@@ -518,8 +538,13 @@ export default function MangaSearchPage() {
   );
 
   const visibleResults = useMemo(
-    () => selectVisibleResults(results, { sourceFilter, sortMode }),
-    [results, sourceFilter, sortMode]
+    () =>
+      selectVisibleResults(results, {
+        sourceFilter,
+        sortMode,
+        creatorFilter,
+      }),
+    [results, sourceFilter, sortMode, creatorFilter]
   );
 
   const groupedResults = useMemo(
@@ -529,6 +554,24 @@ export default function MangaSearchPage() {
         : [],
     [groupBySource, visibleResults, sourceBuckets, sortMode]
   );
+
+  /** 點作者／上傳者：限定同一來源重新搜尋，再由 creatorFilter exact 收斂 */
+  const searchCreator = (item: MangaSearchItem, creator: string) => {
+    const params = new URLSearchParams({
+      q: creator,
+      sourceId: item.sourceId,
+      creator,
+    });
+    router.replace(`/manga/search?${params.toString()}`);
+  };
+
+  /** 只解除 exact filter；保留作者名搜尋結果，讓使用者看來源的模糊匹配內容 */
+  const clearCreatorFilter = () => {
+    const params = new URLSearchParams();
+    if (urlQuery) params.set('q', urlQuery);
+    if (urlSourceId) params.set('sourceId', urlSourceId);
+    router.replace(`/manga/search?${params.toString()}`);
+  };
 
   const toggleShelf = async (item: MangaSearchItem) => {
     const key = `${item.sourceId}+${item.id}`;
@@ -560,6 +603,7 @@ export default function MangaSearchPage() {
   /** 分組模式與平鋪模式共用同一份卡片渲染，避免兩邊各改一次而長歪 */
   const renderResultCard = (item: MangaSearchItem) => {
     const key = `${item.sourceId}+${item.id}`;
+    const creators = getMangaCreators(item);
     return (
       <div key={key} className='space-y-2'>
         <MangaCard
@@ -567,7 +611,26 @@ export default function MangaSearchPage() {
           href={`/manga/detail?mangaId=${item.id}&sourceId=${item.sourceId}&title=${encodeURIComponent(item.title)}&cover=${encodeURIComponent(item.cover)}&sourceName=${encodeURIComponent(item.sourceName)}&description=${encodeURIComponent(item.description || '')}&author=${encodeURIComponent(item.author || '')}&status=${encodeURIComponent(item.status || '')}&returnTo=${encodeURIComponent(returnTo)}`}
           subtitle={item.author || item.status || item.description}
         />
+        {creators.length > 0 && (
+          <div className='flex flex-wrap items-center gap-1.5'>
+            <span className='text-[11px] text-gray-500 dark:text-gray-400'>
+              作者／上传者
+            </span>
+            {creators.map((creator) => (
+              <button
+                key={creator.toLocaleLowerCase()}
+                type='button'
+                onClick={() => searchCreator(item, creator)}
+                title={`搜索 ${creator} 在 ${item.sourceName} 的全部作品`}
+                className='min-h-8 max-w-full truncate rounded-full border border-gray-200 px-2.5 text-[11px] text-sky-700 transition-colors hover:border-sky-500 hover:bg-sky-50 dark:border-gray-700 dark:text-sky-300 dark:hover:border-sky-500 dark:hover:bg-sky-950/40'
+              >
+                {creator}
+              </button>
+            ))}
+          </div>
+        )}
         <button
+          type='button'
           onClick={() => toggleShelf(item)}
           className='w-full rounded-2xl border border-gray-200 px-3 py-2 text-xs font-medium text-gray-700 transition hover:border-sky-500 hover:text-sky-600 dark:border-gray-700 dark:text-gray-200'
         >
@@ -585,7 +648,7 @@ export default function MangaSearchPage() {
             <input
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              placeholder='搜索漫画标题'
+              placeholder='搜索漫画标题、作者或上传者'
               className='w-full rounded-2xl border border-gray-200 bg-gray-50 px-4 py-3 text-sm outline-none transition focus:border-sky-500 dark:border-gray-700 dark:bg-gray-900'
             />
           </div>
@@ -649,6 +712,26 @@ export default function MangaSearchPage() {
             )}
           </div>
         </div>
+
+        {creatorFilter && (
+          <div className='mb-3 flex flex-wrap items-center gap-2 rounded-2xl bg-sky-50 px-4 py-3 text-xs text-sky-800 dark:bg-sky-950/30 dark:text-sky-200'>
+            <span>
+              作者／上传者：<strong>{creatorFilter.name}</strong>
+            </span>
+            <span className='text-sky-600/70 dark:text-sky-300/70'>
+              {sources.find((source) => source.id === creatorFilter.sourceId)?.displayName ||
+                sources.find((source) => source.id === creatorFilter.sourceId)?.name ||
+                creatorFilter.sourceId}
+            </span>
+            <button
+              type='button'
+              onClick={clearCreatorFilter}
+              className='min-h-8 rounded-full border border-sky-300 px-3 font-medium transition-colors hover:border-sky-500 hover:bg-white/70 dark:border-sky-700 dark:hover:border-sky-500 dark:hover:bg-sky-950/50'
+            >
+              清除作者筛选
+            </button>
+          </div>
+        )}
 
         {/* 來源篩選：放寬上限後結果會來自數十顆來源，而 grid 是按到達順序排的，
             最快的兩三顆會霸佔前排。沒有這排 chip 使用者滾不到其他來源。 */}
@@ -734,7 +817,9 @@ export default function MangaSearchPage() {
           </div>
         ) : visibleResults.length === 0 ? (
           <div className='rounded-2xl bg-gray-50 p-10 text-center text-sm text-gray-500 dark:bg-gray-900/50'>
-            目前的来源筛选没有结果，换一个来源或点「全部」
+            {creatorFilter
+              ? `没有找到「${creatorFilter.name}」的作品，可清除作者筛选查看来源的模糊匹配结果`
+              : '目前的来源筛选没有结果，换一个来源或点「全部」'}
           </div>
         ) : groupBySource ? (
           <div className='space-y-6'>

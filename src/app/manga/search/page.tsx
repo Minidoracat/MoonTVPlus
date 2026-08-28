@@ -13,6 +13,12 @@ import {
   type MangaSourceHealthEntry,
 } from '@/lib/manga-source-health';
 import {
+  buildSourceBuckets,
+  groupResultsBySource,
+  type MangaResultSort,
+  selectVisibleResults,
+} from '@/lib/manga-search-view';
+import {
   MangaSearchItem,
   type MangaSearchFailure,
   MangaShelfItem,
@@ -25,8 +31,6 @@ import MangaSourceMultiPicker from '@/components/manga/MangaSourceMultiPicker';
 
 const MANGA_SEARCH_STATE_KEY = 'manga_search_state';
 
-/** 結果的排列方式。arrival 是既有行為：誰先回應誰在前。 */
-type MangaResultSort = 'arrival' | 'source' | 'title';
 
 /*
  * 失敗來源的形狀直接沿用後端的 MangaSearchFailure，不在這裡另立一份。
@@ -508,88 +512,23 @@ export default function MangaSearchPage() {
     return queryString ? `/manga/search?${queryString}` : '/manga/search';
   }, [lastSearchedQuery, lastSearchedSourceId]);
 
-  /**
-   * 每個有結果的來源與其筆數，供篩選 chip 與分組區塊使用。
-   *
-   * **串流期間刻意不排序。** Map 的迭代是插入順序，也就是各來源首次回應的
-   * 順序，在串流中是穩定的（新來源只加在尾端）。依筆數排的話 chip 會在
-   * 3 秒內重排三十幾次（單一來源一次進 100 筆就從隊尾跳到隊首），而使用者
-   * 若在 mousedown 與 mouseup 之間遇上重排，button 節點被移走、兩個事件的
-   * target 不同，瀏覽器會把 click 派送到最近共同祖先（沒有 handler）——
-   * 點擊被靜默吞掉，篩選沒套上。實測串流中 chip 前五順序變動 13 次。
-   *
-   * 串流結束後才切回筆數降序：單源最多回 100 筆、一顆就佔四到五成，
-   * 把量多的排前面比首次回應順序有用，而這時只重排一次。
-   */
-  const sourceBuckets = useMemo(() => {
-    const counts = new Map<string, { sourceId: string; sourceName: string; count: number }>();
-    for (const item of results) {
-      const existing = counts.get(item.sourceId);
-      if (existing) {
-        existing.count += 1;
-      } else {
-        counts.set(item.sourceId, {
-          sourceId: item.sourceId,
-          sourceName: item.sourceName || item.sourceId,
-          count: 1,
-        });
-      }
-    }
-    const buckets = Array.from(counts.values());
-    if (loading) return buckets;
-    return buckets.sort((a, b) => b.count - a.count);
-  }, [results, loading]);
+  const sourceBuckets = useMemo(
+    () => buildSourceBuckets(results, { streaming: loading }),
+    [results, loading]
+  );
 
-  /** 套用來源篩選與排序後、真正要畫出來的結果 */
-  const visibleResults = useMemo(() => {
-    const allowed = sourceFilter.length > 0 ? new Set(sourceFilter) : null;
-    const filtered = allowed
-      ? results.filter((item) => allowed.has(item.sourceId))
-      : results;
-    if (sortMode === 'arrival') return filtered;
-    /*
-     * 一定要複製再排：results 是 state，就地 sort 會改到 state 物件本身，
-     * React 比對不到變化，而下一次 append 又是基於被改過的陣列。
-     */
-    const sorted = [...filtered];
-    if (sortMode === 'title') {
-      sorted.sort((a, b) => a.title.localeCompare(b.title, 'zh-Hant'));
-    } else {
-      // source：來源名排序，同來源內維持到達順序（sort 是穩定的）
-      sorted.sort((a, b) =>
-        (a.sourceName || a.sourceId).localeCompare(b.sourceName || b.sourceId, 'zh-Hant')
-      );
-    }
-    return sorted;
-  }, [results, sourceFilter, sortMode]);
+  const visibleResults = useMemo(
+    () => selectVisibleResults(results, { sourceFilter, sortMode }),
+    [results, sourceFilter, sortMode]
+  );
 
-  /**
-   * 分組模式下的區塊。
-   *
-   * 區塊順序要跟著 sortMode 走：分組後每一組內部的來源都相同，所以
-   * 「來源名稱」排序若只作用在組內就完全看不出效果。選了它就改排區塊，
-   * 其餘模式沿用 sourceBuckets 的順序（串流中是首次回應順序、結束後是
-   * 筆數降序）。組內順序一律沿用 visibleResults 已套好的排序。
-   */
-  const groupedResults = useMemo(() => {
-    if (!groupBySource) return [];
-    const bySource = new Map<string, MangaSearchItem[]>();
-    for (const item of visibleResults) {
-      const list = bySource.get(item.sourceId);
-      if (list) list.push(item);
-      else bySource.set(item.sourceId, [item]);
-    }
-    const ordered = sourceBuckets.filter((bucket) => bySource.has(bucket.sourceId));
-    // 複製再排：sourceBuckets 是 memo 的回傳值，chip 也在用它
-    const blocks =
-      sortMode === 'source'
-        ? [...ordered].sort((a, b) => a.sourceName.localeCompare(b.sourceName, 'zh-Hant'))
-        : ordered;
-    return blocks.map((bucket) => ({
-      ...bucket,
-      items: bySource.get(bucket.sourceId) as MangaSearchItem[],
-    }));
-  }, [groupBySource, visibleResults, sourceBuckets, sortMode]);
+  const groupedResults = useMemo(
+    () =>
+      groupBySource
+        ? groupResultsBySource(visibleResults, sourceBuckets, { sortMode })
+        : [],
+    [groupBySource, visibleResults, sourceBuckets, sortMode]
+  );
 
   const toggleShelf = async (item: MangaSearchItem) => {
     const key = `${item.sourceId}+${item.id}`;

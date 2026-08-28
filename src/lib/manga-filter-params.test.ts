@@ -8,11 +8,19 @@
  *    轉成 GraphQL 變數送給上游，每一筆的形狀都要驗過。
  */
 
+import type {
+  MangaFilterSelection,
+  MangaSourceFilterOption,
+} from '@/lib/manga.types';
 import {
+  buildFilterChangeInputs,
+  isSameFilterControl,
+} from '@/lib/manga.types';
+import {
+  MAX_FILTER_INDEX,
   MAX_GROUP_SELECTIONS,
   parseMangaFilterSelections,
 } from '@/lib/manga-filter-params';
-import { buildFilterChangeInputs } from '@/lib/manga.types';
 
 describe('buildFilterChangeInputs', () => {
   it('select 轉 selectState', () => {
@@ -25,6 +33,38 @@ describe('buildFilterChangeInputs', () => {
     expect(
       buildFilterChangeInputs([{ position: 0, kind: 'sort', index: 1 }])
     ).toEqual([{ position: 0, sortState: { index: 1, ascending: false } }]);
+  });
+
+  it('sort 的 ascending: true 完整往返 —— 升冪不會靜默變降冪', () => {
+    /*
+     * 這是會靜默失敗的那一類：ascending 的存活靠 parse 端的條件展開
+     * `...(typeof ascending === 'boolean' ? { ascending } : {})`，
+     * build 端則是 `selection.ascending ?? false`。把 parse 端那段刪掉，
+     * 升冪排序會變成降冪，而其他測試全數照過。
+     */
+    const parsed = parseMangaFilterSelections(
+      JSON.stringify([{ position: 0, kind: 'sort', index: 2, ascending: true }])
+    );
+    expect(parsed).toEqual([
+      { position: 0, kind: 'sort', index: 2, ascending: true },
+    ]);
+    if (!parsed) throw new Error('parse 應該成功');
+    expect(buildFilterChangeInputs(parsed)).toEqual([
+      { position: 0, sortState: { index: 2, ascending: true } },
+    ]);
+  });
+
+  it('sort 的 ascending: false 明確給定時也要原樣往返', () => {
+    const parsed = parseMangaFilterSelections(
+      JSON.stringify([{ position: 3, kind: 'sort', index: 1, ascending: false }])
+    );
+    expect(parsed).toEqual([
+      { position: 3, kind: 'sort', index: 1, ascending: false },
+    ]);
+    if (!parsed) throw new Error('parse 應該成功');
+    expect(buildFilterChangeInputs(parsed)).toEqual([
+      { position: 3, sortState: { index: 1, ascending: false } },
+    ]);
   });
 
   it('checkbox 轉 checkBoxState', () => {
@@ -155,6 +195,33 @@ describe('parseMangaFilterSelections', () => {
       'group_select 缺 index',
       [{ position: 1, kind: 'group_select', innerPosition: 0 }],
     ],
+    [
+      'position 超過索引上限',
+      [{ position: MAX_FILTER_INDEX + 1, kind: 'select', index: 0 }],
+    ],
+    [
+      'index 超過索引上限',
+      [{ position: 1, kind: 'select', index: MAX_FILTER_INDEX + 1 }],
+    ],
+    [
+      'group_select innerPosition 超過索引上限',
+      [
+        {
+          position: 1,
+          kind: 'group_select',
+          innerPosition: MAX_FILTER_INDEX + 1,
+          index: 0,
+        },
+      ],
+    ],
+    [
+      'group positions 含超過索引上限的值',
+      [{ position: 1, kind: 'group', positions: [MAX_FILTER_INDEX + 1] }],
+    ],
+    [
+      'index 為 MAX_SAFE_INTEGER',
+      [{ position: 1, kind: 'select', index: Number.MAX_SAFE_INTEGER }],
+    ],
   ])('%s → 整包拒絕', (_label, payload) => {
     expect(parseMangaFilterSelections(JSON.stringify(payload))).toBeNull();
   });
@@ -188,5 +255,131 @@ describe('parseMangaFilterSelections', () => {
         ])
       )
     ).toBeNull();
+  });
+});
+
+/*
+ * isSameFilterControl —— 決定「改一個 filter 控制項時，哪些既有選擇要被取代」。
+ *
+ * 這是 page.tsx 五處 setFilterSelections 共用的判斷。它會靜默失敗：
+ * 判斷寫得太寬就吃掉兄弟控制項已選的值，寫得太窄就留下重複選擇，
+ * 兩種都不會報錯，只是送給上游的條件與畫面不符。
+ */
+describe('isSameFilterControl', () => {
+  const selectControl: MangaSourceFilterOption = {
+    position: 1,
+    kind: 'select',
+    name: '类型',
+    values: ['全部', '少男漫画'],
+  };
+  const groupControl: MangaSourceFilterOption = {
+    position: 7,
+    kind: 'group',
+    name: '分组标签',
+    options: [{ position: 0, name: '热血' }],
+  };
+  const innerSelect0: MangaSourceFilterOption = {
+    position: 7,
+    kind: 'group_select',
+    innerPosition: 0,
+    name: '少男漫画',
+    values: ['全部', '热血'],
+  };
+  const innerSelect3: MangaSourceFilterOption = {
+    position: 7,
+    kind: 'group_select',
+    innerPosition: 3,
+    name: '成人漫画',
+    values: ['全部', '巨乳'],
+  };
+
+  it('同一個頂層下拉：select 與 sort 視為同一個控制項', () => {
+    // 一個頂層 filter 只會是 select 或 sort 之一，使用者看到的是同一個下拉
+    expect(
+      isSameFilterControl({ position: 1, kind: 'select', index: 0 }, selectControl)
+    ).toBe(true);
+    expect(
+      isSameFilterControl({ position: 1, kind: 'sort', index: 0 }, selectControl)
+    ).toBe(true);
+  });
+
+  it('不同 position 的頂層下拉互不相干', () => {
+    expect(
+      isSameFilterControl({ position: 2, kind: 'select', index: 0 }, selectControl)
+    ).toBe(false);
+  });
+
+  it('同一群組內的不同下拉互不相干（共用頂層 position）', () => {
+    // 喜漫「分组标签」的 4 個下拉全部是 position 7，只比 position 會互相清掉
+    const chosen: MangaFilterSelection = {
+      position: 7,
+      kind: 'group_select',
+      innerPosition: 0,
+      index: 7,
+    };
+    expect(isSameFilterControl(chosen, innerSelect0)).toBe(true);
+    expect(isSameFilterControl(chosen, innerSelect3)).toBe(false);
+  });
+
+  it('同一 position 的 group chip 與 group_select 互不相干', () => {
+    const chipChoice: MangaFilterSelection = {
+      position: 7,
+      kind: 'group',
+      positions: [0],
+    };
+    const dropdownChoice: MangaFilterSelection = {
+      position: 7,
+      kind: 'group_select',
+      innerPosition: 0,
+      index: 1,
+    };
+    // 改下拉不能清掉 chip 的勾選，改 chip 也不能清掉下拉
+    expect(isSameFilterControl(chipChoice, innerSelect0)).toBe(false);
+    expect(isSameFilterControl(dropdownChoice, groupControl)).toBe(false);
+    expect(isSameFilterControl(chipChoice, groupControl)).toBe(true);
+    expect(isSameFilterControl(dropdownChoice, innerSelect0)).toBe(true);
+  });
+
+  it('頂層 checkbox 不會被同 position 的其他 kind 取代', () => {
+    const checkboxControl: MangaSourceFilterOption = {
+      position: 7,
+      kind: 'checkbox',
+      name: '只看完结',
+    };
+    expect(
+      isSameFilterControl({ position: 7, kind: 'checkbox', checked: true }, checkboxControl)
+    ).toBe(true);
+    expect(
+      isSameFilterControl({ position: 7, kind: 'group', positions: [0] }, checkboxControl)
+    ).toBe(false);
+    expect(
+      isSameFilterControl({ position: 7, kind: 'checkbox', checked: true }, groupControl)
+    ).toBe(false);
+  });
+
+  it('模擬實際 updater：改群組內一個下拉，兄弟選擇全部留存', () => {
+    /*
+     * 這是 Codex 指出「converter 測試測不到」的那一段 —— page.tsx 的
+     * rest 過濾。若它退回只比 position，下面的 prev 會被清成只剩新選擇。
+     */
+    const prev: MangaFilterSelection[] = [
+      { position: 1, kind: 'select', index: 1 },
+      { position: 7, kind: 'group', positions: [0, 4] },
+      { position: 7, kind: 'group_select', innerPosition: 0, index: 7 },
+      { position: 7, kind: 'group_select', innerPosition: 3, index: 2 },
+    ];
+    const rest = prev.filter((item) => !isSameFilterControl(item, innerSelect0));
+    const next: MangaFilterSelection[] = [
+      ...rest,
+      { position: 7, kind: 'group_select', innerPosition: 0, index: 12 },
+    ];
+    expect(next).toEqual([
+      { position: 1, kind: 'select', index: 1 },
+      { position: 7, kind: 'group', positions: [0, 4] },
+      { position: 7, kind: 'group_select', innerPosition: 3, index: 2 },
+      { position: 7, kind: 'group_select', innerPosition: 0, index: 12 },
+    ]);
+    // 而且轉成上游請求後，四個條件一個都不能少
+    expect(buildFilterChangeInputs(next)).toHaveLength(5);
   });
 });

@@ -122,6 +122,39 @@ export type MangaFilterSelection =
     };
 
 /**
+ * 判斷既有的 selection 是否來自同一個 UI 控制項（因此該被新選擇取代）。
+ *
+ * **不能只比 position。** GroupFilter 會在同一個頂層 position 吐出多筆
+ * group 與 group_select（見 getSourceFilters），只比 position 會讓使用者
+ * 改一個控制項時，靜默清掉同一群組裡其他控制項已經選好的值。
+ * group_select 還要再比 innerPosition —— 同一個群組內的多個下拉共用頂層
+ * position，這是喜漫「分组标签」那 4 個下拉的形狀。
+ *
+ * select 與 sort 視為同一個控制項：一個頂層 filter 只會是其中一種，
+ * 使用者看到的也是同一個下拉。
+ */
+export function isSameFilterControl(
+  item: MangaFilterSelection,
+  control: MangaSourceFilterOption
+): boolean {
+  if (item.position !== control.position) return false;
+  switch (control.kind) {
+    case 'select':
+    case 'sort':
+      return item.kind === 'select' || item.kind === 'sort';
+    case 'group_select':
+      return (
+        item.kind === 'group_select' &&
+        item.innerPosition === control.innerPosition
+      );
+    case 'group':
+      return item.kind === 'group';
+    case 'checkbox':
+      return item.kind === 'checkbox';
+  }
+}
+
+/**
  * Suwayomi fetchSourceManga 的 FilterChangeInput（我們用到的子集）。
  *
  * groupChange 在真實 schema 是遞迴的 FilterChangeInput —— 已用 introspection

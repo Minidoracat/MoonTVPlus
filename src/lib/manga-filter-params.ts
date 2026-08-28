@@ -10,13 +10,27 @@ import type { MangaFilterSelection } from '@/lib/manga.types';
 function readNumber(source: object, key: string): number | null {
   if (!(key in source)) return null;
   const value = Reflect.get(source, key);
-  return typeof value === 'number' && Number.isInteger(value) && value >= 0
+  return typeof value === 'number' &&
+    Number.isInteger(value) &&
+    value >= 0 &&
+    value <= MAX_FILTER_INDEX
     ? value
     : null;
 }
 
 /** 單一群組內最多允許勾選幾項；防止惡意 payload 塞爆上游 */
 export const MAX_GROUP_SELECTIONS = 200;
+
+/**
+ * filter 內各種索引（position／innerPosition／index）的上限。
+ *
+ * 與 recommend route 的 MAX_PAGE 同一個理由：這些數字會原樣進 GraphQL
+ * variables 送給來源，沒有上界就能塞到 Number.MAX_SAFE_INTEGER。
+ * MAX_FILTER_ENTRIES 只限筆數、不限量級，擋不住這個。
+ * 實測最大值：頂層 filter 5 個（喜漫）、群組內 71 項（Komiic）、
+ * select 34 個值（喜漫少男漫画），1000 已留足餘裕。
+ */
+export const MAX_FILTER_INDEX = 1000;
 
 /**
  * 頂層 filter 條目上限。
@@ -87,7 +101,8 @@ export function parseMangaFilterSelections(
         if (
           typeof value !== 'number' ||
           !Number.isInteger(value) ||
-          value < 0
+          value < 0 ||
+          value > MAX_FILTER_INDEX
         ) {
           return null;
         }

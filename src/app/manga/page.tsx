@@ -12,6 +12,7 @@ import type {
   MangaSourceProbeSummary,
 } from '@/lib/manga.types';
 import {
+  isSameFilterControl,
   MangaRecommendResult,
   MangaRecommendType,
   MangaSearchItem,
@@ -112,6 +113,17 @@ export default function MangaRecommendPage() {
     // 關鍵字也要跟著清：換來源後同一個關鍵字的搜尋範圍／分類語意都變了
     setKeywordInput('');
     setKeyword('');
+    /*
+     * 分頁面向也屬於舊來源，同樣要清：
+     * - page 留著會讓 load-more 帶「新 sourceId + 舊頁碼」去抓
+     * - result 留著更糟，append 只 concat 不比對 sourceId（見 fetchRecommend），
+     *   新來源的結果會被併進舊來源的清單裡
+     * - hasNextPage 留著會讓哨兵在新資料還沒回來前就觸發 load-more
+     * 這與 effect 裡「sourceId 變空」那條分支的處理一致。
+     */
+    setResult({ mangas: [], hasNextPage: false });
+    setPage(1);
+    setError('');
   }
 
   useEffect(() => {
@@ -230,7 +242,19 @@ export default function MangaRecommendPage() {
     } catch (err) {
       if (recommendRequestRef.current !== requestId) return;
       setError(formatMangaRecommendError((err as Error).message));
-      if (!append) {
+      if (append) {
+        /*
+         * 「載入更多」失敗必須把 hasNextPage 收掉，否則會無限重打上游。
+         *
+         * 哨兵 div 在失敗後仍掛在 DOM 且仍在視窗內（失敗不改變版面，
+         * 使用者也還停在底部），而 load-more effect 的 deps 含 loadingMore，
+         * true→false 會讓它重跑 → disconnect 後重新 observe → observe() 對
+         * 正在相交的元素會投遞一次初始 observation → 條件再次成立 → 再次
+         * 失敗。錯誤訊息已經顯示給使用者，讓他決定要不要重試，比我們替他
+         * 反覆去打漫畫站好。
+         */
+        setResult((prev) => ({ ...prev, hasNextPage: false }));
+      } else {
         setResult({ mangas: [], hasNextPage: false });
       }
     } finally {
@@ -463,12 +487,7 @@ export default function MangaRecommendPage() {
                           const raw = event.target.value;
                           setFilterSelections((prev) => {
                             const rest = prev.filter(
-                              // kind 也要比：GroupFilter 現在會在同一個頂層
-                              // position 吐出多筆 group/group_select，只比
-                              // position 會把它們一起清掉。
-                              (item) =>
-                                item.position !== filter.position ||
-                                (item.kind !== 'select' && item.kind !== 'sort')
+                              (item) => !isSameFilterControl(item, filter)
                             );
                             if (raw === '') return rest;
                             const index = Number(raw);
@@ -540,12 +559,7 @@ export default function MangaRecommendPage() {
                           const raw = event.target.value;
                           setFilterSelections((prev) => {
                             const rest = prev.filter(
-                              (item) =>
-                                !(
-                                  item.kind === 'group_select' &&
-                                  item.position === filter.position &&
-                                  item.innerPosition === filter.innerPosition
-                                )
+                              (item) => !isSameFilterControl(item, filter)
                             );
                             if (raw === '') return rest;
                             return [
@@ -599,10 +613,7 @@ export default function MangaRecommendPage() {
                           const next = event.target.checked;
                           setFilterSelections((prev) => {
                             const rest = prev.filter(
-                              // 同 position 可能還有 group/group_select，見上方註解
-                              (item) =>
-                                item.position !== filter.position ||
-                                item.kind !== 'checkbox'
+                              (item) => !isSameFilterControl(item, filter)
                             );
                             // 未勾 = 不送（來源預設值），不送 checked: false
                             return next
@@ -659,14 +670,10 @@ export default function MangaRecommendPage() {
                               (item) => item !== innerPosition
                             )
                           : [...currentPositions, innerPosition];
-                        // 只移除自己（kind='group'）：混合群組下同一 position
-                        // 還可能掛著 group_select 的兄弟選擇，不可連帶清掉
+                        // 只移除自己：混合群組下同一 position 還可能掛著
+                        // group_select 的兄弟選擇，不可連帶清掉
                         const rest = prev.filter(
-                          (item) =>
-                            !(
-                              item.kind === 'group' &&
-                              item.position === filter.position
-                            )
+                          (item) => !isSameFilterControl(item, filter)
                         );
                         // 全部取消勾選 = 移除這個 filter，不送空陣列
                         return nextPositions.length > 0
@@ -684,11 +691,7 @@ export default function MangaRecommendPage() {
                     onClear={() => {
                       setFilterSelections((prev) =>
                         prev.filter(
-                          (item) =>
-                            !(
-                              item.kind === 'group' &&
-                              item.position === filter.position
-                            )
+                          (item) => !isSameFilterControl(item, filter)
                         )
                       );
                     }}

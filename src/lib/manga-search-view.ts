@@ -42,14 +42,52 @@ const IGNORED_CREATORS = new Set([
 ]);
 
 /**
+ * 拆一個 author/artist 欄位；唯一特殊情況是把獨立的 N/A 保持成一塊。
+ * 不按空白拆：`BRAVE HEART petit`、韓文／英文作者名本身會有空白。
+ */
+function splitCreatorField(raw: string): string[] {
+  const parts: string[] = [];
+  let current = '';
+  const flush = () => {
+    const value = current.trim();
+    if (value) parts.push(value);
+    current = '';
+  };
+
+  for (let index = 0; index < raw.length; index += 1) {
+    const char = raw[index];
+    if (char === ',' || char === '，' || char === '、' || char === '&') {
+      flush();
+      continue;
+    }
+    if (char === '/') {
+      /*
+       * 只有「這一段目前正好是 N」且右側是「A + delimiter/end」才是 N/A。
+       * X/A社、X/A&B、Lyco./KARAi、mg_cls/白 都會走 flush，正常拆分。
+       * 未知 / N/A 的第一個 slash 拆分未知，第二個 slash 才保護 N/A。
+       */
+      const right = raw.slice(index + 1);
+      const isNa = current.trim().toLowerCase() === 'n' &&
+        /^\s*a(?=$|[\s,，、&/])/i.test(right);
+      if (isNa) {
+        current += char;
+      } else {
+        flush();
+      }
+      continue;
+    }
+    current += char;
+  }
+  flush();
+  return parts;
+}
+
+/**
  * 從 Suwayomi 的 author / artist 欄位取出可點擊的作者／上傳者。
  *
  * 上游沒有獨立的 uploader 欄位；不同 extension 會把作者、繪師、社團或
  * 上傳者塞進 author／artist。UI 統一叫「作者／上傳者」，不假裝能分辨角色。
- *
- * 多人欄位用常見分隔符拆開。刻意不按空白拆 —— `BRAVE HEART petit`、
- * 韓文／英文作者名本身會有空白。超過 200 字不做按鈕，因為搜尋 API 的 q
- * 上限就是 200，顯示一顆點了必定 400 的按鈕沒有意義。
+ * 超過搜尋 API q 上限的單一名字不做按鈕，避免顯示一顆點了必定 400 的操作。
  */
 export function getMangaCreators(item: MangaSearchItem): string[] {
   const seen = new Set<string>();
@@ -58,25 +96,16 @@ export function getMangaCreators(item: MangaSearchItem): string[] {
     if (!raw) continue;
     const rawName = raw.trim();
     /*
-     * 整欄 N/A（也接受 `N / A` 的空白變體）先忽略。
-     * 其他情況先把真正的 N/A token 暫時換成一段**不在本筆輸入中**的 NUL，
-     * 再用普通分隔符拆，最後還原。sentinel 必須動態選：JSON 可合法帶
-     * `\u0000`，若固定用單一 NUL，author=`A\u0000B` 會被誤改成 `AN/AB`。
-     *
-     * token pattern 同時要求左側 N，右側 delimiter／空白／結尾；X/A社、
-     * X/A&B、Lyco./KARAi 都照常拆，不重演 negative lookahead 只看右側的 bug。
+     * 整欄 N/A（也接受 `N / A` 的空白變體）先忽略；多人欄位交給
+     * splitCreatorField，在保留獨立 N/A token 的同時拆其他分隔符。
+     * 不用字串 sentinel：上游 JSON 可合法帶任意 control/private-use 字元，
+     * sentinel 無論固定或動態都要處理碰撞與上限，scanner 反而更短且線性。
      */
     if (IGNORED_CREATORS.has(rawName.replace(/\s+/g, '').toLowerCase())) {
       continue;
     }
-    let naToken = '\0';
-    while (rawName.includes(naToken)) naToken += '\0';
-    const protectedName = rawName.replace(
-      /\bn\s*\/\s*a(?=$|[\s,，、&/])/gi,
-      naToken
-    );
-    for (const part of protectedName.split(/[,，、/&]+/)) {
-      const name = part.replaceAll(naToken, 'N/A').trim();
+    for (const part of splitCreatorField(rawName)) {
+      const name = part.trim();
       const normalized = name.toLowerCase();
       if (
         !name ||

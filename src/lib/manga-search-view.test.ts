@@ -72,7 +72,7 @@ describe('作者／上傳者解析與篩選', () => {
     ).toEqual(['X', 'A社', 'mg_cls', '白', 'Lyco.', 'KARAi']);
   });
 
-  it('上游原值含 NUL 時不會和內部 N/A sentinel 碰撞', () => {
+  it('上游原值含 NUL 時不會被 N/A 保護邏輯改寫', () => {
     const dirty = `A\0B`;
     expect(
       getMangaCreators({
@@ -133,6 +133,13 @@ describe('作者／上傳者解析與篩選', () => {
         matchesMangaCreator(
           { ...item('s1', '禁漫', '3', 'T'), author: 'I' },
           { sourceId: 's1', name: 'i' }
+        )
+      ).toBe(true);
+      // 反方向：wanted 側是大寫 I，creator 側是小寫 i
+      expect(
+        matchesMangaCreator(
+          { ...item('s1', '禁漫', '4', 'T'), author: 'i' },
+          { sourceId: 's1', name: 'I' }
         )
       ).toBe(true);
     } finally {

@@ -63,6 +63,15 @@ describe('作者／上傳者解析與篩選', () => {
     expect(getMangaCreators(manga)).toEqual(['BRAVE HEART petit']);
   });
 
+  it('dedupe 保留空白差異：A B 與 AB 是兩個不同名稱', () => {
+    expect(
+      getMangaCreators({
+        ...item('s1', '作者資料', '2', 'T'),
+        author: 'A B，AB',
+      })
+    ).toEqual(['A B', 'AB']);
+  });
+
   it('slash 只有在 N/A token 內不拆，其他作者名稱照常拆', () => {
     expect(
       getMangaCreators({
@@ -120,8 +129,8 @@ describe('作者／上傳者解析與篩選', () => {
     /*
      * toLocaleLowerCase() 會採瀏覽器預設 locale；tr-TR 會把 AI 轉成 aı，
      * 無法命中 ignored 的 ai；`I` 也會轉成 `ı`，與 filter 的 `i` 不同。
-     * spy 分別守 raw guard（A I 去空白後）、per-part（尾田，AI），以及
-     * exact filter 的 wanted／creator 兩側。
+     * spy 分別守「去空白後的 ignoredKey」（A I）、普通 per-part（尾田，AI），
+     * 以及 exact filter 的 wanted／creator 兩側。
      */
     const spy = jest
       .spyOn(String.prototype, 'toLocaleLowerCase')

@@ -108,21 +108,12 @@ export function getMangaCreators(item: MangaSearchItem): string[] {
   for (const raw of [item.author, item.artist]) {
     if (!raw) continue;
     const rawName = raw.trim();
-    /*
-     * 整欄 N/A（也接受 `N / A` 的空白變體）先忽略；多人欄位交給
-     * splitCreatorField，在保留獨立 N/A token 的同時拆其他分隔符。
-     * 不用字串 sentinel：上游 JSON 可合法帶任意 control/private-use 字元，
-     * sentinel 無論固定或動態都要處理碰撞與上限，scanner 反而更短且線性。
-     */
-    if (IGNORED_CREATORS.has(rawName.replace(/\s+/g, '').toLowerCase())) {
-      continue;
-    }
     for (const part of splitCreatorField(rawName)) {
       const name = part.trim();
       const normalized = name.toLowerCase();
-      // ignore 查表要與整欄 guard 一樣移除空白，否則 scanner 保護下來的
-      // `N / A`／`N /A`／`N/ A` 會變成假作者按鈕。dedupe key 仍保留空白：
-      // 合法名稱 `A B` 與 `AB` 不該被合併。
+      // ignore 查表移除空白，讓 scanner 保護下來的 `N / A`／`N /A`／`N/ A`
+      // 仍命中 n/a；dedupe key 刻意保留空白，合法名稱 `A B` 與 `AB`
+      // 不應該被合併。
       const ignoredKey = name.replace(/\s+/g, '').toLowerCase();
       if (
         !name ||

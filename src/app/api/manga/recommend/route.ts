@@ -35,8 +35,17 @@ export async function GET(request: NextRequest) {
     const sourceId = searchParams.get('sourceId')?.trim();
     const pageParam = Number(searchParams.get('page') || '1');
     const typeParam = searchParams.get('type')?.trim().toUpperCase();
-    const type: MangaRecommendType = typeParam === 'LATEST' ? 'LATEST' : 'POPULAR';
     const keyword = searchParams.get('q')?.trim() || '';
+
+    /*
+     * 明確給了不合法的 type 要回 400，不能靜默 fallback 成 POPULAR。
+     * `type=LATSET` 這種拼錯會拿到外觀完全正常、實際排序類型錯誤的資料，
+     * 失敗被偽裝成成功。空字串與未提供則視為缺省（與 sourceId 的處理一致）。
+     */
+    if (typeParam && typeParam !== 'POPULAR' && typeParam !== 'LATEST') {
+      return NextResponse.json({ error: 'type 参数无效' }, { status: 400 });
+    }
+    const type: MangaRecommendType = typeParam === 'LATEST' ? 'LATEST' : 'POPULAR';
 
     if (keyword.length > MAX_KEYWORD_LENGTH) {
       return NextResponse.json({ error: '搜索关键词过长' }, { status: 400 });

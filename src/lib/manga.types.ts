@@ -171,6 +171,22 @@ export function upsertFilterSelection(
   control: MangaSourceFilterOption,
   next: MangaFilterSelection | null
 ): MangaFilterSelection[] {
+  if (next && !isSameFilterControl(next, control)) {
+    /*
+     * next 的識別鍵（position / kind / innerPosition）必須指向 control 自己。
+     * 不一致時舊值會被移除、新值掛到另一個識別鍵上：畫面顯示這個控制項未選，
+     * 上游卻收到一筆多餘條件 —— 而識別鍵都只是 number，型別擋不住，
+     * 五處呼叫端的一致性原本只靠人工複查維持。
+     *
+     * 這是程式設計錯誤，不是可預期的執行期狀況，所以直接丟出來。靜默容忍
+     * 等於把「送給上游的條件與畫面不符」變成沒有線索的問題 —— 那正是
+     * 這個函式被抽出來要防的事。同檔 SuwayomiFilterChange.groupChange 用
+     * union 讓非法組合無法編譯，這裡是型別做不到時的等價防線。
+     */
+    throw new Error(
+      `upsertFilterSelection: next 不屬於 control（control kind=${control.kind} position=${control.position}）`
+    );
+  }
   const rest = prev.filter((item) => !isSameFilterControl(item, control));
   return next ? [...rest, next] : rest;
 }

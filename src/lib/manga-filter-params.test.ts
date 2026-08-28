@@ -18,6 +18,7 @@ import {
   upsertFilterSelection,
 } from '@/lib/manga.types';
 import {
+  MAX_FILTER_ENTRIES,
   MAX_FILTER_INDEX,
   MAX_GROUP_SELECTIONS,
   parseMangaFilterSelections,
@@ -238,12 +239,34 @@ describe('parseMangaFilterSelections', () => {
 
 
   it('頂層條目超過上限整包拒絕', () => {
-    const entries = Array.from({ length: 51 }, (_, i) => ({
-      position: i,
+    const entries = Array.from({ length: MAX_FILTER_ENTRIES + 1 }, (_, i) => ({
+      position: i % (MAX_FILTER_INDEX + 1),
       kind: 'select',
       index: 0,
     }));
     expect(parseMangaFilterSelections(JSON.stringify(entries))).toBeNull();
+  });
+
+  it('數量恰好等於上限必須被接受（釘住兩個數量上限的邊界方向）', () => {
+    /*
+     * 與索引上限同一個理由：只斷言 +1 被拒的話，把
+     * `parsed.length > MAX_FILTER_ENTRIES` 改成 `>=`、
+     * `rawPositions.length > MAX_GROUP_SELECTIONS` 改成 `>=`，
+     * 51／201 仍被拒、所有測試仍全綠，實際上限卻靜默變成 49／199。
+     */
+    const positions = Array.from({ length: MAX_GROUP_SELECTIONS }, (_, i) => i);
+    expect(
+      parseMangaFilterSelections(
+        JSON.stringify([{ position: 1, kind: 'group', positions }])
+      )
+    ).toEqual([{ position: 1, kind: 'group', positions }]);
+
+    const entries = Array.from({ length: MAX_FILTER_ENTRIES }, (_, i) => ({
+      position: i,
+      kind: 'select' as const,
+      index: 0,
+    }));
+    expect(parseMangaFilterSelections(JSON.stringify(entries))).toEqual(entries);
   });
 
   it('索引恰好等於上限必須被接受（釘住邊界方向）', () => {
@@ -491,5 +514,59 @@ describe('isSameFilterControl', () => {
       index: 3,
     });
     expect(twice).toEqual([{ position: 1, kind: 'select', index: 3 }]);
+  });
+
+  it('upsertFilterSelection：next 與 control 不一致時直接丟錯', () => {
+    /*
+     * 識別鍵（position / kind / innerPosition）都只是 number 或字面量，
+     * 型別擋不住呼叫端組錯。不擋的話：舊值被移除、新值掛到另一個識別鍵上，
+     * 畫面顯示該控制項未選、上游卻收到一筆多餘條件，而且完全不報錯。
+     * 兩條 review lane 各自指出這是這個 export 最關鍵的跨參數 invariant。
+     */
+    const prev: MangaFilterSelection[] = [
+      { position: 7, kind: 'group_select', innerPosition: 0, index: 7 },
+    ];
+    // innerPosition 抄錯：control 是 inner 0，next 卻指向 inner 3
+    expect(() =>
+      upsertFilterSelection(prev, innerSelect0, {
+        position: 7,
+        kind: 'group_select',
+        innerPosition: 3,
+        index: 5,
+      })
+    ).toThrow(/不屬於 control/);
+    // position 抄錯
+    expect(() =>
+      upsertFilterSelection(prev, selectControl, {
+        position: 2,
+        kind: 'select',
+        index: 0,
+      })
+    ).toThrow(/不屬於 control/);
+    // kind 抄錯：control 是頂層 select，next 卻是 checkbox
+    expect(() =>
+      upsertFilterSelection(prev, selectControl, {
+        position: 1,
+        kind: 'checkbox',
+        checked: true,
+      })
+    ).toThrow(/不屬於 control/);
+    // 一致的 pair 不受影響
+    expect(() =>
+      upsertFilterSelection(prev, innerSelect0, {
+        position: 7,
+        kind: 'group_select',
+        innerPosition: 0,
+        index: 5,
+      })
+    ).not.toThrow();
+    // select 與 sort 互為同一控制項，不算不一致
+    expect(() =>
+      upsertFilterSelection(prev, selectControl, {
+        position: 1,
+        kind: 'sort',
+        index: 0,
+      })
+    ).not.toThrow();
   });
 });

@@ -77,7 +77,14 @@ export default function MangaRecommendPage() {
   );
   const [result, setResult] = useState<MangaRecommendResult>({ mangas: [], hasNextPage: false });
   const [page, setPage] = useState(1);
-  const [loading, setLoading] = useState(false);
+  /*
+   * 初值跟著 sourceId：URL 帶了 sourceId 時，第一次 render（含 SSR）就該是
+   * 載入中，否則 result.mangas 是空陣列而 loading 為 false，畫面會斷言
+   * 「当前源暂无推荐内容」—— 實測 SSR 回傳的 HTML 確實含這句，使用者在
+   * hydration 與第一次 fetch 完成前就看到它。換來源那一路徑由 render 期的
+   * setLoading(true) 負責，這裡只管初始掛載。
+   */
+  const [loading, setLoading] = useState(() => Boolean(sourceId));
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState('');
   const [shelf, setShelf] = useState<Record<string, MangaShelfItem>>({});
@@ -751,17 +758,34 @@ export default function MangaRecommendPage() {
             </div>
 
             {/* 哨兵不能在載入失敗時說「没有更多了」：觸發載入更多的前提就是
-                使用者已經捲到底部，而錯誤訊息渲染在整個卡片 grid 之上、視窗外，
-                他看到的只有這一行。宣告一個假的結束會讓他以為目錄到底而
-                停止瀏覽，靜默失去這個來源其餘所有頁。 */}
+                使用者已經捲到底部，而錯誤訊息渲染在整個卡片 grid 之上、視窗外
+                （實測差 5479px），他看到的只有這一行。宣告一個假的結束會讓他
+                以為目錄到底而停止瀏覽。
+
+                也不能叫他「刷新重试」：filterSelections 與 keyword 都是純 state、
+                從不寫進 URL（mangaHomeHref 只放 sourceId 與 type），重新整理會把
+                他選好的分類／排序／群組 chip／源內關鍵字全部清成初始值。而暫時性
+                失敗重整後常常真的有結果，他不會意識到條件掉了。
+
+                所以這裡給重試按鈕：狀態全都還在，單次重發即可。不會重開無限
+                重打迴圈 —— observer 看的是 result.hasNextPage（失敗時已收成
+                false），只有手動點擊會觸發。 */}
             <div ref={loadMoreRef} className='mt-6 flex min-h-10 items-center justify-center text-sm text-gray-500 dark:text-gray-400'>
-              {loadingMore
-                ? '正在加载更多...'
-                : result.hasNextPage
-                  ? '继续下滑加载更多'
-                  : error
-                    ? '载入失败，请刷新重试'
-                    : '没有更多了'}
+              {loadingMore ? (
+                '正在加载更多...'
+              ) : result.hasNextPage ? (
+                '继续下滑加载更多'
+              ) : error ? (
+                <button
+                  type='button'
+                  onClick={() => void fetchRecommend(page + 1, true)}
+                  className='min-h-11 rounded-2xl border border-gray-200 px-4 text-sm font-medium text-sky-600 transition-colors hover:border-sky-500 hover:text-sky-700 dark:border-gray-700 dark:text-sky-400 dark:hover:border-sky-500'
+                >
+                  载入更多失败，点击重试
+                </button>
+              ) : (
+                '没有更多了'
+              )}
             </div>
           </>
         )}

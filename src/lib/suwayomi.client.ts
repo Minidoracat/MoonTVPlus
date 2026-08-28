@@ -1174,9 +1174,10 @@ ${fields}
 
         /*
          * 刻意不去安排 group 與 group_select 在這個陣列裡的先後：消費端
-         * （page.tsx）是依 kind 分三趟過濾渲染的 —— group_select 畫在 grid 內、
-         * group chip 畫在 grid 外，顯示順序由那邊的結構決定，與這裡的
-         * 陣列順序無關。先前為此緩衝 group_select 的寫法是無效的結構。
+         * （page.tsx）是依 kind 分四趟過濾渲染的 —— select|sort、group_select、
+         * checkbox 三趟畫在 grid 內，group chip 那趟畫在 grid 外，顯示順序
+         * 由那邊的結構決定，與這裡的陣列順序無關。
+         * 先前為此緩衝 group_select 的寫法是無效的結構。
          */
         if (checkboxes.length > 0) {
           options.push({

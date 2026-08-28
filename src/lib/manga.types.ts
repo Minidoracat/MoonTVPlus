@@ -155,6 +155,27 @@ export function isSameFilterControl(
 }
 
 /**
+ * 把某個控制項的新選擇寫進 selections，同時移除該控制項的舊選擇。
+ *
+ * `next` 為 `null` 代表這個控制項回到未選狀態（下拉選了空白、checkbox 取消
+ * 勾選、群組 chip 全部取消）—— 那就只移除舊值、不加新值。刻意不送「空選擇」
+ * 給上游：`{ checked: false }` 或空 positions 與「使用者沒有選」在來源端是
+ * 不同語意。
+ *
+ * 五處 UI 控制項共用這一個函式，是為了讓 rest 過濾的規則只有一份實作。
+ * 先前每處各自手寫 `prev.filter(...)`，抽出判斷式後外殼仍是五份複製，
+ * 於是任何一處退化成「只比 position」都不會有測試失敗（實測驗證過）。
+ */
+export function upsertFilterSelection(
+  prev: MangaFilterSelection[],
+  control: MangaSourceFilterOption,
+  next: MangaFilterSelection | null
+): MangaFilterSelection[] {
+  const rest = prev.filter((item) => !isSameFilterControl(item, control));
+  return next ? [...rest, next] : rest;
+}
+
+/**
  * Suwayomi fetchSourceManga 的 FilterChangeInput（我們用到的子集）。
  *
  * groupChange 在真實 schema 是遞迴的 FilterChangeInput —— 已用 introspection

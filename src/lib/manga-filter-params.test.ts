@@ -15,6 +15,7 @@ import type {
 import {
   buildFilterChangeInputs,
   isSameFilterControl,
+  upsertFilterSelection,
 } from '@/lib/manga.types';
 import {
   MAX_FILTER_INDEX,
@@ -244,6 +245,32 @@ describe('parseMangaFilterSelections', () => {
     }));
     expect(parseMangaFilterSelections(JSON.stringify(entries))).toBeNull();
   });
+
+  it('索引恰好等於上限必須被接受（釘住邊界方向）', () => {
+    /*
+     * 只斷言 MAX_FILTER_INDEX + 1 被拒是不夠的：把 readNumber 的
+     * `value <= MAX_FILTER_INDEX` 改成 `<`、group positions 的
+     * `value > MAX_FILTER_INDEX` 改成 `>=`，1001 仍會被拒、
+     * 所有拒絕測試仍全綠，差一格的變異完整存活。
+     */
+    const atLimit = { position: MAX_FILTER_INDEX, kind: 'select', index: MAX_FILTER_INDEX };
+    expect(parseMangaFilterSelections(JSON.stringify([atLimit]))).toEqual([atLimit]);
+
+    const innerAtLimit = {
+      position: MAX_FILTER_INDEX,
+      kind: 'group_select',
+      innerPosition: MAX_FILTER_INDEX,
+      index: MAX_FILTER_INDEX,
+    };
+    expect(parseMangaFilterSelections(JSON.stringify([innerAtLimit]))).toEqual([
+      innerAtLimit,
+    ]);
+
+    const groupAtLimit = { position: 1, kind: 'group', positions: [MAX_FILTER_INDEX] };
+    expect(parseMangaFilterSelections(JSON.stringify([groupAtLimit]))).toEqual([
+      groupAtLimit,
+    ]);
+  });
   it('一筆壞掉時整包拒絕，不做部分接受', () => {
     // 部分接受會讓「送了 3 個條件、實際只套 2 個」靜默發生，
     // 使用者看到的結果與選擇不符卻沒有任何錯誤
@@ -293,14 +320,37 @@ describe('isSameFilterControl', () => {
     values: ['全部', '巨乳'],
   };
 
-  it('同一個頂層下拉：select 與 sort 視為同一個控制項', () => {
-    // 一個頂層 filter 只會是 select 或 sort 之一，使用者看到的是同一個下拉
+  it('同一個頂層下拉：select 與 sort 雙向都視為同一個控制項', () => {
+    /*
+     * 一個頂層 filter 只會是 select 或 sort 之一，使用者看到的是同一個下拉。
+     * 兩個 case 都要測：只用 selectControl 當第二參數的話，
+     * `case 'sort'` 分支零覆蓋 —— 把它改成只匹配 item.kind === 'sort'
+     * 也不會有測試失敗，同 position 的 select 選擇就會累積成重複。
+     */
+    const sortControl: MangaSourceFilterOption = {
+      position: 1,
+      kind: 'sort',
+      name: '排序',
+      values: ['人气推荐', '更新时间'],
+    };
+    // control 是 select
     expect(
       isSameFilterControl({ position: 1, kind: 'select', index: 0 }, selectControl)
     ).toBe(true);
     expect(
       isSameFilterControl({ position: 1, kind: 'sort', index: 0 }, selectControl)
     ).toBe(true);
+    // control 是 sort —— 反方向，先前沒被覆蓋
+    expect(
+      isSameFilterControl({ position: 1, kind: 'sort', index: 0 }, sortControl)
+    ).toBe(true);
+    expect(
+      isSameFilterControl({ position: 1, kind: 'select', index: 0 }, sortControl)
+    ).toBe(true);
+    // 其他 kind 不受這個等價影響
+    expect(
+      isSameFilterControl({ position: 1, kind: 'checkbox', checked: true }, sortControl)
+    ).toBe(false);
   });
 
   it('不同 position 的頂層下拉互不相干', () => {
@@ -357,10 +407,11 @@ describe('isSameFilterControl', () => {
     ).toBe(false);
   });
 
-  it('模擬實際 updater：改群組內一個下拉，兄弟選擇全部留存', () => {
+  it('upsertFilterSelection：改群組內一個下拉，兄弟選擇全部留存', () => {
     /*
-     * 這是 Codex 指出「converter 測試測不到」的那一段 —— page.tsx 的
-     * rest 過濾。若它退回只比 position，下面的 prev 會被清成只剩新選擇。
+     * 這個測試呼叫的是 page.tsx 五處 updater 實際使用的那個函式。
+     * 先前的版本在測試檔內自行重寫 filter + concat，所以把 page.tsx 的
+     * rest 過濾退回「只比 position」時測試照樣全綠 —— 假保證。
      */
     const prev: MangaFilterSelection[] = [
       { position: 1, kind: 'select', index: 1 },
@@ -368,11 +419,12 @@ describe('isSameFilterControl', () => {
       { position: 7, kind: 'group_select', innerPosition: 0, index: 7 },
       { position: 7, kind: 'group_select', innerPosition: 3, index: 2 },
     ];
-    const rest = prev.filter((item) => !isSameFilterControl(item, innerSelect0));
-    const next: MangaFilterSelection[] = [
-      ...rest,
-      { position: 7, kind: 'group_select', innerPosition: 0, index: 12 },
-    ];
+    const next = upsertFilterSelection(prev, innerSelect0, {
+      position: 7,
+      kind: 'group_select',
+      innerPosition: 0,
+      index: 12,
+    });
     expect(next).toEqual([
       { position: 1, kind: 'select', index: 1 },
       { position: 7, kind: 'group', positions: [0, 4] },
@@ -381,5 +433,63 @@ describe('isSameFilterControl', () => {
     ]);
     // 而且轉成上游請求後，四個條件一個都不能少
     expect(buildFilterChangeInputs(next)).toHaveLength(5);
+  });
+
+  it('upsertFilterSelection：改頂層下拉不會動到同 position 的群組選擇', () => {
+    // 這是抽出這個函式的理由：退回「只比 position」時，
+    // 下面 position 7 的三筆會被一起清掉
+    const prev: MangaFilterSelection[] = [
+      { position: 7, kind: 'group', positions: [0] },
+      { position: 7, kind: 'group_select', innerPosition: 0, index: 7 },
+      { position: 7, kind: 'checkbox', checked: true },
+    ];
+    const topLevelSelectAt7: MangaSourceFilterOption = {
+      position: 7,
+      kind: 'select',
+      name: '类型',
+      values: ['全部', '少男漫画'],
+    };
+    const next = upsertFilterSelection(prev, topLevelSelectAt7, {
+      position: 7,
+      kind: 'select',
+      index: 1,
+    });
+    expect(next).toEqual([
+      { position: 7, kind: 'group', positions: [0] },
+      { position: 7, kind: 'group_select', innerPosition: 0, index: 7 },
+      { position: 7, kind: 'checkbox', checked: true },
+      { position: 7, kind: 'select', index: 1 },
+    ]);
+  });
+
+  it('upsertFilterSelection：next 為 null 只移除、不新增', () => {
+    // 下拉選空白、checkbox 取消勾選、群組 chip 全部取消都走這條路
+    const prev: MangaFilterSelection[] = [
+      { position: 1, kind: 'select', index: 1 },
+      { position: 7, kind: 'group_select', innerPosition: 0, index: 7 },
+    ];
+    expect(upsertFilterSelection(prev, innerSelect0, null)).toEqual([
+      { position: 1, kind: 'select', index: 1 },
+    ]);
+    expect(upsertFilterSelection(prev, selectControl, null)).toEqual([
+      { position: 7, kind: 'group_select', innerPosition: 0, index: 7 },
+    ]);
+  });
+
+  it('upsertFilterSelection：同一控制項重複選取不會累積', () => {
+    const prev: MangaFilterSelection[] = [
+      { position: 1, kind: 'select', index: 1 },
+    ];
+    const once = upsertFilterSelection(prev, selectControl, {
+      position: 1,
+      kind: 'select',
+      index: 2,
+    });
+    const twice = upsertFilterSelection(once, selectControl, {
+      position: 1,
+      kind: 'select',
+      index: 3,
+    });
+    expect(twice).toEqual([{ position: 1, kind: 'select', index: 3 }]);
   });
 });

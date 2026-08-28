@@ -38,10 +38,6 @@ export async function GET(request: NextRequest) {
     const type: MangaRecommendType = typeParam === 'LATEST' ? 'LATEST' : 'POPULAR';
     const keyword = searchParams.get('q')?.trim() || '';
 
-    if (!sourceId) {
-      return NextResponse.json({ mangas: [], hasNextPage: false });
-    }
-
     if (keyword.length > MAX_KEYWORD_LENGTH) {
       return NextResponse.json({ error: '搜索关键词过长' }, { status: 400 });
     }
@@ -61,12 +57,17 @@ export async function GET(request: NextRequest) {
     }
 
     /*
-     * 見 MAX_PAGE 的註解：這是「沒有更多」，不是呼叫端的錯。
+     * 以下兩個早退回 200 空結果，語意都是「沒有東西可給」而不是呼叫端有錯。
      *
-     * 這個早退必須排在**所有格式驗證之後** —— 放前面的話，
-     * `?page=10001&filters=<格式錯誤>` 會拿到 200 而不是 400，
-     * 格式無效的輸入被靜默接受。
+     * 兩者都**必須排在所有格式驗證之後**，否則會遮蔽格式錯誤：
+     * - `sourceId` 早退放前面 → `?page=0&filters=<壞的>`（不帶 sourceId）
+     *   會拿到 200，同一組參數帶了 sourceId 才回 400，回應碼取決於一個
+     *   無關的參數。
+     * - MAX_PAGE 早退放前面 → `?page=10001&filters=<壞的>` 會拿到 200。
      */
+    if (!sourceId) {
+      return NextResponse.json({ mangas: [], hasNextPage: false });
+    }
     if (pageParam > MAX_PAGE) {
       return NextResponse.json({ mangas: [], hasNextPage: false });
     }

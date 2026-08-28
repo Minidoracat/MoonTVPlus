@@ -12,7 +12,7 @@ import type {
   MangaSourceProbeSummary,
 } from '@/lib/manga.types';
 import {
-  isSameFilterControl,
+  upsertFilterSelection,
   MangaRecommendResult,
   MangaRecommendType,
   MangaSearchItem,
@@ -124,6 +124,14 @@ export default function MangaRecommendPage() {
     setResult({ mangas: [], hasNextPage: false });
     setPage(1);
     setError('');
+    /*
+     * 一併把 loading 設起來。清空 result 之後，若 loading 還是 false，
+     * 這一次 commit 會走進「mangas 為空」那一臂而渲染「当前源暂无推荐内容」
+     * —— 在我們還沒送出任何請求時就斷言新來源沒有內容。實際把 loading 設
+     * true 的是下面那個 effect，但 effect 排在 paint 之後，中間有一個可被
+     * 繪製的 frame。「sourceId 變空」的情況由那個 effect 顯式設回 false。
+     */
+    setLoading(true);
   }
 
   useEffect(() => {
@@ -486,13 +494,13 @@ export default function MangaRecommendPage() {
                         onChange={(event) => {
                           const raw = event.target.value;
                           setFilterSelections((prev) => {
-                            const rest = prev.filter(
-                              (item) => !isSameFilterControl(item, filter)
-                            );
-                            if (raw === '') return rest;
+                            if (raw === '') {
+                              return upsertFilterSelection(prev, filter, null);
+                            }
                             const index = Number(raw);
-                            return [
-                              ...rest,
+                            return upsertFilterSelection(
+                              prev,
+                              filter,
                               filter.kind === 'sort'
                                 ? {
                                     position: filter.position,
@@ -504,8 +512,8 @@ export default function MangaRecommendPage() {
                                     position: filter.position,
                                     kind: 'select',
                                     index,
-                                  },
-                            ];
+                                  }
+                            );
                           });
                         }}
                         className='h-11 w-full cursor-pointer rounded-2xl border border-gray-200 bg-gray-50 px-3 text-sm text-gray-900 outline-none transition-colors duration-200 focus:border-sky-500 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-100'
@@ -557,21 +565,20 @@ export default function MangaRecommendPage() {
                         value={current ? String(current.index) : ''}
                         onChange={(event) => {
                           const raw = event.target.value;
-                          setFilterSelections((prev) => {
-                            const rest = prev.filter(
-                              (item) => !isSameFilterControl(item, filter)
-                            );
-                            if (raw === '') return rest;
-                            return [
-                              ...rest,
-                              {
-                                position: filter.position,
-                                kind: 'group_select',
-                                innerPosition: filter.innerPosition,
-                                index: Number(raw),
-                              },
-                            ];
-                          });
+                          setFilterSelections((prev) =>
+                            upsertFilterSelection(
+                              prev,
+                              filter,
+                              raw === ''
+                                ? null
+                                : {
+                                    position: filter.position,
+                                    kind: 'group_select',
+                                    innerPosition: filter.innerPosition,
+                                    index: Number(raw),
+                                  }
+                            )
+                          );
                         }}
                         className='h-11 w-full cursor-pointer rounded-2xl border border-gray-200 bg-gray-50 px-3 text-sm text-gray-900 outline-none transition-colors duration-200 focus:border-sky-500 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-100'
                       >
@@ -611,22 +618,20 @@ export default function MangaRecommendPage() {
                         checked={checked}
                         onChange={(event) => {
                           const next = event.target.checked;
-                          setFilterSelections((prev) => {
-                            const rest = prev.filter(
-                              (item) => !isSameFilterControl(item, filter)
-                            );
-                            // 未勾 = 不送（來源預設值），不送 checked: false
-                            return next
-                              ? [
-                                  ...rest,
-                                  {
+                          setFilterSelections((prev) =>
+                            upsertFilterSelection(
+                              prev,
+                              filter,
+                              // 未勾 = 不送（來源預設值），不送 checked: false
+                              next
+                                ? {
                                     position: filter.position,
                                     kind: 'checkbox',
                                     checked: true,
-                                  },
-                                ]
-                              : rest;
-                          });
+                                  }
+                                : null
+                            )
+                          );
                         }}
                         className='h-4 w-4 cursor-pointer rounded border-gray-300 text-sky-600 focus:ring-2 focus:ring-sky-500/40'
                       />
@@ -670,29 +675,23 @@ export default function MangaRecommendPage() {
                               (item) => item !== innerPosition
                             )
                           : [...currentPositions, innerPosition];
-                        // 只移除自己：混合群組下同一 position 還可能掛著
-                        // group_select 的兄弟選擇，不可連帶清掉
-                        const rest = prev.filter(
-                          (item) => !isSameFilterControl(item, filter)
-                        );
                         // 全部取消勾選 = 移除這個 filter，不送空陣列
-                        return nextPositions.length > 0
-                          ? [
-                              ...rest,
-                              {
+                        return upsertFilterSelection(
+                          prev,
+                          filter,
+                          nextPositions.length > 0
+                            ? {
                                 position: filter.position,
                                 kind: 'group',
                                 positions: nextPositions,
-                              },
-                            ]
-                          : rest;
+                              }
+                            : null
+                        );
                       });
                     }}
                     onClear={() => {
                       setFilterSelections((prev) =>
-                        prev.filter(
-                          (item) => !isSameFilterControl(item, filter)
-                        )
+                        upsertFilterSelection(prev, filter, null)
                       );
                     }}
                   />
@@ -751,8 +750,18 @@ export default function MangaRecommendPage() {
               })}
             </div>
 
+            {/* 哨兵不能在載入失敗時說「没有更多了」：觸發載入更多的前提就是
+                使用者已經捲到底部，而錯誤訊息渲染在整個卡片 grid 之上、視窗外，
+                他看到的只有這一行。宣告一個假的結束會讓他以為目錄到底而
+                停止瀏覽，靜默失去這個來源其餘所有頁。 */}
             <div ref={loadMoreRef} className='mt-6 flex min-h-10 items-center justify-center text-sm text-gray-500 dark:text-gray-400'>
-              {loadingMore ? '正在加载更多...' : result.hasNextPage ? '继续下滑加载更多' : '没有更多了'}
+              {loadingMore
+                ? '正在加载更多...'
+                : result.hasNextPage
+                  ? '继续下滑加载更多'
+                  : error
+                    ? '载入失败，请刷新重试'
+                    : '没有更多了'}
             </div>
           </>
         )}

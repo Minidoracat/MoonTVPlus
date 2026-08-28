@@ -27,14 +27,27 @@ export async function GET(request: NextRequest) {
     if (rawLang !== null && !LANG_PATTERN.test(rawLang)) {
       return NextResponse.json({ error: 'lang 参数格式无效' }, { status: 400 });
     }
-    const lang = rawLang || process.env.SUWAYOMI_DEFAULT_LANG || 'zh';
-    // 政策不可信時不可列出全部來源：降級設定的 sourceIds 是空陣列，
-    // getSources() 會回傳所有來源，等於把管理員刻意隱藏的（含 NSFW）源名
-    // 洩漏到 picker UI。列表端點跟著授權邊界一起 fail closed。
+    /*
+     * 政策不可信時不可列出全部來源：降級設定的 sourceIds 是空陣列，
+     * getSources() 會回傳所有來源，等於把管理員刻意隱藏的（含 NSFW）源名
+     * 洩漏到 picker UI。列表端點跟著授權邊界一起 fail closed。
+     */
     await suwayomiClient.assertPolicyKnown();
-    const [sources, config, probeCache] = await Promise.all([
+    /*
+     * 預設語言只有一個來源：resolveSuwayomiConfig 的 defaultLang
+     * （它是 `DB 的 SuwayomiConfig.DefaultLang || env || 'zh'`）。
+     *
+     * 先前這裡自己寫 `process.env.SUWAYOMI_DEFAULT_LANG || 'zh'`，**跳過 DB**，
+     * 而預設搜尋走的 getSearchSources 用的是 resolved.defaultLang（DB 覆蓋 env）
+     * —— 兩邊的優先序相反。管理員在面板把 DefaultLang 改成 zh-Hant 而 env
+     * 沒設時，這個清單會列出 zh 的 50 顆給 multi-picker，但使用者不勾選任何
+     * 來源時預設搜尋只查 zh-Hant 的 2 顆：清單與實際搜尋範圍不一致。
+     * 兩邊恰好相同時看不出來，那正是它一直沒被發現的原因。
+     */
+    const config = await getSuwayomiConfig();
+    const lang = rawLang || config.defaultLang;
+    const [sources, probeCache] = await Promise.all([
       suwayomiClient.getSources(lang),
-      getSuwayomiConfig(),
       readMangaProbeCache(),
     ]);
     // maxSources = 單次搜尋實際查詢的來源上限，前端用來提示多選超限

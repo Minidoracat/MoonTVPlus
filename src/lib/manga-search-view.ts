@@ -59,21 +59,24 @@ export function getMangaCreators(item: MangaSearchItem): string[] {
     const rawName = raw.trim();
     /*
      * 整欄 N/A（也接受 `N / A` 的空白變體）先忽略。
-     * 其他情況先把真正的 N/A token 暫時換成不可能出現在作者名裡的 NUL，
-     * 再用普通分隔符拆，最後還原。這比 negative lookahead 安全：
-     * `/(?!\s*a\b)` 只看 slash 右邊，`X/A社` 的 A→社 也有 word boundary，
-     * 會被誤保護成一顆 X/A社；token pattern 同時要求左邊是 N、右邊是
-     * delimiter/空白/結尾，X/A社、X/A&B、Lyco./KARAi 都照常拆。
+     * 其他情況先把真正的 N/A token 暫時換成一段**不在本筆輸入中**的 NUL，
+     * 再用普通分隔符拆，最後還原。sentinel 必須動態選：JSON 可合法帶
+     * `\u0000`，若固定用單一 NUL，author=`A\u0000B` 會被誤改成 `AN/AB`。
+     *
+     * token pattern 同時要求左側 N，右側 delimiter／空白／結尾；X/A社、
+     * X/A&B、Lyco./KARAi 都照常拆，不重演 negative lookahead 只看右側的 bug。
      */
     if (IGNORED_CREATORS.has(rawName.replace(/\s+/g, '').toLowerCase())) {
       continue;
     }
+    let naToken = '\0';
+    while (rawName.includes(naToken)) naToken += '\0';
     const protectedName = rawName.replace(
       /\bn\s*\/\s*a(?=$|[\s,，、&/])/gi,
-      '\0'
+      naToken
     );
     for (const part of protectedName.split(/[,，、/&]+/)) {
-      const name = part.replaceAll('\0', 'N/A').trim();
+      const name = part.replaceAll(naToken, 'N/A').trim();
       const normalized = name.toLowerCase();
       if (
         !name ||

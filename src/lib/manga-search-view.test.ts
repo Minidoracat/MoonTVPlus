@@ -72,6 +72,16 @@ describe('作者／上傳者解析與篩選', () => {
     ).toEqual(['X', 'A社', 'mg_cls', '白', 'Lyco.', 'KARAi']);
   });
 
+  it('上游原值含 NUL 時不會和內部 N/A sentinel 碰撞', () => {
+    const dirty = `A\0B`;
+    expect(
+      getMangaCreators({
+        ...item('s1', '髒資料來源', '1', 'T'),
+        author: `N/A，${dirty}`,
+      })
+    ).toEqual([dirty]);
+  });
+
   it.each(['N/A', 'n/a', 'N / A', '佚名', '未知', 'AI', '-', '無'])(
     '忽略沒有搜尋意義的上游佔位值「%s」',
     (author) => {
@@ -98,8 +108,8 @@ describe('作者／上傳者解析與篩選', () => {
     /*
      * toLocaleLowerCase() 會採瀏覽器預設 locale；tr-TR 會把 AI 轉成 aı，
      * 無法命中 ignored 的 ai；`I` 也會轉成 `ı`，與 filter 的 `i` 不同。
-     * spy 讓三個 toLowerCase 呼叫點任一退化回 locale 版本時，在任何 CI
-     * locale 都有可觀察差異。
+     * spy 分別守 raw guard（A I 去空白後）、per-part（尾田，AI），以及
+     * exact filter 的 wanted／creator 兩側。
      */
     const spy = jest
       .spyOn(String.prototype, 'toLocaleLowerCase')
@@ -107,16 +117,21 @@ describe('作者／上傳者解析與篩選', () => {
         return String(this).replaceAll('I', 'ı').toLowerCase();
       });
     try {
-      // per-part 路徑，不能只測整欄 AI（那會被 raw guard 攔掉）
       expect(
         getMangaCreators({
           ...item('s1', '禁漫', '1', 'T'),
+          author: 'A I',
+        })
+      ).toEqual([]);
+      expect(
+        getMangaCreators({
+          ...item('s1', '禁漫', '2', 'T'),
           author: '尾田，AI',
         })
       ).toEqual(['尾田']);
       expect(
         matchesMangaCreator(
-          { ...item('s1', '禁漫', '2', 'T'), author: 'I' },
+          { ...item('s1', '禁漫', '3', 'T'), author: 'I' },
           { sourceId: 's1', name: 'i' }
         )
       ).toBe(true);
@@ -327,13 +342,25 @@ describe('groupResultsBySource', () => {
   });
 
   it('不就地改動傳入的 buckets（chip 也在用同一個陣列）', () => {
-    const before = buckets.map((b) => b.sourceId);
-    const visible = selectVisibleResults(SLOW_FIRST, {
+    /*
+     * 必須用「名稱序 ≠ 筆數序」的資料。SLOW_FIRST 在這個環境的兩種順序
+     * 剛好都是 包子→喜漫→禁漫，退化成直接 sort(buckets) 仍會全綠。
+     */
+    const divergent: MangaSearchItem[] = [
+      item('d1', '包子漫画', 'a1', 'T1'),
+      item('d2', '禁漫天堂', 'b1', 'T2'),
+      item('d2', '禁漫天堂', 'b2', 'T3'),
+      item('d2', '禁漫天堂', 'b3', 'T4'),
+      item('d3', '喜漫漫画', 'c1', 'T5'),
+    ];
+    const divergentBuckets = buildSourceBuckets(divergent, { streaming: false });
+    const before = divergentBuckets.map((bucket) => bucket.sourceId);
+    const visible = selectVisibleResults(divergent, {
       sourceFilter: [],
       sortMode: 'source',
     });
-    groupResultsBySource(visible, buckets, { sortMode: 'source' });
-    expect(buckets.map((b) => b.sourceId)).toEqual(before);
+    groupResultsBySource(visible, divergentBuckets, { sortMode: 'source' });
+    expect(divergentBuckets.map((bucket) => bucket.sourceId)).toEqual(before);
   });
 
   it('篩選後只留有結果的區塊', () => {

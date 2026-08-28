@@ -1,4 +1,5 @@
 import type { MangaSearchItem } from '@/lib/manga.types';
+import { MAX_KEYWORD_LENGTH } from '@/lib/manga-search-params';
 
 /**
  * 搜尋結果的顯示邏輯：分桶、篩選＋排序、分組。
@@ -31,7 +32,6 @@ export interface MangaCreatorFilter {
 /** 不具可搜尋意義的上游佔位值，不渲染成 creator 按鈕 */
 const IGNORED_CREATORS = new Set([
   'n/a',
-  'na',
   'unknown',
   '未知',
   '佚名',
@@ -58,13 +58,17 @@ export function getMangaCreators(item: MangaSearchItem): string[] {
     if (!raw) continue;
     const rawName = raw.trim();
     // `N/A` 含分隔符 `/`，必須在拆分之前先判整個原始值
-    if (IGNORED_CREATORS.has(rawName.toLocaleLowerCase())) continue;
-    for (const part of rawName.split(/[,，、/&]+/)) {
+    if (IGNORED_CREATORS.has(rawName.toLowerCase())) continue;
+    // `/` 通常是作者分隔符（實測有 mg_cls/白、七里慧 / 御堂志生），
+    // 但 N/A 裡的 slash 不是。negative lookahead 只保護 slash 後為 A 的 N/A；
+    // 多人欄位 `尾田，未知 / N/A & 鳥山` 會先在前一個 slash 切開，
+    // 讓 N/A 整塊進 per-part ignored 檢查，不再變成兩顆假作者 N、A。
+    for (const part of rawName.split(/[,，、&]+|\/(?!\s*a\b)/i)) {
       const name = part.trim();
-      const normalized = name.toLocaleLowerCase();
+      const normalized = name.toLowerCase();
       if (
         !name ||
-        name.length > 200 ||
+        name.length > MAX_KEYWORD_LENGTH ||
         IGNORED_CREATORS.has(normalized) ||
         seen.has(normalized)
       ) {
@@ -83,9 +87,9 @@ export function matchesMangaCreator(
   filter: MangaCreatorFilter
 ): boolean {
   if (item.sourceId !== filter.sourceId) return false;
-  const wanted = filter.name.trim().toLocaleLowerCase();
+  const wanted = filter.name.trim().toLowerCase();
   return getMangaCreators(item).some(
-    (creator) => creator.toLocaleLowerCase() === wanted
+    (creator) => creator.toLowerCase() === wanted
   );
 }
 

@@ -9,6 +9,7 @@
  */
 
 import type { MangaSearchItem } from '@/lib/manga.types';
+import { MAX_KEYWORD_LENGTH } from '@/lib/manga-search-params';
 import {
   buildSourceBuckets,
   getMangaCreators,
@@ -74,11 +75,51 @@ describe('作者／上傳者解析與篩選', () => {
     }
   );
 
-  it('超過搜尋 API q 上限的值不做可點按鈕', () => {
+  it('多人欄位裡混入佔位值時，只留下真作者', () => {
+    /* 這條走的是拆分後的 per-part 檢查；整欄都是佔位值的測試碰不到它。 */
+    expect(
+      getMangaCreators({
+        ...item('s1', '哔咔', '1', 'T'),
+        author: '尾田荣一郎，未知 / N/A & 鳥山明',
+      })
+    ).toEqual(['尾田荣一郎', '鳥山明']);
+  });
+
+  it('ASCII 佔位值不受瀏覽器 locale 影響', () => {
+    /*
+     * toLocaleLowerCase() 會採瀏覽器預設 locale；tr-TR 會把 AI 轉成 aı，
+     * 無法命中 ignored 的 ai。實作應使用 locale-insensitive toLowerCase()。
+     * 這個 spy 讓退化回 toLocaleLowerCase 的一行變異在任何 CI locale 都失敗。
+     */
+    const spy = jest
+      .spyOn(String.prototype, 'toLocaleLowerCase')
+      .mockImplementation(function (this: string) {
+        return String(this).replaceAll('I', 'ı').toLowerCase();
+      });
+    try {
+      expect(
+        getMangaCreators({
+          ...item('s1', '禁漫', '1', 'T'),
+          author: 'AI',
+        })
+      ).toEqual([]);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('作者長度與搜尋 API 共用同一個 inclusive 上限', () => {
+    const atLimit = 'x'.repeat(MAX_KEYWORD_LENGTH);
     expect(
       getMangaCreators({
         ...item('s1', '禁漫', '1', 'T'),
-        author: 'x'.repeat(201),
+        author: atLimit,
+      })
+    ).toEqual([atLimit]);
+    expect(
+      getMangaCreators({
+        ...item('s1', '禁漫', '2', 'T'),
+        author: 'x'.repeat(MAX_KEYWORD_LENGTH + 1),
       })
     ).toEqual([]);
   });

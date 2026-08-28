@@ -75,7 +75,6 @@ export default function MangaSearchPage() {
   const [lastSearchedQuery, setLastSearchedQuery] = useState('');
   const [lastSearchedSourceId, setLastSearchedSourceId] = useState('');
   const restoredRef = useRef(false);
-  const forceNextUrlSearchRef = useRef(false);
   const eventSourceRef = useRef<EventSource | null>(null);
   /**
    * 每次搜尋單調遞增。不可用 `sourceId::query` 當識別：對同一組條件
@@ -216,11 +215,10 @@ export default function MangaSearchPage() {
   }, [clearPendingResults, closeEventSource, readFluidSearchSetting]);
 
   const performSearch = useCallback(
-    async (keyword: string, selectedSourceId: string, options?: { forceRefresh?: boolean }) => {
+    async (keyword: string, selectedSourceId: string) => {
       const trimmedQuery = keyword.trim();
       if (!trimmedQuery) return;
       const normalizedSourceId = selectedSourceId || '';
-      const forceRefresh = options?.forceRefresh === true;
 
       closeEventSource();
       clearPendingResults();
@@ -486,9 +484,7 @@ export default function MangaSearchPage() {
       return;
     }
 
-    const forceRefresh = forceNextUrlSearchRef.current;
-    forceNextUrlSearchRef.current = false;
-    void performSearch(urlQuery, urlSourceId, { forceRefresh });
+    void performSearch(urlQuery, urlSourceId);
   }, [clearPendingResults, closeEventSource, performSearch, restoreSearchState, urlQuery, urlSourceId]);
 
   const handleSearch = async (e: React.FormEvent) => {
@@ -504,9 +500,8 @@ export default function MangaSearchPage() {
       urlSourceId === sourceId &&
       !urlCreator
     ) {
-      await performSearch(trimmedQuery, sourceId, { forceRefresh: true });
+      await performSearch(trimmedQuery, sourceId);
     } else {
-      forceNextUrlSearchRef.current = true;
       // 一般搜尋刻意不帶 creator：使用者手動改關鍵字／來源就代表離開作者篩選
       router.replace(nextUrl);
     }
@@ -562,7 +557,10 @@ export default function MangaSearchPage() {
       sourceId: item.sourceId,
       creator,
     });
-    router.replace(`/manga/search?${params.toString()}`);
+    // 這是從目前結果集鑽進作者作品，不是「改寫目前搜尋」；push 才讓瀏覽器
+    // 上一頁能回到原關鍵字。用 replace 會讓誤觸一顆密集排列的 chip 後，
+    // 原本數百筆結果的 URL 從 history 消失，頁內也沒有路徑能還原。
+    router.push(`/manga/search?${params.toString()}`);
   };
 
   /** 只解除 exact filter；保留作者名搜尋結果，讓使用者看來源的模糊匹配內容 */
@@ -618,7 +616,7 @@ export default function MangaSearchPage() {
             </span>
             {creators.map((creator) => (
               <button
-                key={creator.toLocaleLowerCase()}
+                key={creator.toLowerCase()}
                 type='button'
                 onClick={() => searchCreator(item, creator)}
                 title={`搜索 ${creator} 在 ${item.sourceName} 的全部作品`}

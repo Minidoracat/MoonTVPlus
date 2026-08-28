@@ -63,7 +63,16 @@ describe('作者／上傳者解析與篩選', () => {
     expect(getMangaCreators(manga)).toEqual(['BRAVE HEART petit']);
   });
 
-  it.each(['N/A', 'n/a', '佚名', '未知', 'AI', '-', '無'])(
+  it('slash 只有在 N/A token 內不拆，其他作者名稱照常拆', () => {
+    expect(
+      getMangaCreators({
+        ...item('s1', '哔咔', '1', 'T'),
+        author: 'X/A社 & X/AI，mg_cls/白，Lyco./KARAi',
+      })
+    ).toEqual(['X', 'A社', 'mg_cls', '白', 'Lyco.', 'KARAi']);
+  });
+
+  it.each(['N/A', 'n/a', 'N / A', '佚名', '未知', 'AI', '-', '無'])(
     '忽略沒有搜尋意義的上游佔位值「%s」',
     (author) => {
       expect(
@@ -85,11 +94,12 @@ describe('作者／上傳者解析與篩選', () => {
     ).toEqual(['尾田荣一郎', '鳥山明']);
   });
 
-  it('ASCII 佔位值不受瀏覽器 locale 影響', () => {
+  it('ASCII 佔位值與 exact filter 不受瀏覽器 locale 影響', () => {
     /*
      * toLocaleLowerCase() 會採瀏覽器預設 locale；tr-TR 會把 AI 轉成 aı，
-     * 無法命中 ignored 的 ai。實作應使用 locale-insensitive toLowerCase()。
-     * 這個 spy 讓退化回 toLocaleLowerCase 的一行變異在任何 CI locale 都失敗。
+     * 無法命中 ignored 的 ai；`I` 也會轉成 `ı`，與 filter 的 `i` 不同。
+     * spy 讓三個 toLowerCase 呼叫點任一退化回 locale 版本時，在任何 CI
+     * locale 都有可觀察差異。
      */
     const spy = jest
       .spyOn(String.prototype, 'toLocaleLowerCase')
@@ -97,12 +107,19 @@ describe('作者／上傳者解析與篩選', () => {
         return String(this).replaceAll('I', 'ı').toLowerCase();
       });
     try {
+      // per-part 路徑，不能只測整欄 AI（那會被 raw guard 攔掉）
       expect(
         getMangaCreators({
           ...item('s1', '禁漫', '1', 'T'),
-          author: 'AI',
+          author: '尾田，AI',
         })
-      ).toEqual([]);
+      ).toEqual(['尾田']);
+      expect(
+        matchesMangaCreator(
+          { ...item('s1', '禁漫', '2', 'T'), author: 'I' },
+          { sourceId: 's1', name: 'i' }
+        )
+      ).toBe(true);
     } finally {
       spy.mockRestore();
     }

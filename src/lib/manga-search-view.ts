@@ -57,14 +57,23 @@ export function getMangaCreators(item: MangaSearchItem): string[] {
   for (const raw of [item.author, item.artist]) {
     if (!raw) continue;
     const rawName = raw.trim();
-    // `N/A` 含分隔符 `/`，必須在拆分之前先判整個原始值
-    if (IGNORED_CREATORS.has(rawName.toLowerCase())) continue;
-    // `/` 通常是作者分隔符（實測有 mg_cls/白、七里慧 / 御堂志生），
-    // 但 N/A 裡的 slash 不是。negative lookahead 只保護 slash 後為 A 的 N/A；
-    // 多人欄位 `尾田，未知 / N/A & 鳥山` 會先在前一個 slash 切開，
-    // 讓 N/A 整塊進 per-part ignored 檢查，不再變成兩顆假作者 N、A。
-    for (const part of rawName.split(/[,，、&]+|\/(?!\s*a\b)/i)) {
-      const name = part.trim();
+    /*
+     * 整欄 N/A（也接受 `N / A` 的空白變體）先忽略。
+     * 其他情況先把真正的 N/A token 暫時換成不可能出現在作者名裡的 NUL，
+     * 再用普通分隔符拆，最後還原。這比 negative lookahead 安全：
+     * `/(?!\s*a\b)` 只看 slash 右邊，`X/A社` 的 A→社 也有 word boundary，
+     * 會被誤保護成一顆 X/A社；token pattern 同時要求左邊是 N、右邊是
+     * delimiter/空白/結尾，X/A社、X/A&B、Lyco./KARAi 都照常拆。
+     */
+    if (IGNORED_CREATORS.has(rawName.replace(/\s+/g, '').toLowerCase())) {
+      continue;
+    }
+    const protectedName = rawName.replace(
+      /\bn\s*\/\s*a(?=$|[\s,，、&/])/gi,
+      '\0'
+    );
+    for (const part of protectedName.split(/[,，、/&]+/)) {
+      const name = part.replaceAll('\0', 'N/A').trim();
       const normalized = name.toLowerCase();
       if (
         !name ||

@@ -1063,13 +1063,23 @@ ${fields}
 
     const raw = data.source?.filters || [];
     const options: MangaSourceFilterOption[] = [];
-    raw.forEach((filter, position) => {
-      if (!filter.name) return;
+    /**
+     * 純視覺型別：本來就不該渲染成可選項，略過它們不是「丟棄功能」。
+     * 不列入下面的警告，否則每顆來源都會噪音。
+     */
+    const DECORATIVE = new Set(['HeaderFilter', 'SeparatorFilter']);
+    /** 被略過且**有功能意義**的型別，收集起來一次性警告 */
+    const dropped: string[] = [];
 
+    raw.forEach((filter, position) => {
+      // 刻意不在這裡統一擋 !filter.name：未支援型別（TextFilter 等）
+      // 的 name 根本沒被 query 出來，統一擋掉會讓它們在下面的
+      // dropped 統計裡永遠不出現，警告等於失效。
       if (
         filter.__typename === 'SelectFilter' ||
         filter.__typename === 'SortFilter'
       ) {
+        if (!filter.name) return;
         const values = (filter.values || []).filter(
           (v): v is string => typeof v === 'string'
         );
@@ -1084,11 +1094,13 @@ ${fields}
       }
 
       if (filter.__typename === 'CheckBoxFilter') {
+        if (!filter.name) return;
         options.push({ position, kind: 'checkbox', name: filter.name });
         return;
       }
 
       if (filter.__typename === 'GroupFilter') {
+        const groupName = filter.name || '(未命名群組)';
         // 群組內取 CheckBox（→ chip 多選）與 Select（→ 一般下拉，實測喜漫的
         // 「分组标签」群組內是 4 個 SelectFilter）。position 必須是**群組內
         // 原始位置**：群組內混有其他型別時，用過濾後的索引會讓 groupChange
@@ -1113,11 +1125,12 @@ ${fields}
           options.push({
             position,
             kind: 'group',
-            name: filter.name,
+            name: groupName,
             options: checkboxes,
           });
         }
 
+        let innerSelects = 0;
         for (const { item, innerPosition } of indexed) {
           if (item.__typename !== 'SelectFilter') continue;
           if (typeof item.name !== 'string' || item.name.length === 0) continue;
@@ -1125,6 +1138,7 @@ ${fields}
             (v): v is string => typeof v === 'string'
           );
           if (values.length === 0) continue;
+          innerSelects += 1;
           options.push({
             position,
             kind: 'group_select',
@@ -1133,8 +1147,37 @@ ${fields}
             values,
           });
         }
+
+        // 群組有內容但我們一項都渲染不出來 —— 使用者會看到「這顆來源沒有
+        // 分類可選」，而實際上來源明明有。記下來，下次有人問「為什麼這顆
+        // 沒有分類」才有線索，不用重新 introspect。
+        // 喜漫的 11 個群組內 SelectFilter 先前就是這樣靜默消失的。
+        if (checkboxes.length === 0 && innerSelects === 0 && indexed.length > 0) {
+          const innerTypes = Array.from(
+            new Set(indexed.map(({ item }) => item.__typename || 'unknown'))
+          ).join(', ');
+          dropped.push(
+            `群組「${groupName}」有 ${indexed.length} 項但無可渲染型別（內含 ${innerTypes}）`
+          );
+        }
+        return;
+      }
+
+      if (!DECORATIVE.has(filter.__typename || '')) {
+        // 未支援型別的 name 沒被 query，只報型別；有 name 才附上
+        dropped.push(
+          filter.name
+            ? `${filter.__typename}「${filter.name}」`
+            : String(filter.__typename)
+        );
       }
     });
+
+    if (dropped.length > 0) {
+      console.warn(
+        `[Suwayomi] 來源 ${sourceId} 有無法渲染的 filter，已略過：${dropped.join('；')}`
+      );
+    }
     return options;
   }
 

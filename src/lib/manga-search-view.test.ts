@@ -40,7 +40,7 @@ const SLOW_FIRST: MangaSearchItem[] = [
   item('s3', '禁漫天堂', 'c1', 'Zebra'),
 ];
 
-describe('作者／上傳者解析與篩選', () => {
+describe('作者／绘师解析與篩選', () => {
   it('合併 author / artist，拆常見分隔符並去重', () => {
     const manga = {
       ...item('s1', '禁漫', '1', 'T'),
@@ -56,7 +56,7 @@ describe('作者／上傳者解析與篩選', () => {
     ]);
   });
 
-  it('author 與 artist 依欄位分成「作者」與「繪師」', () => {
+  it('author 與 artist 依欄位分成「作者」與「绘师」', () => {
     const manga = {
       ...item('s1', '來源', '1', 'T'),
       author: '作者甲，兩邊同名',
@@ -70,7 +70,7 @@ describe('作者／上傳者解析與篩選', () => {
       },
       {
         role: 'artist',
-        label: '繪師',
+        label: '绘师',
         creators: ['繪師乙', '兩邊同名'],
       },
     ]);

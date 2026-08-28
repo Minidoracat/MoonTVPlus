@@ -35,7 +35,8 @@ export interface MangaCreatorFilter {
 
 export interface MangaCreatorGroup {
   role: MangaCreatorRole;
-  label: '作者' | '繪師';
+  /** 原始碼 user-facing copy 沿用既有簡體慣例；繁體由 UI 轉換層處理 */
+  label: '作者' | '绘师';
   creators: string[];
 }
 
@@ -132,8 +133,8 @@ function getCreatorsFromField(raw: string | undefined): string[] {
 }
 
 /**
- * 依 Suwayomi 欄位語意分開回傳：author 是「作者」，artist 是「繪師」。
- * 上游沒有 uploader 欄位，所以 UI 不再把 author 模糊標成「作者／上傳者」。
+ * 依 Suwayomi 欄位語意分開回傳：author 是「作者」，artist 是「绘师」。
+ * 上游沒有 uploader 欄位，所以 UI 不再把 author 模糊標成「作者／上传者」。
  */
 export function getMangaCreatorGroups(
   item: MangaSearchItem
@@ -145,7 +146,7 @@ export function getMangaCreatorGroups(
     groups.push({ role: 'author', label: '作者', creators: authors });
   }
   if (artists.length > 0) {
-    groups.push({ role: 'artist', label: '繪師', creators: artists });
+    groups.push({ role: 'artist', label: '绘师', creators: artists });
   }
   return groups;
 }

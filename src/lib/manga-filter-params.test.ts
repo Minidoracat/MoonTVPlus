@@ -516,7 +516,7 @@ describe('isSameFilterControl', () => {
     expect(twice).toEqual([{ position: 1, kind: 'select', index: 3 }]);
   });
 
-  it('upsertFilterSelection：next 與 control 不一致時直接丟錯', () => {
+  it('upsertFilterSelection：next 與 control 不一致時，開發期直接丟錯', () => {
     /*
      * 識別鍵（position / kind / innerPosition）都只是 number 或字面量，
      * 型別擋不住呼叫端組錯。不擋的話：舊值被移除、新值掛到另一個識別鍵上，
@@ -568,5 +568,42 @@ describe('isSameFilterControl', () => {
         index: 0,
       })
     ).not.toThrow();
+  });
+
+  it('upsertFilterSelection：production 不 throw，改為記錄並拒絕寫入', () => {
+    /*
+     * 五處呼叫點都在 `setFilterSelections((prev) => ...)` 的 updater 內，
+     * production 若 throw 會變成 render 期錯誤，而這一頁沒有 error boundary
+     * —— 整頁白畫面。把「一個 filter 掛錯位置」升級成「整頁不可用」更糟。
+     *
+     * 拒絕寫入（回傳同一個 prev 引用）的話：使用者看到「點了沒反應」，
+     * 那是可察覺的失敗，而且錯誤條件不會被送去上游。
+     */
+    const original = process.env.NODE_ENV;
+    const errSpy = jest
+      .spyOn(console, 'error')
+      .mockImplementation(() => undefined);
+    try {
+      (process.env as Record<string, string | undefined>).NODE_ENV =
+        'production';
+      const prev: MangaFilterSelection[] = [
+        { position: 1, kind: 'select', index: 1 },
+      ];
+      const result = upsertFilterSelection(prev, selectControl, {
+        position: 2,
+        kind: 'select',
+        index: 0,
+      });
+      // 同一個引用 → React 會跳過 re-render，使用者看到的是「沒反應」
+      expect(result).toBe(prev);
+      expect(errSpy).toHaveBeenCalledTimes(1);
+      expect(String(errSpy.mock.calls[0][0])).toMatch(/不屬於 control/);
+      // 訊息要同時帶 control 與 next 的識別鍵，否則診斷時定位不到呼叫端
+      expect(String(errSpy.mock.calls[0][0])).toMatch(/control kind=select/);
+      expect(String(errSpy.mock.calls[0][0])).toMatch(/next kind=select/);
+    } finally {
+      (process.env as Record<string, string | undefined>).NODE_ENV = original;
+      errSpy.mockRestore();
+    }
   });
 });

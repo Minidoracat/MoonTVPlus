@@ -172,20 +172,34 @@ export function upsertFilterSelection(
   next: MangaFilterSelection | null
 ): MangaFilterSelection[] {
   if (next && !isSameFilterControl(next, control)) {
+    const message =
+      'upsertFilterSelection: next 不屬於 control' +
+      `（control kind=${control.kind} position=${control.position}` +
+      `, next kind=${next.kind} position=${next.position}）`;
     /*
      * next 的識別鍵（position / kind / innerPosition）必須指向 control 自己。
      * 不一致時舊值會被移除、新值掛到另一個識別鍵上：畫面顯示這個控制項未選，
-     * 上游卻收到一筆多餘條件 —— 而識別鍵都只是 number，型別擋不住，
-     * 五處呼叫端的一致性原本只靠人工複查維持。
+     * 上游卻收到一筆多餘條件 —— 識別鍵都只是 number，型別擋不住。
      *
-     * 這是程式設計錯誤，不是可預期的執行期狀況，所以直接丟出來。靜默容忍
-     * 等於把「送給上游的條件與畫面不符」變成沒有線索的問題 —— 那正是
-     * 這個函式被抽出來要防的事。同檔 SuwayomiFilterChange.groupChange 用
-     * union 讓非法組合無法編譯，這裡是型別做不到時的等價防線。
+     * 開發期直接丟出來。**production 刻意不丟**：五處呼叫點都在
+     * `setFilterSelections((prev) => ...)` 的 updater 內，例外會往上拋成
+     * render 期錯誤，而這一頁沒有 error boundary —— 結果是整頁白畫面。
+     * 把「一個 filter 掛錯位置」升級成「整頁不可用」是更差的失效模式。
+     *
+     * 這個檢查也只可能被「日後新增的呼叫點寫錯」觸發，而那條路徑不會有
+     * 單元測試覆蓋（測試碰不到元件的接線，第 11 輪實測證實過），所以它
+     * 不會在 CI 爆、只會在真實使用者面前爆。
+     *
+     * production 改為記錄並**拒絕這次寫入**（回傳原本的 prev，同一個引用，
+     * React 會跳過 re-render）。使用者會看到「點了沒反應」——那是可察覺的
+     * 失敗；照常寫入則會把錯誤條件靜默送給上游，畫面與結果不符卻沒有任何
+     * 線索，那正是這個函式被抽出來要防的事。
      */
-    throw new Error(
-      `upsertFilterSelection: next 不屬於 control（control kind=${control.kind} position=${control.position}）`
-    );
+    if (process.env.NODE_ENV !== 'production') {
+      throw new Error(message);
+    }
+    console.error(message);
+    return prev;
   }
   const rest = prev.filter((item) => !isSameFilterControl(item, control));
   return next ? [...rest, next] : rest;

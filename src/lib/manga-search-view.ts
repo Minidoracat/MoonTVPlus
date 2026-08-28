@@ -206,13 +206,10 @@ export function groupResultsBySource(
    * （chip 也在用同一個陣列）。這一點由「不就地改動傳入的 buckets」那個
    * 測試守著 —— 若日後有人把這行改成直接用 `buckets`，測試會失敗。
    */
-  const ordered = buckets.filter((bucket) => bySource.has(bucket.sourceId));
-  const blocks =
-    options.sortMode === 'source'
-      ? ordered.sort((a, b) =>
-          a.sourceName.localeCompare(b.sourceName, 'zh-Hant')
-        )
-      : ordered;
+  const blocks = buckets.filter((bucket) => bySource.has(bucket.sourceId));
+  if (options.sortMode === 'source') {
+    blocks.sort((a, b) => a.sourceName.localeCompare(b.sourceName, 'zh-Hant'));
+  }
   return blocks.map((bucket) => ({
     ...bucket,
     items: bySource.get(bucket.sourceId) as MangaSearchItem[],

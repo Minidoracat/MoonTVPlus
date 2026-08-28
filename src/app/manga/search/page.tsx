@@ -527,6 +527,11 @@ export default function MangaSearchPage() {
     return { sourceId: ids[0], name: urlCreator };
   }, [urlCreator, urlSourceId]);
 
+  /** 篩選橫幅上的來源名稱：管理員設定的 displayName 優先，其次原始名稱 */
+  const creatorSource = creatorFilter
+    ? sources.find((source) => source.id === creatorFilter.sourceId)
+    : undefined;
+
   const sourceBuckets = useMemo(
     () => buildSourceBuckets(results, { streaming: loading }),
     [results, loading]
@@ -717,8 +722,8 @@ export default function MangaSearchPage() {
               作者／上传者：<strong>{creatorFilter.name}</strong>
             </span>
             <span className='text-sky-600/70 dark:text-sky-300/70'>
-              {sources.find((source) => source.id === creatorFilter.sourceId)?.displayName ||
-                sources.find((source) => source.id === creatorFilter.sourceId)?.name ||
+              {creatorSource?.displayName ||
+                creatorSource?.name ||
                 creatorFilter.sourceId}
             </span>
             <button

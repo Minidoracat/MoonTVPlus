@@ -20,6 +20,7 @@ import {
   setLastGlobalLiveRefreshTime,
 } from '@/lib/live';
 import { resolveMangaImageUrl } from '@/lib/manga-image-path';
+import { orderMangaChapters } from '@/lib/manga-reader';
 import { MangaChapter, MangaShelfItem } from '@/lib/manga.types';
 import { refreshNetflixTop10 } from '@/lib/netflix-top10';
 import { startOpenListRefresh } from '@/lib/openlist-refresh';
@@ -409,11 +410,7 @@ async function refreshRecordAndFavorites() {
             status: item.status,
           })
           .then((detail) => {
-            const chapters = [...(detail.chapters || [])].sort((a, b) => {
-              const diff = (a.chapterNumber || 0) - (b.chapterNumber || 0);
-              if (diff !== 0) return diff;
-              return a.id.localeCompare(b.id);
-            });
+            const chapters = orderMangaChapters(detail.chapters || []);
 
             const latestChapter = chapters[chapters.length - 1];
             return {

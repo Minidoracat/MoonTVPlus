@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { useMemo, useState } from 'react';
 
 import { useLongPress } from '@/hooks/useLongPress';
+import { buildMangaReadHref } from '@/lib/manga-reader';
 import { MangaReadRecord } from '@/lib/manga.types';
 import { processImageUrl } from '@/lib/utils';
 
@@ -19,18 +20,41 @@ interface MangaHistoryCardProps {
   onDelete: (item: MangaReadRecord) => void | Promise<void>;
 }
 
-export default function MangaHistoryCard({ item, inShelf, onToggleShelf, onDelete }: MangaHistoryCardProps) {
+export default function MangaHistoryCard({
+  item,
+  inShelf,
+  onToggleShelf,
+  onDelete,
+}: MangaHistoryCardProps) {
   const router = useRouter();
   const [showActions, setShowActions] = useState(false);
   const [showImageViewer, setShowImageViewer] = useState(false);
 
   const readHref = useMemo(
-    () => `/manga/read?mangaId=${item.mangaId}&sourceId=${item.sourceId}&chapterId=${item.chapterId}&title=${encodeURIComponent(item.title)}&cover=${encodeURIComponent(item.cover)}&sourceName=${encodeURIComponent(item.sourceName)}&chapterName=${encodeURIComponent(item.chapterName)}&returnTo=${encodeURIComponent('/manga/history')}`,
+    () =>
+      buildMangaReadHref({
+        mangaId: item.mangaId,
+        sourceId: item.sourceId,
+        chapterId: item.chapterId,
+        title: item.title,
+        cover: item.cover,
+        sourceName: item.sourceName,
+        chapterName: item.chapterName,
+        returnTo: '/manga/history',
+        startAtFirstPage: false,
+      }),
     [item]
   );
 
   const detailHref = useMemo(
-    () => `/manga/detail?mangaId=${item.mangaId}&sourceId=${item.sourceId}&title=${encodeURIComponent(item.title)}&cover=${encodeURIComponent(item.cover)}&sourceName=${encodeURIComponent(item.sourceName)}&returnTo=${encodeURIComponent('/manga/history')}`,
+    () =>
+      `/manga/detail?mangaId=${item.mangaId}&sourceId=${
+        item.sourceId
+      }&title=${encodeURIComponent(item.title)}&cover=${encodeURIComponent(
+        item.cover
+      )}&sourceName=${encodeURIComponent(
+        item.sourceName
+      )}&returnTo=${encodeURIComponent('/manga/history')}`,
     [item]
   );
 
@@ -123,15 +147,21 @@ export default function MangaHistoryCard({ item, inShelf, onToggleShelf, onDelet
               draggable={false}
             />
           ) : (
-            <div className='flex h-full items-center justify-center text-sm text-gray-400'>暂无封面</div>
+            <div className='flex h-full items-center justify-center text-sm text-gray-400'>
+              暂无封面
+            </div>
           )}
         </div>
         <div className='space-y-1 p-3'>
           <div className='line-clamp-2 min-h-[2.75rem] text-sm font-semibold text-gray-900 dark:text-gray-100'>
             {item.title}
           </div>
-          <div className='text-xs text-gray-500 dark:text-gray-400'>{item.sourceName}</div>
-          <div className='line-clamp-2 text-xs text-sky-600 dark:text-sky-400'>{subtitle}</div>
+          <div className='text-xs text-gray-500 dark:text-gray-400'>
+            {item.sourceName}
+          </div>
+          <div className='line-clamp-2 text-xs text-sky-600 dark:text-sky-400'>
+            {subtitle}
+          </div>
         </div>
       </div>
 

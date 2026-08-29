@@ -6,6 +6,7 @@ import { useSearchParams } from 'next/navigation';
 import { useEffect, useMemo, useRef, useState } from 'react';
 
 import { deleteMangaShelf, getAllMangaReadRecords, getAllMangaShelf, saveMangaShelf } from '@/lib/db.client';
+import { buildMangaReadHref, orderMangaChapters } from '@/lib/manga-reader';
 import {
   getMangaCreatorGroups,
   type MangaCreatorRole,
@@ -136,22 +137,15 @@ export default function MangaDetailPage() {
     getAllMangaShelf().then(setShelf).catch(() => undefined);
   }, [mangaId, searchParams, sourceId]);
 
-  const chapters = useMemo(() => {
-    const list = detail?.chapters || [];
-    return [...list].sort((a, b) => {
-      const diff = (a.chapterNumber || 0) - (b.chapterNumber || 0);
-      return descOrder ? -diff : diff;
-    });
-  }, [detail?.chapters, descOrder]);
+  const chronologicalChapters = useMemo(
+    () => orderMangaChapters(detail?.chapters || []),
+    [detail?.chapters]
+  );
 
-  const chronologicalChapters = useMemo(() => {
-    const list = detail?.chapters || [];
-    return [...list].sort((a, b) => {
-      const diff = (a.chapterNumber || 0) - (b.chapterNumber || 0);
-      if (diff !== 0) return diff;
-      return a.id.localeCompare(b.id);
-    });
-  }, [detail?.chapters]);
+  const chapters = useMemo(
+    () => descOrder ? [...chronologicalChapters].reverse() : chronologicalChapters,
+    [chronologicalChapters, descOrder]
+  );
 
   const latestChapter = chronologicalChapters[chronologicalChapters.length - 1];
   const unreadChapterCount = shelf[key]?.unreadChapterCount || 0;
@@ -217,7 +211,17 @@ export default function MangaDetailPage() {
   };
 
   const chapterHref = (chapter: MangaChapter) =>
-    `/manga/read?mangaId=${mangaId}&sourceId=${sourceId}&chapterId=${chapter.id}&title=${encodeURIComponent(detail?.title || '')}&cover=${encodeURIComponent(detail?.cover || '')}&sourceName=${encodeURIComponent(detail?.sourceName || '')}&chapterName=${encodeURIComponent(chapter.name)}&returnTo=${encodeURIComponent(returnTo)}`;
+    buildMangaReadHref({
+      mangaId,
+      sourceId,
+      chapterId: chapter.id,
+      title: detail?.title || '',
+      cover: detail?.cover || '',
+      sourceName: detail?.sourceName || '',
+      chapterName: chapter.name,
+      returnTo,
+      startAtFirstPage: true,
+    });
 
   if (detailError) {
     return (
@@ -291,7 +295,17 @@ export default function MangaDetailPage() {
             )}
             {currentRecord && (
               <Link
-                href={`/manga/read?mangaId=${mangaId}&sourceId=${sourceId}&chapterId=${currentRecord.chapterId}&title=${encodeURIComponent(detail.title)}&cover=${encodeURIComponent(detail.cover)}&sourceName=${encodeURIComponent(detail.sourceName)}&chapterName=${encodeURIComponent(currentRecord.chapterName)}&returnTo=${encodeURIComponent(returnTo)}`}
+                href={buildMangaReadHref({
+                  mangaId,
+                  sourceId,
+                  chapterId: currentRecord.chapterId,
+                  title: detail.title,
+                  cover: detail.cover,
+                  sourceName: detail.sourceName,
+                  chapterName: currentRecord.chapterName,
+                  returnTo,
+                  startAtFirstPage: false,
+                })}
                 className='rounded-2xl border border-sky-300 px-5 py-3 text-sm font-medium text-sky-700 transition hover:bg-sky-50 dark:text-sky-300 dark:hover:bg-sky-950/30'
               >
                 <Clock3 className='mr-2 inline h-4 w-4' />继续阅读 第 {currentRecord.pageIndex + 1}/{currentRecord.pageCount} 页

@@ -156,6 +156,14 @@ const scrollReaderBy = (top: number, behavior: ScrollBehavior) => {
   window.scrollBy({ top, behavior });
 };
 
+const scrollReaderTo = (top: number, behavior: ScrollBehavior) => {
+  if (document.body.scrollHeight > document.documentElement.scrollHeight) {
+    document.body.scrollTo({ top, behavior });
+    return;
+  }
+  window.scrollTo({ top, behavior });
+};
+
 export default function MangaReadPage() {
   const searchParams = useSearchParams();
   const router = useRouter();
@@ -1151,15 +1159,25 @@ export default function MangaReadPage() {
 
   /** 垂直模式翻頁是視窗滾動，水平模式是容器捲動，單頁／雙頁則直接換頁碼。 */
   const stepPage = (direction: 1 | -1) => {
-    if (readMode === 'vertical') {
+    const narrowDouble = readMode === 'double' && window.innerWidth < 768;
+    const canScrollForward =
+      getReaderScrollTop() + window.innerHeight < getReaderScrollHeight() - 24;
+    if (
+      readMode === 'vertical' ||
+      (narrowDouble && direction === 1 && canScrollForward)
+    ) {
       scrollReaderBy(direction * window.innerHeight * 0.85, 'smooth');
-    } else {
-      // 水平模式一次一頁、雙頁一次兩頁；scrollToPage 對單頁／雙頁是 no-op。
-      const pageStep = readMode === 'double' ? 2 : 1;
-      const nextPage = clampPage(activePage + direction * pageStep);
-      setActivePage(nextPage);
-      stagePendingRecord(nextPage);
-      scrollToPage(nextPage, 'smooth');
+      return;
+    }
+
+    // 水平模式一次一頁、雙頁一次兩頁；scrollToPage 對單頁／雙頁是 no-op。
+    const pageStep = readMode === 'double' ? 2 : 1;
+    const nextPage = clampPage(activePage + direction * pageStep);
+    setActivePage(nextPage);
+    stagePendingRecord(nextPage);
+    scrollToPage(nextPage, 'smooth');
+    if (narrowDouble && direction === 1 && nextPage !== activePage) {
+      window.setTimeout(() => scrollReaderTo(0, 'auto'), 0);
     }
   };
 

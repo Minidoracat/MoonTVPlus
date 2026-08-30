@@ -382,6 +382,13 @@ class HybridCacheManager {
     this.saveUserCache(username, userCache);
   }
 
+  /** 身分切換取消 mutation 時，清除指定使用者的 shelf cache；不可 dispatch 到目前帳號 UI。 */
+  clearMangaShelfForUsername(username: string): void {
+    const userCache = this.getUserCache(username);
+    delete userCache.mangaShelf;
+    this.saveUserCache(username, userCache);
+  }
+
   getCachedMangaReadRecords(): Record<string, MangaReadRecord> | null {
     const username = this.getCurrentUsername();
     if (!username) return null;
@@ -1830,6 +1837,9 @@ function enqueueMangaShelfMutation(
   const previous = mangaShelfMutationQueues.get(queueKey) ?? Promise.resolve();
   const queued = previous.then(async () => {
     if (getMangaShelfMutationIdentity() !== identity) {
+      if (identity !== 'anonymous') {
+        cacheManager.clearMangaShelfForUsername(identity);
+      }
       throw new MangaShelfMutationCancelledError();
     }
     // 前一筆失敗的 recovery 可能回填舊值；最新意圖在執行前再套用一次。

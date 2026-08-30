@@ -7,6 +7,7 @@ import { startTransition, useCallback, useEffect, useMemo, useRef, useState } fr
 import { getAuthInfoFromBrowserCookie } from '@/lib/auth';
 import { deleteMangaShelf, getAllMangaShelf, saveMangaShelf } from '@/lib/db.client';
 import {
+  formatMangaSearchStatus,
   readMangaSourceHealth,
   recordMangaSourceHealth,
   type MangaSourceHealth,
@@ -626,12 +627,22 @@ export default function MangaSearchPage() {
   const renderResultCard = (item: MangaSearchItem) => {
     const key = `${item.sourceId}+${item.id}`;
     const creatorGroups = getMangaCreatorGroups(item);
+    const sourceStatus = formatMangaSearchStatus(
+      sourceProbe[item.sourceId],
+      sourceHealth[item.sourceId]
+    );
     return (
       <div key={key} className='space-y-2'>
         <MangaCard
           item={item}
           href={`/manga/detail?mangaId=${item.id}&sourceId=${item.sourceId}&title=${encodeURIComponent(item.title)}&cover=${encodeURIComponent(item.cover)}&sourceName=${encodeURIComponent(item.sourceName)}&description=${encodeURIComponent(item.description || '')}&author=${encodeURIComponent(item.author || '')}&status=${encodeURIComponent(item.status || '')}&returnTo=${encodeURIComponent(returnTo)}`}
-          subtitle={item.author || item.status || item.description}
+          subtitle={[
+            item.sourceName,
+            sourceStatus?.label,
+            item.author || item.status || item.description,
+          ]
+            .filter(Boolean)
+            .join(' · ')}
         />
         {creatorGroups.map((group) => (
           <div

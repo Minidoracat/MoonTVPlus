@@ -3,10 +3,14 @@
 import {
   ArrowDownWideNarrow,
   ArrowUpWideNarrow,
+  Bookmark,
+  BookmarkCheck,
   ChevronLeft,
   ChevronRight,
+  ExternalLink,
   List,
   Minimize2,
+  RefreshCw,
   Settings2,
 } from 'lucide-react';
 import Link from 'next/link';
@@ -21,13 +25,17 @@ import {
 } from 'react';
 
 import {
+  deleteMangaShelf,
   getAllMangaReadRecords,
   getAllMangaShelf,
   saveMangaReadRecord,
   saveMangaShelf,
+  subscribeToDataUpdates,
 } from '@/lib/db.client';
 import {
+  buildMangaAlternateSearchHref,
   buildMangaReadHref,
+  buildMangaShelfItem,
   getHorizontalPageIndex,
   getHorizontalPageOffset,
   getNextMangaChapter,
@@ -134,6 +142,12 @@ function dispatchImmersiveChange(next: boolean) {
     new CustomEvent('manga-read-immersive-change', { detail: next })
   );
 }
+
+function dispatchControlsChange(visible: boolean) {
+  window.dispatchEvent(
+    new CustomEvent('manga-read-controls-change', { detail: visible })
+  );
+}
 /**
  * 全站 CSS 讓某些 viewport 由 body 自己捲動（html 高度固定）。
  * 同時取兩者可讓 reader 在 desktop／mobile 與 fullscreen 使用同一套邊界。
@@ -191,7 +205,7 @@ export default function MangaReadPage() {
   const [readMode, setReadMode] = useState<ReadMode>('vertical');
   const [scaleMode, setScaleMode] = useState<ScaleMode>('fit');
   const [pageGap, setPageGap] = useState(0);
-  const [controlsVisible, setControlsVisible] = useState(false);
+  const [controlsVisible, setControlsVisible] = useState(true);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [chapterListOpen, setChapterListOpen] = useState(false);
   const [chapterListDesc, setChapterListDesc] = useState(false);
@@ -201,6 +215,9 @@ export default function MangaReadPage() {
     Boolean(mangaId && sourceId)
   );
   const [showChapterComplete, setShowChapterComplete] = useState(false);
+  const [shelf, setShelf] = useState<Record<string, MangaShelfItem>>({});
+  const [shelfSaving, setShelfSaving] = useState(false);
+  const [shelfLoaded, setShelfLoaded] = useState(false);
   /** CSS 沉浸模式永遠可用；瀏覽器 Fullscreen API 可用時再加上真正 fullscreen */
   const [immersiveMode, setImmersiveMode] = useState(false);
   const [historyRestorePending, setHistoryRestorePending] = useState(() =>
@@ -221,6 +238,7 @@ export default function MangaReadPage() {
   const preloadedImageUrlsRef = useRef<Set<string>>(new Set());
   const activeChapterRef = useRef<HTMLAnchorElement | null>(null);
   const mangaDetailOwnerRef = useRef('');
+  const shelfSyncAttemptRef = useRef('');
   /** pages 目前屬於哪一話；防止「新 chapterId + 舊 pages」寫入髒紀錄 */
   const pagesChapterIdRef = useRef('');
   const pendingRecordVersionRef = useRef(0);
@@ -512,6 +530,25 @@ export default function MangaReadPage() {
   }, [pageGap, readMode, scaleMode]);
 
   useEffect(() => {
+    dispatchControlsChange(controlsVisible);
+  }, [controlsVisible]);
+
+  useEffect(() => {
+    const unsubscribe = subscribeToDataUpdates<Record<string, MangaShelfItem>>(
+      'mangaShelfUpdated',
+      (nextShelf) => {
+        setShelf(nextShelf);
+        setShelfLoaded(true);
+      }
+    );
+    getAllMangaShelf()
+      .then(setShelf)
+      .catch(() => undefined)
+      .finally(() => setShelfLoaded(true));
+    return unsubscribe;
+  }, []);
+
+  useEffect(() => {
     const handleToggleSettings = () => {
       setSettingsOpen((prev) => !prev);
       setControlsVisible(false);
@@ -572,6 +609,7 @@ export default function MangaReadPage() {
   useEffect(
     () => () => {
       immersiveDesiredRef.current = false;
+      dispatchControlsChange(true);
       if (verticalRestoreTimeoutRef.current !== null) {
         window.clearTimeout(verticalRestoreTimeoutRef.current);
       }
@@ -1043,36 +1081,42 @@ export default function MangaReadPage() {
     const nextUnreadChapterCount =
       currentChapterIndex >= 0
         ? Math.max(orderedChapters.length - currentChapterIndex - 1, 0)
-        : undefined;
+        : 0;
 
-    getAllMangaShelf()
-      .then(async (shelf) => {
-        const item = shelf[key];
-        if (!item) return;
-
-        const nextItem: MangaShelfItem = {
-          ...item,
-          lastChapterId: chapterId,
-          lastChapterName: chapterName,
-          latestChapterId: latestChapter?.id || item.latestChapterId,
-          latestChapterName: latestChapter?.name || item.latestChapterName,
-          latestChapterCount: orderedChapters.length || item.latestChapterCount,
-          unreadChapterCount: nextUnreadChapterCount,
-        };
-
-        const changed =
-          nextItem.lastChapterId !== item.lastChapterId ||
-          nextItem.lastChapterName !== item.lastChapterName ||
-          nextItem.latestChapterId !== item.latestChapterId ||
-          nextItem.latestChapterName !== item.latestChapterName ||
-          nextItem.latestChapterCount !== item.latestChapterCount ||
-          nextItem.unreadChapterCount !== item.unreadChapterCount;
-
-        if (!changed) return;
-        await saveMangaShelf(sourceId, mangaId, nextItem);
-      })
-      .catch(() => undefined);
-  }, [chapterId, chapterName, mangaId, ownedMangaDetail, sourceId]);
+    const item = shelf[key];
+    if (!item) return;
+    const nextItem: MangaShelfItem = {
+      ...item,
+      lastChapterId: chapterId,
+      lastChapterName: chapterName,
+      latestChapterId: latestChapter?.id || item.latestChapterId,
+      latestChapterName: latestChapter?.name || item.latestChapterName,
+      latestChapterCount: orderedChapters.length || item.latestChapterCount,
+      unreadChapterCount: nextUnreadChapterCount,
+    };
+    const changed =
+      nextItem.lastChapterId !== item.lastChapterId ||
+      nextItem.lastChapterName !== item.lastChapterName ||
+      nextItem.latestChapterId !== item.latestChapterId ||
+      nextItem.latestChapterName !== item.latestChapterName ||
+      nextItem.latestChapterCount !== item.latestChapterCount ||
+      nextItem.unreadChapterCount !== item.unreadChapterCount;
+    if (!changed) return;
+    const syncSignature = JSON.stringify([
+      key,
+      nextItem.lastChapterId,
+      nextItem.lastChapterName,
+      nextItem.latestChapterId,
+      nextItem.latestChapterName,
+      nextItem.latestChapterCount,
+      nextItem.unreadChapterCount,
+    ]);
+    // recovery 事件可能把伺服器舊值寫回 shelf；同一 desired state 只嘗試一次，
+    // 避免 POST 失敗 → recovery GET → event → POST 的無界迴圈。
+    if (shelfSyncAttemptRef.current === syncSignature) return;
+    shelfSyncAttemptRef.current = syncSignature;
+    saveMangaShelf(sourceId, mangaId, nextItem).catch(() => undefined);
+  }, [chapterId, chapterName, mangaId, ownedMangaDetail, shelf, sourceId]);
 
   /** 章節尾頁是否已經呈現在畫面上；章節完讀判斷與尾頁動作必須共用。 */
   const isLastPageVisible =
@@ -1201,6 +1245,55 @@ export default function MangaReadPage() {
     () => (chapterListDesc ? [...chapterList].reverse() : chapterList),
     [chapterList, chapterListDesc]
   );
+  const sourceCommentsUrl =
+    chapterList.find((chapter) => chapter.id === chapterId)?.realUrl ||
+    ownedMangaDetail?.realUrl;
+  const readerChapterIndex = chapterList.findIndex(
+    (chapter) => chapter.id === chapterId
+  );
+  const readerUnreadChapterCount =
+    readerChapterIndex >= 0
+      ? Math.max(chapterList.length - readerChapterIndex - 1, 0)
+      : 0;
+  const shelfKey = `${sourceId}+${mangaId}`;
+  const inShelf = Boolean(shelf[shelfKey]);
+  const alternateSourceHref = buildMangaAlternateSearchHref(
+    ownedMangaDetail?.title || title
+  );
+  const toggleReaderShelf = useCallback(async () => {
+    if (!ownedMangaDetail || !shelfLoaded || shelfSaving) return;
+    setShelfSaving(true);
+    try {
+      if (shelf[shelfKey]) {
+        await deleteMangaShelf(sourceId, mangaId);
+      } else {
+        await saveMangaShelf(
+          sourceId,
+          mangaId,
+          buildMangaShelfItem({
+            detail: ownedMangaDetail,
+            currentChapter: { id: chapterId, name: chapterName },
+            unreadChapterCount: readerUnreadChapterCount,
+          })
+        );
+      }
+    } catch {
+      // db.client 已顯示錯誤並用伺服器狀態回復 optimistic cache。
+    } finally {
+      setShelfSaving(false);
+    }
+  }, [
+    chapterId,
+    chapterName,
+    mangaId,
+    ownedMangaDetail,
+    readerUnreadChapterCount,
+    shelf,
+    shelfKey,
+    shelfLoaded,
+    shelfSaving,
+    sourceId,
+  ]);
 
   /**
    * 使用者明確點章節列表／下一話時一律從第 1 頁開始。
@@ -1251,6 +1344,17 @@ export default function MangaReadPage() {
           <div className='rounded-2xl border border-white/15 px-5 py-4 text-sm text-white/70'>
             已经是最新一话
           </div>
+        )}
+        {sourceCommentsUrl && (
+          <a
+            href={sourceCommentsUrl}
+            target='_blank'
+            rel='noreferrer'
+            className='inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-2xl border border-white/20 px-4 text-sm text-white/80 transition-colors hover:border-white/40 hover:text-white'
+          >
+            前往来源站查看评论
+            <ExternalLink className='h-4 w-4' />
+          </a>
         )}
         <Link
           href={detailHref}
@@ -1555,6 +1659,26 @@ export default function MangaReadPage() {
           <div className='flex items-center gap-2 border-t border-white/10 bg-black/80 px-3 py-3 text-white backdrop-blur-xl sm:px-5'>
             <button
               type='button'
+              onClick={() => void toggleReaderShelf()}
+              disabled={!ownedMangaDetail || !shelfLoaded || shelfSaving}
+              className='inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-white/10 transition hover:bg-white/20 disabled:opacity-40'
+              aria-label={inShelf ? '移出书架' : '加入书架'}
+            >
+              {inShelf ? (
+                <BookmarkCheck className='h-5 w-5' />
+              ) : (
+                <Bookmark className='h-5 w-5' />
+              )}
+            </button>
+            <Link
+              href={alternateSourceHref}
+              className='inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-white/10 transition hover:bg-white/20'
+              aria-label='搜索／换源'
+            >
+              <RefreshCw className='h-5 w-5' />
+            </Link>
+            <button
+              type='button'
               onClick={() => stepPage(-1)}
               disabled={readMode !== 'vertical' && activePage <= 0}
               className='inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-white/10 transition hover:bg-white/20 disabled:opacity-30'
@@ -1643,6 +1767,17 @@ export default function MangaReadPage() {
                       下一话：{nextChapter.name}
                     </Link>
                   )}
+                {sourceCommentsUrl && (
+                  <a
+                    href={sourceCommentsUrl}
+                    target='_blank'
+                    rel='noreferrer'
+                    className='inline-flex items-center justify-center gap-2 rounded-2xl border border-gray-200 px-4 py-3 text-sm font-medium text-gray-700 transition hover:bg-gray-50 dark:border-gray-700 dark:text-gray-200 dark:hover:bg-gray-900'
+                  >
+                    前往来源站查看评论
+                    <ExternalLink className='h-4 w-4' />
+                  </a>
+                )}
                 <button
                   type='button'
                   className='rounded-2xl border border-gray-200 px-4 py-3 text-sm font-medium text-gray-700 transition hover:bg-gray-50 dark:border-gray-700 dark:text-gray-200 dark:hover:bg-gray-900'

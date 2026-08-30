@@ -292,9 +292,7 @@ export function buildFilterChangeInputs(
           },
         ];
       case 'select':
-        return [
-          { position: selection.position, selectState: selection.index },
-        ];
+        return [{ position: selection.position, selectState: selection.index }];
       case 'group_select':
         return [
           {
@@ -492,6 +490,12 @@ export interface MangaRecommendResult {
   hasNextPage: boolean;
 }
 
+declare const sourceExternalUrlBrand: unique symbol;
+/** 已驗證為絕對 http(s) 的來源站外連 URL */
+export type SourceExternalUrl = string & {
+  readonly [sourceExternalUrlBrand]: true;
+};
+
 export interface MangaChapter {
   id: string;
   mangaId: string;
@@ -502,10 +506,20 @@ export interface MangaChapter {
   isDownloaded?: boolean;
   pageCount?: number;
   uploadDate?: number;
+  /** 來源站章節頁；只接受伺服器清理過的絕對 http(s) URL */
+  realUrl?: SourceExternalUrl;
 }
 
 export interface MangaDetail extends MangaSearchItem {
   chapters: MangaChapter[];
+  /**
+   * 來源站上這部漫畫的原始頁面網址（Suwayomi 的 `manga.realUrl`）。
+   *
+   * 用來把使用者導到來源站看留言：留言不在 Suwayomi 裡，只有來源站有。
+   * 只有在伺服器確實回了絕對 http(s) 網址時才有值 —— 用 sourceId 與標題
+   * 猜出來的網址會把人送到不存在或不相干的頁面，寧可不給連結。
+   */
+  realUrl?: SourceExternalUrl;
 }
 
 export interface MangaShelfItem {

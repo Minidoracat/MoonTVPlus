@@ -6,7 +6,11 @@ import { useSearchParams } from 'next/navigation';
 import { useEffect, useMemo, useRef, useState } from 'react';
 
 import { deleteMangaShelf, getAllMangaReadRecords, getAllMangaShelf, saveMangaShelf } from '@/lib/db.client';
-import { buildMangaReadHref, orderMangaChapters } from '@/lib/manga-reader';
+import {
+  buildMangaReadHref,
+  buildMangaShelfItem,
+  orderMangaChapters,
+} from '@/lib/manga-reader';
 import {
   getMangaCreatorGroups,
   type MangaCreatorRole,
@@ -189,23 +193,15 @@ export default function MangaDetailPage() {
       return;
     }
 
-    const item: MangaShelfItem = {
-      title: detail.title,
-      cover: detail.cover,
-      sourceId: detail.sourceId,
-      sourceName: detail.sourceName,
-      mangaId: detail.id,
-      saveTime: Date.now(),
-      description: detail.description,
-      author: detail.author,
-      status: detail.status,
-      lastChapterId: currentRecord?.chapterId,
-      lastChapterName: currentRecord?.chapterName,
-      latestChapterId: latestChapter?.id,
-      latestChapterName: latestChapter?.name,
-      latestChapterCount: chronologicalChapters.length,
-      unreadChapterCount: 0,
-    };
+    const item = buildMangaShelfItem({
+      detail,
+      currentChapter: currentRecord
+        ? {
+            id: currentRecord.chapterId,
+            name: currentRecord.chapterName,
+          }
+        : undefined,
+    });
     await saveMangaShelf(sourceId, mangaId, item);
     setShelf((prev) => ({ ...prev, [key]: item }));
   };

@@ -1,11 +1,21 @@
 'use client';
 
-import { BookOpen, CircleMinus, CirclePlus, Info, Trash2 } from 'lucide-react';
+import {
+  BookOpen,
+  CircleMinus,
+  CirclePlus,
+  Info,
+  RefreshCw,
+  Trash2,
+} from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { useMemo, useState } from 'react';
 
 import { useLongPress } from '@/hooks/useLongPress';
-import { buildMangaReadHref } from '@/lib/manga-reader';
+import {
+  buildMangaAlternateSearchHref,
+  buildMangaReadHref,
+} from '@/lib/manga-reader';
 import { MangaReadRecord } from '@/lib/manga.types';
 import { processImageUrl } from '@/lib/utils';
 
@@ -58,6 +68,11 @@ export default function MangaHistoryCard({
     [item]
   );
 
+  const alternateSourceHref = useMemo(
+    () => buildMangaAlternateSearchHref(item.title),
+    [item.title]
+  );
+
   const subtitle = useMemo(
     () => `${item.chapterName} · 第 ${item.pageIndex + 1}/${item.pageCount} 页`,
     [item]
@@ -88,6 +103,12 @@ export default function MangaHistoryCard({
         onClick: () => router.push(detailHref),
       },
       {
+        id: 'alternate-source',
+        label: '搜索／换源',
+        icon: <RefreshCw size={20} />,
+        onClick: () => router.push(alternateSourceHref),
+      },
+      {
         id: 'toggle-shelf',
         label: inShelf ? '移除书架' : '加入书架',
         icon: inShelf ? <CircleMinus size={20} /> : <CirclePlus size={20} />,
@@ -102,7 +123,16 @@ export default function MangaHistoryCard({
         color: 'danger' as const,
       },
     ],
-    [detailHref, goRead, inShelf, item, onDelete, onToggleShelf, router]
+    [
+      alternateSourceHref,
+      detailHref,
+      goRead,
+      inShelf,
+      item,
+      onDelete,
+      onToggleShelf,
+      router,
+    ]
   );
 
   return (
@@ -162,6 +192,18 @@ export default function MangaHistoryCard({
           <div className='line-clamp-2 text-xs text-sky-600 dark:text-sky-400'>
             {subtitle}
           </div>
+          <button
+            type='button'
+            data-button
+            onClick={(event) => {
+              event.stopPropagation();
+              router.push(alternateSourceHref);
+            }}
+            className='mt-2 inline-flex min-h-9 w-full items-center justify-center gap-1 rounded-xl border border-gray-200 px-2 text-[11px] font-medium text-sky-700 transition hover:border-sky-400 dark:border-gray-700 dark:text-sky-300'
+          >
+            <RefreshCw className='h-3.5 w-3.5' />
+            搜索／换源
+          </button>
         </div>
       </div>
 

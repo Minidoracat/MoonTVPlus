@@ -96,6 +96,7 @@ export default function MangaLayout({ children }: MangaLayoutProps) {
   const [isAdmin, setIsAdmin] = useState(false);
   const [showSourceManager, setShowSourceManager] = useState(false);
   const [readerImmersive, setReaderImmersive] = useState(false);
+  const [readerControlsVisible, setReaderControlsVisible] = useState(true);
   const managerTriggerRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
@@ -121,19 +122,28 @@ export default function MangaLayout({ children }: MangaLayoutProps) {
   useEffect(() => {
     if (!isReadingPage) {
       setReaderImmersive(false);
+      setReaderControlsVisible(true);
       return undefined;
     }
     const handleImmersiveChange = (event: Event) => {
       setReaderImmersive(Boolean((event as CustomEvent<boolean>).detail));
     };
+    const handleControlsChange = (event: Event) => {
+      setReaderControlsVisible(Boolean((event as CustomEvent<boolean>).detail));
+    };
     window.addEventListener(
       'manga-read-immersive-change',
       handleImmersiveChange
     );
+    window.addEventListener('manga-read-controls-change', handleControlsChange);
     return () => {
       window.removeEventListener(
         'manga-read-immersive-change',
         handleImmersiveChange
+      );
+      window.removeEventListener(
+        'manga-read-controls-change',
+        handleControlsChange
       );
     };
   }, [isReadingPage]);
@@ -148,7 +158,7 @@ export default function MangaLayout({ children }: MangaLayoutProps) {
           : 'bg-gray-50 text-gray-900 dark:bg-black dark:text-gray-100'
       }`}
     >
-      {!readerImmersive && (
+      {!readerImmersive && (!isReadingPage || readerControlsVisible) && (
         <header
           className='fixed inset-x-0 top-0 z-[999] border-b border-gray-200/70 bg-white/85 shadow-sm backdrop-blur-xl dark:border-gray-800/80 dark:bg-gray-950/85'
           style={{ paddingTop: 'env(safe-area-inset-top)' }}
@@ -262,11 +272,11 @@ export default function MangaLayout({ children }: MangaLayoutProps) {
         className={
           readerImmersive
             ? 'min-h-[100dvh] max-w-none p-0'
-            : `mx-auto max-w-7xl pt-[calc(5rem+env(safe-area-inset-top))] sm:pt-[calc(6rem+env(safe-area-inset-top))] ${
-                isReadingPage
-                  ? 'px-0 pb-24 sm:px-0 sm:pb-28 lg:pb-10'
-                  : 'px-3 pb-[calc(5rem+env(safe-area-inset-bottom))] sm:px-6 sm:pb-[calc(5rem+env(safe-area-inset-bottom))] lg:pb-10'
-              }`
+            : isReadingPage
+            ? readerControlsVisible
+              ? 'mx-auto max-w-7xl px-0 pt-[calc(5rem+env(safe-area-inset-top))] pb-24 sm:px-0 sm:pt-[calc(6rem+env(safe-area-inset-top))] sm:pb-28 lg:pb-10'
+              : 'mx-auto min-h-screen max-w-7xl px-0 pb-2'
+            : 'mx-auto max-w-7xl px-3 pt-[calc(5rem+env(safe-area-inset-top))] pb-[calc(5rem+env(safe-area-inset-bottom))] sm:px-6 sm:pt-[calc(6rem+env(safe-area-inset-top))] sm:pb-[calc(5rem+env(safe-area-inset-bottom))] lg:pb-10'
         }
       >
         {children}

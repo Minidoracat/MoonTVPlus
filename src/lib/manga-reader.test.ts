@@ -1,5 +1,7 @@
 import {
+  buildMangaAlternateSearchHref,
   buildMangaReadHref,
+  buildMangaShelfItem,
   getHorizontalPageIndex,
   getHorizontalPageOffset,
   getHorizontalPageStride,
@@ -10,7 +12,11 @@ import {
   orderMangaChapters,
   shouldEagerLoadVerticalRestorePage,
 } from '@/lib/manga-reader';
-import type { MangaChapter, MangaReadRecord } from '@/lib/manga.types';
+import type {
+  MangaChapter,
+  MangaDetail,
+  MangaReadRecord,
+} from '@/lib/manga.types';
 
 function chapter(
   id: string,
@@ -167,6 +173,51 @@ describe('reader navigation href', () => {
       'http://reader.test'
     );
     expect(resumed.searchParams.has('startPage')).toBe(false);
+  });
+
+  it('其他来源搜索使用既有 manga search URL 并编码标题', () => {
+    const href = buildMangaAlternateSearchHref(' 作品 & 名 ');
+    const url = new URL(href, 'http://reader.test');
+    expect(url.pathname).toBe('/manga/search');
+    expect(url.searchParams.get('q')).toBe('作品 & 名');
+  });
+});
+
+describe('reader shelf item', () => {
+  it('共用章节排序产生目前话与最新话 metadata', () => {
+    const detail: MangaDetail = {
+      id: 'manga',
+      sourceId: 'source',
+      sourceName: '来源',
+      title: '作品',
+      cover: '/cover',
+      description: '简介',
+      author: '作者',
+      status: 'ONGOING',
+      chapters: [
+        chapter('late', 2, 20),
+        chapter('first', 1, 30),
+        chapter('early', 2, 10),
+      ],
+    };
+    expect(
+      buildMangaShelfItem({
+        detail,
+        currentChapter: { id: 'early', name: '第 2 话' },
+        unreadChapterCount: 1,
+        saveTime: 123,
+      })
+    ).toMatchObject({
+      mangaId: 'manga',
+      sourceId: 'source',
+      saveTime: 123,
+      lastChapterId: 'early',
+      lastChapterName: '第 2 话',
+      latestChapterId: 'late',
+      latestChapterName: 'late',
+      latestChapterCount: 3,
+      unreadChapterCount: 1,
+    });
   });
 });
 

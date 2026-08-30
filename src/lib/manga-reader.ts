@@ -1,4 +1,9 @@
-import type { MangaChapter, MangaReadRecord } from '@/lib/manga.types';
+import type {
+  MangaChapter,
+  MangaDetail,
+  MangaReadRecord,
+  MangaShelfItem,
+} from '@/lib/manga.types';
 
 /** 章節的唯一排序規則，章節列表與「下一話」必須共用，否則兩邊會漂移。 */
 export function orderMangaChapters(chapters: MangaChapter[]): MangaChapter[] {
@@ -110,6 +115,44 @@ export function buildMangaReadHref(input: {
   });
   if (startAtFirstPage) params.set('startPage', '1');
   return `/manga/read?${params.toString()}`;
+}
+
+export function buildMangaAlternateSearchHref(title: string): string {
+  const params = new URLSearchParams({ q: title.trim() });
+  return `/manga/search?${params.toString()}`;
+}
+
+export function buildMangaShelfItem(input: {
+  detail: MangaDetail;
+  currentChapter?: Pick<MangaChapter, 'id' | 'name'>;
+  unreadChapterCount?: number;
+  saveTime?: number;
+}): MangaShelfItem {
+  const {
+    detail,
+    currentChapter,
+    unreadChapterCount = 0,
+    saveTime = Date.now(),
+  } = input;
+  const chapters = orderMangaChapters(detail.chapters || []);
+  const latestChapter = chapters[chapters.length - 1];
+  return {
+    title: detail.title,
+    cover: detail.cover,
+    sourceId: detail.sourceId,
+    sourceName: detail.sourceName,
+    mangaId: detail.id,
+    saveTime,
+    description: detail.description,
+    author: detail.author,
+    status: detail.status,
+    lastChapterId: currentChapter?.id,
+    lastChapterName: currentChapter?.name,
+    latestChapterId: latestChapter?.id,
+    latestChapterName: latestChapter?.name,
+    latestChapterCount: chapters.length,
+    unreadChapterCount,
+  };
 }
 
 /** vertical restore 僅 eager target 附近，避免 0..target 線性下載。 */

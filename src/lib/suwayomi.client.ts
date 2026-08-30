@@ -24,6 +24,7 @@ import {
   MangaSourceProbeOutcome,
   MangaSourceSearchOutcome,
   MangaSourceSearchResponse,
+  SourceExternalUrl,
 } from './manga.types';
 import {
   isSuwayomiUnknownFieldError,
@@ -148,7 +149,9 @@ const suwayomiSessionCache = new Map<string, SuwayomiSessionCacheEntry>();
  */
 const warnedDroppedFilters = new Set<string>();
 
-function normalizeSuwayomiAuthMode(value?: string | null): 'none' | 'basic_auth' | 'simple_login' {
+function normalizeSuwayomiAuthMode(
+  value?: string | null
+): 'none' | 'basic_auth' | 'simple_login' {
   if (value === 'basic_auth' || value === 'simple_login') {
     return value;
   }
@@ -160,15 +163,21 @@ function buildBasicAuthHeader(username: string, password: string): string {
 }
 
 function hashSimpleLoginPassword(password?: string): string {
-  return createHash('sha256').update(password || '').digest('hex');
+  return createHash('sha256')
+    .update(password || '')
+    .digest('hex');
 }
 
 function getSimpleLoginCacheKey(config: ResolvedSuwayomiConfig): string {
-  return `${config.serverBaseUrl}|${config.username || ''}|${hashSimpleLoginPassword(config.password)}`;
+  return `${config.serverBaseUrl}|${
+    config.username || ''
+  }|${hashSimpleLoginPassword(config.password)}`;
 }
 
 function getResponseSetCookieHeaders(response: Response): string[] {
-  const headers = response.headers as Headers & { getSetCookie?: () => string[] };
+  const headers = response.headers as Headers & {
+    getSetCookie?: () => string[];
+  };
   if (typeof headers.getSetCookie === 'function') {
     return headers.getSetCookie();
   }
@@ -200,7 +209,9 @@ export async function loginWithSimpleAuth(
   }
 
   const response = await fetch(
-    `${config.serverBaseUrl}/login.html?redirect=${encodeURIComponent('/api/graphql')}`,
+    `${config.serverBaseUrl}/login.html?redirect=${encodeURIComponent(
+      '/api/graphql'
+    )}`,
     {
       method: 'POST',
       headers: {
@@ -228,8 +239,11 @@ export async function loginWithSimpleAuth(
   return cookieHeader;
 }
 
-async function resolveSuwayomiConfig(options: SuwayomiClientOptions = {}): Promise<ResolvedSuwayomiConfig> {
-  let serverUrl = process.env.SUWAYOMI_URL || process.env.NEXT_PUBLIC_SUWAYOMI_URL || '';
+async function resolveSuwayomiConfig(
+  options: SuwayomiClientOptions = {}
+): Promise<ResolvedSuwayomiConfig> {
+  let serverUrl =
+    process.env.SUWAYOMI_URL || process.env.NEXT_PUBLIC_SUWAYOMI_URL || '';
   let authMode = normalizeSuwayomiAuthMode(process.env.SUWAYOMI_AUTH_MODE);
   let username = process.env.SUWAYOMI_USERNAME || '';
   let password = process.env.SUWAYOMI_PASSWORD || '';
@@ -250,7 +264,9 @@ async function resolveSuwayomiConfig(options: SuwayomiClientOptions = {}): Promi
     policyKnown = !isDegradedConfigObject(config);
     if (config.SuwayomiConfig?.Enabled) {
       serverUrl = config.SuwayomiConfig.ServerURL || serverUrl;
-      authMode = normalizeSuwayomiAuthMode(config.SuwayomiConfig.AuthMode || authMode);
+      authMode = normalizeSuwayomiAuthMode(
+        config.SuwayomiConfig.AuthMode || authMode
+      );
       username = config.SuwayomiConfig.Username || username;
       password = config.SuwayomiConfig.Password || password;
       defaultLang = config.SuwayomiConfig.DefaultLang || defaultLang;
@@ -296,7 +312,9 @@ async function resolveSuwayomiConfig(options: SuwayomiClientOptions = {}): Promi
   };
 }
 
-export async function getSuwayomiConfig(options: SuwayomiClientOptions = {}): Promise<ResolvedSuwayomiConfig> {
+export async function getSuwayomiConfig(
+  options: SuwayomiClientOptions = {}
+): Promise<ResolvedSuwayomiConfig> {
   return resolveSuwayomiConfig(options);
 }
 
@@ -351,9 +369,15 @@ async function suwayomiFetch(
   const execute = async (
     forceSimpleLoginRefresh: boolean
   ): Promise<SuwayomiFetchResult> => {
-    const authHeaders = await getSuwayomiRequestHeaders(resolved, forceSimpleLoginRefresh);
+    const authHeaders = await getSuwayomiRequestHeaders(
+      resolved,
+      forceSimpleLoginRefresh
+    );
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(new Error(`Suwayomi 请求超时(${timeoutMs}ms)`)), timeoutMs);
+    const timeoutId = setTimeout(
+      () => controller.abort(new Error(`Suwayomi 请求超时(${timeoutMs}ms)`)),
+      timeoutMs
+    );
 
     // 呼叫端傳進來的 signal 必須與內建 deadline 合併，而不是被覆寫。
     // 之前這裡直接寫 `signal: controller.signal`，等於默默丟棄 init.signal ——
@@ -438,9 +462,77 @@ function normalizeMangaStatus(status?: string): string | undefined {
   }
 }
 
+/**
+ * `manga(id:)` 回來的節點。
+ *
+ * 型別要與 GraphQL 選欄位一致：少宣告一個欄位，取用處就會被 tsc 擋掉；
+ * 多宣告一個沒選的欄位，則會讓 undefined 悄悄流進回應。
+ */
+interface SuwayomiMangaNode {
+  id: string | number;
+  title?: string;
+  thumbnailUrl?: string;
+  sourceId?: string | number;
+  description?: string;
+  author?: string;
+  artist?: string;
+  genre?: string;
+  status?: string;
+  realUrl?: string;
+}
+
+/**
+ * 詳情快取存的內容：**只有伺服器事實**。
+ *
+ * 呼叫端傳進來的 title/cover/... fallback 不可進來，否則帶 fallback 的
+ * 請求會把自己的值留給後面沒帶 fallback 的請求。
+ */
+interface MangaDetailFacts {
+  /** 產生這份事實的 Suwayomi 伺服器，用來擋跨伺服器的錯誤快取 */
+  readonly serverBaseUrl: string;
+  readonly trueSourceId: string;
+  readonly manga: SuwayomiMangaNode;
+  readonly chapters: ReadonlyArray<MangaChapter>;
+}
+
+/**
+ * realUrl 只放行絕對 http(s) 網址。
+ *
+ * 這個值會變成前端「到來源站看留言」的連結。相對路徑會被瀏覽器接到本站
+ * 網域上（看起來像站內連結，其實指向不存在的頁面），`javascript:` /
+ * `data:` 之類的 scheme 更是直接的注入面。上游給不出可用的絕對網址時
+ * 就不給連結 —— 誠實的「沒有」勝過猜一個。
+ */
+function sanitizeSourceRealUrl(value?: string): SourceExternalUrl | undefined {
+  const trimmed = value?.trim();
+  if (!trimmed) return undefined;
+  try {
+    // 不帶 base：相對路徑在這裡會直接 throw，正是我們要的
+    const parsed = new URL(trimmed);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      return undefined;
+    }
+    return parsed.toString() as SourceExternalUrl;
+  } catch {
+    return undefined;
+  }
+}
+
 export class SuwayomiClient {
   private options: SuwayomiClientOptions;
   private sourcesHaveContentWarning = new Map<string, boolean>();
+  /**
+   * 每台伺服器是否支援 `realUrl` 欄位（manga 與 chapter 各自一個 key）。
+   *
+   * 舊版 Suwayomi 的 MangaType / ChapterType 沒有這個欄位，選進 query 會被
+   * GraphQL validation 直接判 FieldUndefined，整個詳情頁對舊伺服器 100% 失敗。
+   * 與 sourcesHaveContentWarning 同一套做法：樂觀先試完整選欄位，只有
+   * unknown-field 錯誤才降級並記住，之後不再重撞。
+   *
+   * 三態：true=已確認支援、false=已撞過 unknown-field、缺席=未知。
+   * 兩個欄位分開記：版本演進不保證同步，一邊缺不該拖累另一邊。
+   */
+  private realUrlCapability = new Map<string, boolean>();
   /**
    * `manga(id:)` / `chapter(id:)` 的 id 型別在不同 Suwayomi 版本不一致
    * （實測 v2.3 是 `Int!`，較舊／較新版本有 `LongString!`）。
@@ -484,7 +576,30 @@ export class SuwayomiClient {
     string,
     { at: number; inflight?: Promise<MangaSource[]>; value?: MangaSource[] }
   >();
-  private mangaSourceCache = new Map<string, { at: number; sourceId: string }>();
+  private mangaSourceCache = new Map<
+    string,
+    { at: number; sourceId: string }
+  >();
+  private static readonly MANGA_DETAIL_TTL_MS = 5 * 60_000;
+  private static readonly MANGA_DETAIL_CACHE_MAX = 32;
+  /**
+   * 漫畫詳情的來源事實快取。
+   *
+   * 一次詳情頁載入 = manga(id:) + fetchChapters 兩發上游，而 fetchChapters
+   * 還會讓 Suwayomi 去來源站重抓章節；使用者返回列表再點進來就再來一輪。
+   *
+   * key 是 serverBaseUrl + mangaId，**不含政策也不含使用者**：
+   * 值裡沒有任何經過政策過濾的資料，而 assertPolicyKnown /
+   * assertSourceAllowed 在每次 getMangaDetail 都照跑，命中快取不跳過授權。
+   */
+  private mangaDetailCache = new Map<
+    string,
+    {
+      at: number;
+      inflight?: Promise<MangaDetailFacts>;
+      value?: MangaDetailFacts;
+    }
+  >();
 
   /** Map 以插入序疊代，重設 key 前先 delete 即可把它移到尾端 */
   private static capMap(map: Map<string, unknown>, max: number): void {
@@ -530,7 +645,9 @@ export class SuwayomiClient {
       throw new Error('Suwayomi 返回的不是有效 JSON');
     }
     if (data.errors?.length) {
-      throw new Error(data.errors.map((item) => item.message || 'Unknown error').join('; '));
+      throw new Error(
+        data.errors.map((item) => item.message || 'Unknown error').join('; ')
+      );
     }
     if (!data.data) {
       throw new Error('Suwayomi 返回空数据');
@@ -590,7 +707,10 @@ export class SuwayomiClient {
         if (this.sourcesCache.get(key)?.inflight === inflight) {
           this.sourcesCache.delete(key);
           this.sourcesCache.set(key, { at: Date.now(), value });
-          SuwayomiClient.capMap(this.sourcesCache, SuwayomiClient.SOURCES_CACHE_MAX);
+          SuwayomiClient.capMap(
+            this.sourcesCache,
+            SuwayomiClient.SOURCES_CACHE_MAX
+          );
         }
         return value;
       })
@@ -726,7 +846,9 @@ ${fields}
         '无法读取来源限制设置，已暂时拒绝访问'
       );
     }
-    const requested = (Array.isArray(sourceId) ? sourceId : sourceId ? [sourceId] : [])
+    const requested = (
+      Array.isArray(sourceId) ? sourceId : sourceId ? [sourceId] : []
+    )
       .map((id) => id.trim())
       .filter(Boolean);
 
@@ -752,7 +874,10 @@ ${fields}
     }
 
     try {
-      return (await this.getSources(resolved.defaultLang)).slice(0, resolved.maxSources);
+      return (await this.getSources(resolved.defaultLang)).slice(
+        0,
+        resolved.maxSources
+      );
     } catch (error) {
       // fail-closed 的授權錯誤絕不可被 fallback 吞掉 ——
       // 否則「政策不可信」或「剛被停用」會被降級成「來源清單暫時取不到」，
@@ -1069,7 +1194,11 @@ ${fields}
       __typename?: string;
       name?: string;
       values?: string[];
-      filters?: Array<{ __typename?: string; name?: string; values?: string[] }>;
+      filters?: Array<{
+        __typename?: string;
+        name?: string;
+        values?: string[];
+      }>;
     }
     const data = await this.graphqlRequest<{
       source?: { filters?: RawFilter[] };
@@ -1211,7 +1340,9 @@ ${fields}
       if (!warnedDroppedFilters.has(warnKey)) {
         warnedDroppedFilters.add(warnKey);
         console.warn(
-          `[Suwayomi] 來源 ${sourceId} 有無法渲染的 filter，已略過：${dropped.join('；')}`
+          `[Suwayomi] 來源 ${sourceId} 有無法渲染的 filter，已略過：${dropped.join(
+            '；'
+          )}`
         );
       }
     }
@@ -1410,7 +1541,8 @@ ${fields}
       const mangas = (data.fetchSourceManga?.mangas || []).map((manga) => ({
         id: String(manga.id),
         sourceId: String(manga.sourceId || sourceId),
-        sourceName: matchedSource?.displayName || matchedSource?.name || sourceId,
+        sourceName:
+          matchedSource?.displayName || matchedSource?.name || sourceId,
         title: manga.title || '未命名漫画',
         cover: buildSuwayomiImageProxyUrl(manga.thumbnailUrl || ''),
         description: manga.description,
@@ -1465,8 +1597,43 @@ ${fields}
     return published;
   }
 
-  async getChapters(mangaId: string): Promise<MangaChapter[]> {
-    const mutation = `
+  /**
+   * realUrl 舊 schema 相容協商：manga / chapter 共用同一套三態規則。
+   *
+   * false=已知舊 schema，直接發 legacy，不再每次先撞一發；true 或缺席=樂觀
+   * 先試完整選欄位。只有成功才記「支援」（暫時性故障不可被記成能力事實），
+   * 也只有 unknown-field 才降級 —— 連線失敗、HTTP 非 2xx、一般 GraphQL 錯誤
+   * 都是真錯，原樣上拋；把它們當成 schema 差異會把故障偽裝成「這台不支援
+   * realUrl」。
+   */
+  private async negotiateRealUrlField<T>(
+    capKey: string,
+    realUrlField: string,
+    run: (field: string) => Promise<T>
+  ): Promise<T> {
+    if (this.realUrlCapability.get(capKey) === false) return run('');
+    try {
+      const value = await run(realUrlField);
+      this.realUrlCapability.set(capKey, true);
+      return value;
+    } catch (error) {
+      if (!isSuwayomiUnknownFieldError(error)) {
+        throw error;
+      }
+      this.realUrlCapability.set(capKey, false);
+      return run('');
+    }
+  }
+
+  async getChapters(
+    mangaId: string,
+    resolvedConfig?: ResolvedSuwayomiConfig
+  ): Promise<MangaChapter[]> {
+    // 詳情路徑會把自己的 snapshot 傳進來：manga 與 chapters 必須來自同一台
+    // 伺服器，中途 admin 換 ServerURL 會讓兩者拼成不同漫畫的混合體。
+    const resolved =
+      resolvedConfig ?? (await resolveSuwayomiConfig(this.options));
+    const buildMutation = (realUrlField: string) => `
       mutation GET_MANGA_CHAPTERS_FETCH($input: FetchChaptersInput!) {
         fetchChapters(input: $input) {
           chapters {
@@ -1478,13 +1645,13 @@ ${fields}
             isRead
             isDownloaded
             pageCount
-            uploadDate
+            uploadDate${realUrlField}
           }
         }
       }
     `;
 
-    const data = await this.graphqlRequest<{
+    type ChaptersData = {
       fetchChapters?: {
         chapters?: Array<{
           id: string | number;
@@ -1496,9 +1663,24 @@ ${fields}
           isDownloaded?: boolean;
           pageCount?: number;
           uploadDate?: number;
+          realUrl?: string;
         }>;
       };
-    }>(mutation, { input: { mangaId: Number(mangaId) || mangaId } }, 'GET_MANGA_CHAPTERS_FETCH');
+    };
+
+    const run = (realUrlField: string) =>
+      this.graphqlRequest<ChaptersData>(
+        buildMutation(realUrlField),
+        { input: { mangaId: Number(mangaId) || mangaId } },
+        'GET_MANGA_CHAPTERS_FETCH',
+        resolved
+      );
+
+    const data = await this.negotiateRealUrlField(
+      `${resolved.serverBaseUrl}::chapter`,
+      '\n            realUrl',
+      run
+    );
 
     return (data.fetchChapters?.chapters || []).map((chapter) => ({
       id: String(chapter.id),
@@ -1510,6 +1692,7 @@ ${fields}
       isDownloaded: chapter.isDownloaded,
       pageCount: chapter.pageCount,
       uploadDate: chapter.uploadDate,
+      realUrl: sanitizeSourceRealUrl(chapter.realUrl),
     }));
   }
 
@@ -1523,9 +1706,11 @@ ${fields}
   private async graphqlNodeQuery<T>(
     buildQuery: (idType: 'Int!' | 'LongString!') => string,
     id: string,
-    operationName: string
+    operationName: string,
+    resolvedConfig?: ResolvedSuwayomiConfig
   ): Promise<{ data: T; resolved: ResolvedSuwayomiConfig }> {
-    const resolved = await resolveSuwayomiConfig(this.options);
+    const resolved =
+      resolvedConfig ?? (await resolveSuwayomiConfig(this.options));
     // key 必須含 operationName：`manga(id:)` 與 `chapter(id:)` 在同一版本上
     // 可能是不同型別，共用 key 會讓其中一邊被另一邊的結果汙染。
     const cacheKey = `${resolved.serverBaseUrl}::${operationName}`;
@@ -1554,9 +1739,11 @@ ${fields}
       } catch (error) {
         lastError = error;
         // 只有型別不合才換另一種再試；其他錯誤（連線、權限）直接往上丟
-        if (!/VariableTypeMismatch|of type .* used in position/i.test(
-          error instanceof Error ? error.message : String(error)
-        )) {
+        if (
+          !/VariableTypeMismatch|of type .* used in position/i.test(
+            error instanceof Error ? error.message : String(error)
+          )
+        ) {
           throw error;
         }
       }
@@ -1591,34 +1778,20 @@ ${fields}
    * 授權判斷絕不能信客戶端傳來的 sourceId：攻擊者只要拿「允許來源的 id」
    * 配上「被停用來源的 mangaId」就能繞過。這裡回傳的是伺服器的事實。
    */
-  private async resolveMangaSource(mangaId: string): Promise<{
+  private async resolveMangaSource(
+    mangaId: string,
+    resolvedConfig?: ResolvedSuwayomiConfig
+  ): Promise<{
     sourceId: string;
-    manga?: {
-      id: string | number;
-      title?: string;
-      thumbnailUrl?: string;
-      sourceId?: string | number;
-      description?: string;
-      author?: string;
-      artist?: string;
-      genre?: string;
-      status?: string;
-    };
+    /** 這次查詢實際使用的伺服器；呼叫端須與自己的快取 namespace 比對 */
+    serverBaseUrl: string;
+    manga: SuwayomiMangaNode;
   }> {
-    const { data, resolved: snapshot } = await this.graphqlNodeQuery<{
-      manga?: {
-        id: string | number;
-        title?: string;
-        thumbnailUrl?: string;
-        sourceId?: string | number;
-        description?: string;
-        author?: string;
-        artist?: string;
-        genre?: string;
-        status?: string;
-      };
-    }>(
-      (idType) => `
+    const snapshotConfig =
+      resolvedConfig ?? (await resolveSuwayomiConfig(this.options));
+    const buildQuery =
+      (realUrlField: string) => (idType: 'Int!' | 'LongString!') =>
+        `
       query MangaDetail($id: ${idType}) {
         manga(id: $id) {
           id
@@ -1629,15 +1802,27 @@ ${fields}
           author
           artist
           genre
-          status
+          status${realUrlField}
         }
       }
-    `,
-      mangaId,
-      'MangaDetail'
+    `;
+    const run = (realUrlField: string) =>
+      this.graphqlNodeQuery<{ manga?: SuwayomiMangaNode }>(
+        buildQuery(realUrlField),
+        mangaId,
+        'MangaDetail',
+        snapshotConfig
+      );
+
+    // 與 getChapters 分開記：MangaType 有 realUrl 不代表 ChapterType 也有。
+    const { data, resolved: snapshot } = await this.negotiateRealUrlField(
+      `${snapshotConfig.serverBaseUrl}::manga`,
+      '\n          realUrl',
+      run
     );
 
-    const resolved = data.manga?.sourceId;
+    const manga = data.manga;
+    const resolved = manga?.sourceId;
     if (!resolved) {
       // 查不到歸屬就無法判斷是否被停用 —— 授權路徑必須 fail closed，
       // 不可退回客戶端提供的 sourceId。
@@ -1649,7 +1834,11 @@ ${fields}
     // 若在這裡重新 resolve，查詢期間管理員換了 Suwayomi 伺服器的話，
     // 舊伺服器的來源歸屬會被寫進新伺服器的 namespace，造成跨來源授權繞過。
     this.rememberMangaSource(snapshot.serverBaseUrl, mangaId, sourceId);
-    return { sourceId, manga: data.manga };
+    return {
+      sourceId,
+      serverBaseUrl: snapshot.serverBaseUrl,
+      manga,
+    };
   }
 
   /**
@@ -1671,10 +1860,80 @@ ${fields}
     const sourceId =
       cached && Date.now() - cached.at < SuwayomiClient.MANGA_SOURCE_TTL_MS
         ? cached.sourceId
-        : (await this.resolveMangaSource(mangaId)).sourceId;
+        : (await this.resolveMangaSource(mangaId, resolved)).sourceId;
     // assertSourceAllowed 仍然每次都跑：它讀的是（已快取的）來源清單，
     // 管理員改 SourceIds 後會在 SOURCES_TTL_MS 內生效。
     await this.assertSourceAllowed(sourceId);
+  }
+
+  /**
+   * 詳情的「來源事實」快取：5 分鐘、上限 32、同 key 併發合併成一發。
+   *
+   * 一次詳情頁載入是 manga(id:) + fetchChapters 兩發上游，而 fetchChapters
+   * 還會讓 Suwayomi 去來源站重抓；使用者返回列表再點回來就再來一輪，
+   * 書架批次更新同一部漫畫也會重複打。
+   *
+   * 快取裡只有伺服器事實 —— 授權完全不在裡面：政策門由呼叫端在進來之前
+   * 用最新的 config 擋，assertSourceAllowed 在這裡（miss 時、送 getChapters
+   * 之前）與 getMangaDetail 尾端各跑一次，所以命中快取不會跳過任何一道。
+   *
+   * snapshot 由呼叫端傳入並貫穿整輪（manga 與 chapters 打同一台）：key 與
+   * value 因此同源，跨伺服器汙染在資料流上就不可能發生，不需寫入前比對。
+   */
+  private loadMangaDetailFacts(
+    snapshot: ResolvedSuwayomiConfig,
+    mangaId: string
+  ): Promise<MangaDetailFacts> {
+    const key = `${snapshot.serverBaseUrl}::${mangaId}`;
+    const now = Date.now();
+    const hit = this.mangaDetailCache.get(key);
+
+    if (hit) {
+      if (hit.inflight) return hit.inflight;
+      if (hit.value && now - hit.at < SuwayomiClient.MANGA_DETAIL_TTL_MS) {
+        return Promise.resolve(hit.value);
+      }
+    }
+
+    const inflight: Promise<MangaDetailFacts> = (async () => {
+      // 先驗權再取內容：getChapters 也會外發請求，順序顛倒等於先洩漏再檢查。
+      const resolvedSource = await this.resolveMangaSource(mangaId, snapshot);
+      await this.assertSourceAllowed(resolvedSource.sourceId);
+      return {
+        // 整輪綁在同一份 snapshot 上，key 與 value 因此同源
+        serverBaseUrl: snapshot.serverBaseUrl,
+        trueSourceId: resolvedSource.sourceId,
+        manga: resolvedSource.manga,
+        chapters: await this.getChapters(mangaId, snapshot),
+      };
+    })()
+      .then((value) => {
+        // compare-and-set：容量汰除或後續呼叫可能已讓這個 key 指向別的
+        // inflight，較舊的 promise 不可覆寫較新的結果
+        if (this.mangaDetailCache.get(key)?.inflight === inflight) {
+          this.mangaDetailCache.delete(key);
+          this.mangaDetailCache.set(key, { at: Date.now(), value });
+          SuwayomiClient.capMap(
+            this.mangaDetailCache,
+            SuwayomiClient.MANGA_DETAIL_CACHE_MAX
+          );
+        }
+        return value;
+      })
+      .catch((error) => {
+        // 失敗不留快取，下次重新嘗試；同樣只清掉自己那一筆
+        if (this.mangaDetailCache.get(key)?.inflight === inflight) {
+          this.mangaDetailCache.delete(key);
+        }
+        throw error;
+      });
+
+    this.mangaDetailCache.set(key, { at: now, inflight });
+    SuwayomiClient.capMap(
+      this.mangaDetailCache,
+      SuwayomiClient.MANGA_DETAIL_CACHE_MAX
+    );
+    return inflight;
   }
 
   async getMangaDetail(input: {
@@ -1687,29 +1946,49 @@ ${fields}
     author?: string;
     status?: string;
   }): Promise<MangaDetail> {
-    // 政策未知要在送出任何上游請求之前擋掉，否則使用者仍能在授權不明時
-    // 驅動一次 manga(id:) 查詢。
-    await this.assertPolicyKnown();
-    // 先驗權再取內容：getChapters 也會外發請求，順序顛倒等於先洩漏再檢查。
-    const { sourceId: trueSourceId, manga } = await this.resolveMangaSource(
-      input.mangaId
-    );
-    await this.assertSourceAllowed(trueSourceId);
+    // 政策門與 snapshot 合併成同一次 resolve：檢查的與使用的是同一份 config，
+    // 兩次 resolve 之間沒有縫。政策未知要在送出任何上游請求之前擋掉，
+    // 快取命中也一樣要先過這道。
+    const snapshot = await resolveSuwayomiConfig(this.options);
+    if (!snapshot.policyKnown) {
+      throw new MangaSourceForbiddenError(
+        '无法读取来源限制设置，已暂时拒绝访问'
+      );
+    }
+    let facts = await this.loadMangaDetailFacts(snapshot, input.mangaId);
 
-    const chapters = await this.getChapters(input.mangaId);
+    // 這一輪期間 admin 可能換掉 ServerURL。facts 本身自洽（整輪綁同一台），
+    // 但回給使用者的內容應該屬於「現在這台」——否則後續用 chapterId 發的
+    // 請求會打到新伺服器而對不上。重試上限 1 次，絕不迴圈：連續切換時
+    // 回傳第二輪的自洽事實即可，快取仍零汙染（key 與 value 同源）。
+    const fresh = await resolveSuwayomiConfig(this.options);
+    if (fresh.policyKnown && fresh.serverBaseUrl !== facts.serverBaseUrl) {
+      facts = await this.loadMangaDetailFacts(fresh, input.mangaId);
+    }
 
+    // 授權永遠最後、永遠用最新政策：重試之後才驗，保證真正回傳的
+    // trueSourceId 過的是當下白名單。管理員停用來源後會在 SOURCES_TTL_MS
+    // 內生效，不受 5 分鐘詳情內容 TTL 影響。
+    await this.assertSourceAllowed(facts.trueSourceId);
+
+    const manga = facts.manga;
     return {
-      id: manga ? String(manga.id) : input.mangaId,
-      sourceId: trueSourceId,
-      sourceName: input.sourceName || trueSourceId,
-      title: manga?.title || input.title || '漫画详情',
-      cover: buildSuwayomiImageProxyUrl(manga?.thumbnailUrl || input.cover || ''),
-      description: manga?.description || input.description,
-      author: manga?.author || input.author,
-      artist: manga?.artist,
-      genre: manga?.genre,
-      status: normalizeMangaStatus(manga?.status || input.status),
-      chapters,
+      id: String(manga.id),
+      sourceId: facts.trueSourceId,
+      sourceName: input.sourceName || facts.trueSourceId,
+      title: manga.title || input.title || '漫画详情',
+      cover: buildSuwayomiImageProxyUrl(
+        manga.thumbnailUrl || input.cover || ''
+      ),
+      description: manga.description || input.description,
+      author: manga.author || input.author,
+      artist: manga.artist,
+      genre: manga.genre,
+      status: normalizeMangaStatus(manga.status || input.status),
+      // realUrl 只認伺服器給的絕對網址，呼叫端無法注入
+      realUrl: sanitizeSourceRealUrl(manga.realUrl),
+      // 陣列本身屬於共用快取；交付淺拷貝，避免呼叫端 push/sort 改到快取。
+      chapters: [...facts.chapters],
     };
   }
 
@@ -1752,9 +2031,15 @@ ${fields}
 
     const data = await this.graphqlRequest<{
       fetchChapterPages?: { pages?: string[] };
-    }>(mutation, { input: { chapterId: Number(chapterId) || chapterId } }, 'GET_CHAPTER_PAGES_FETCH');
+    }>(
+      mutation,
+      { input: { chapterId: Number(chapterId) || chapterId } },
+      'GET_CHAPTER_PAGES_FETCH'
+    );
 
-    return (data.fetchChapterPages?.pages || []).map((item) => buildSuwayomiImageProxyUrl(item));
+    return (data.fetchChapterPages?.pages || []).map((item) =>
+      buildSuwayomiImageProxyUrl(item)
+    );
   }
 }
 

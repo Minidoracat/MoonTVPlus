@@ -140,3 +140,215 @@ describe('降級設定下的授權（fail closed）', () => {
     });
   });
 });
+
+/**
+ * 詳情快取（5 分鐘）的回歸鎖。
+ *
+ * 快取只可能造成兩種真實傷害，這裡各鎖一條：
+ * 1. 變成授權旁路 —— 管理員停用來源後，命中快取的請求仍讀得到內容。
+ * 2. 洩漏呼叫端的 fallback —— A 帶進去的 title/sourceName 被回給沒帶的 B。
+ * 另外鎖住 realUrl 只放行絕對 http(s) 網址（它會變成前端的外連連結）。
+ */
+describe('getMangaDetail 的詳情快取', () => {
+  const MANGA_ID = '1307';
+  const SOURCE_ID = '123';
+  const DETAIL_QUERY = 'MangaDetail';
+  const CHAPTERS_QUERY = 'GET_MANGA_CHAPTERS_FETCH';
+
+  let client: SuwayomiClient;
+  let fetchMock: jest.Mock;
+  /** 每次上游請求的 GraphQL body，三種查詢共用 endpoint，只能靠內容分辨 */
+  let requestBodies: string[];
+  let realUrl: string | undefined;
+  let chapterRealUrl: string | undefined;
+  let chaptersFail: boolean;
+  const originalFetch = global.fetch;
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    setConfigState(false, []);
+    client = new SuwayomiClient();
+    requestBodies = [];
+    realUrl = 'https://source.example/manga/1307';
+    chapterRealUrl = 'https://source.example/chapter/1';
+    chaptersFail = false;
+    // 用 text() 而非 json()：suwayomiFetch 會在自己的 deadline 內把 body
+    // 讀成字串再交給呼叫端解析。
+    fetchMock = jest.fn(async (_url: string, init?: RequestInit) => {
+      const body = String(init?.body ?? '');
+      requestBodies.push(body);
+      let payload: unknown = { data: {} };
+      if (body.includes(DETAIL_QUERY)) {
+        // 刻意不給 description/status：那兩欄要留給呼叫端 fallback 驗證
+        payload = {
+          data: {
+            manga: {
+              id: 1307,
+              title: '上游标题',
+              sourceId: SOURCE_ID,
+              realUrl,
+            },
+          },
+        };
+      } else if (body.includes(CHAPTERS_QUERY)) {
+        if (chaptersFail) throw new Error('上游章节查询失败');
+        payload = {
+          data: {
+            fetchChapters: {
+              chapters: [
+                {
+                  id: 1,
+                  mangaId: 1307,
+                  name: '第 1 话',
+                  realUrl: chapterRealUrl,
+                },
+              ],
+            },
+          },
+        };
+      } else if (body.includes('sources')) {
+        payload = {
+          data: {
+            sources: { nodes: [{ id: SOURCE_ID, name: '来源', lang: 'zh' }] },
+          },
+        };
+      }
+      return {
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify(payload),
+      } as unknown as Response;
+    });
+    global.fetch = fetchMock as unknown as typeof global.fetch;
+  });
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+  });
+
+  it('併發的相同請求合併成一發上游', async () => {
+    await Promise.all([
+      client.getMangaDetail({ mangaId: MANGA_ID, sourceId: SOURCE_ID }),
+      client.getMangaDetail({ mangaId: MANGA_ID, sourceId: SOURCE_ID }),
+    ]);
+    expect(requestBodies.filter((b) => b.includes(DETAIL_QUERY))).toHaveLength(
+      1
+    );
+    expect(
+      requestBodies.filter((b) => b.includes(CHAPTERS_QUERY))
+    ).toHaveLength(1);
+  });
+
+  it('TTL 內重複請求不再打上游', async () => {
+    await client.getMangaDetail({ mangaId: MANGA_ID, sourceId: SOURCE_ID });
+    await client.getMangaDetail({ mangaId: MANGA_ID, sourceId: SOURCE_ID });
+    expect(requestBodies.filter((b) => b.includes(DETAIL_QUERY))).toHaveLength(
+      1
+    );
+    expect(
+      requestBodies.filter((b) => b.includes(CHAPTERS_QUERY))
+    ).toHaveLength(1);
+  });
+
+  it('5 分钟后重新读取来源事实', async () => {
+    await client.getMangaDetail({ mangaId: MANGA_ID, sourceId: SOURCE_ID });
+    const now = Date.now();
+    const dateSpy = jest
+      .spyOn(Date, 'now')
+      .mockReturnValue(now + 5 * 60_000 + 1);
+    try {
+      await client.getMangaDetail({ mangaId: MANGA_ID, sourceId: SOURCE_ID });
+    } finally {
+      dateSpy.mockRestore();
+    }
+    expect(requestBodies.filter((b) => b.includes(DETAIL_QUERY))).toHaveLength(
+      2
+    );
+    expect(
+      requestBodies.filter((b) => b.includes(CHAPTERS_QUERY))
+    ).toHaveLength(2);
+  });
+
+  it('快取的是伺服器事實，呼叫端 fallback 不得互相汙染', async () => {
+    const withFallback = await client.getMangaDetail({
+      mangaId: MANGA_ID,
+      sourceId: SOURCE_ID,
+      sourceName: '呼叫端来源名',
+      description: '呼叫端简介',
+    });
+    const withoutFallback = await client.getMangaDetail({
+      mangaId: MANGA_ID,
+      sourceId: SOURCE_ID,
+    });
+
+    expect(withFallback.description).toBe('呼叫端简介');
+    expect(withFallback.sourceName).toBe('呼叫端来源名');
+    // 上游沒給 description，第二位呼叫端就該是 undefined 而不是別人的值
+    expect(withoutFallback.description).toBeUndefined();
+    expect(withoutFallback.sourceName).toBe(SOURCE_ID);
+    // 伺服器事實兩邊一致
+    expect(withoutFallback.title).toBe('上游标题');
+    expect(withFallback.title).toBe('上游标题');
+  });
+
+  it('命中快取仍要驗權：來源被移出白名單後必須拒絕', async () => {
+    await client.getMangaDetail({ mangaId: MANGA_ID, sourceId: SOURCE_ID });
+    setConfigState(false, ['999']);
+
+    await expect(
+      client.getMangaDetail({ mangaId: MANGA_ID, sourceId: SOURCE_ID })
+    ).rejects.toThrow();
+    // 拒絕是由每次都跑的授權檢查造成，不是因為快取失效重打上游
+    expect(requestBodies.filter((b) => b.includes(DETAIL_QUERY))).toHaveLength(
+      1
+    );
+  });
+
+  it('上游失敗不留快取，下次重新嘗試', async () => {
+    chaptersFail = true;
+    await expect(
+      client.getMangaDetail({ mangaId: MANGA_ID, sourceId: SOURCE_ID })
+    ).rejects.toThrow();
+
+    chaptersFail = false;
+    const detail = await client.getMangaDetail({
+      mangaId: MANGA_ID,
+      sourceId: SOURCE_ID,
+    });
+    expect(detail.chapters).toHaveLength(1);
+    expect(requestBodies.filter((b) => b.includes(DETAIL_QUERY))).toHaveLength(
+      2
+    );
+  });
+
+  it('realUrl 只放行絕對 http(s) 網址', async () => {
+    const absolute = await client.getMangaDetail({
+      mangaId: MANGA_ID,
+      sourceId: SOURCE_ID,
+    });
+    expect(absolute.realUrl).toBe('https://source.example/manga/1307');
+    expect(absolute.chapters[0].realUrl).toBe(
+      'https://source.example/chapter/1'
+    );
+
+    realUrl = '/manga/1307';
+    chapterRealUrl = '/chapter/1';
+    const relativeClient = new SuwayomiClient();
+    const relative = await relativeClient.getMangaDetail({
+      mangaId: MANGA_ID,
+      sourceId: SOURCE_ID,
+    });
+    expect(relative.realUrl).toBeUndefined();
+    expect(relative.chapters[0].realUrl).toBeUndefined();
+
+    realUrl = 'javascript:alert(1)';
+    chapterRealUrl = 'data:text/html,bad';
+    const scriptClient = new SuwayomiClient();
+    const script = await scriptClient.getMangaDetail({
+      mangaId: MANGA_ID,
+      sourceId: SOURCE_ID,
+    });
+    expect(script.realUrl).toBeUndefined();
+    expect(script.chapters[0].realUrl).toBeUndefined();
+  });
+});

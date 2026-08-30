@@ -244,6 +244,7 @@ export default function MangaReadPage() {
     signature: string;
     timer: number | null;
   } | null>(null);
+  const shelfMutationQueueRef = useRef<Promise<void> | null>(null);
   /** pages 目前屬於哪一話；防止「新 chapterId + 舊 pages」寫入髒紀錄 */
   const pagesChapterIdRef = useRef('');
   const pendingRecordVersionRef = useRef(0);
@@ -466,6 +467,17 @@ export default function MangaReadPage() {
       sourceName,
       title,
     ]
+  );
+
+  const enqueueShelfMutation = useCallback(
+    (mutation: () => Promise<void>): Promise<void> => {
+      const previous = shelfMutationQueueRef.current ?? Promise.resolve();
+      const queued = previous.catch(() => undefined).then(mutation);
+      // 佇列本身永遠 settle，單次呼叫仍拿 queued 的真實成功／失敗。
+      shelfMutationQueueRef.current = queued.catch(() => undefined);
+      return queued;
+    },
+    []
   );
 
   const applyImmersiveMode = useCallback((next: boolean) => {
@@ -1145,7 +1157,7 @@ export default function MangaReadPage() {
       if (!pending || pending.signature !== syncSignature) return;
       pending.inflight = true;
       pending.timer = null;
-      saveMangaShelf(sourceId, mangaId, nextItem)
+      enqueueShelfMutation(() => saveMangaShelf(sourceId, mangaId, nextItem))
         .then(() => {
           if (shelfSyncAttemptRef.current?.signature === syncSignature) {
             shelfSyncAttemptRef.current = null;
@@ -1168,7 +1180,15 @@ export default function MangaReadPage() {
       timer: null,
     };
     sync(1);
-  }, [chapterId, chapterName, mangaId, ownedMangaDetail, shelf, sourceId]);
+  }, [
+    chapterId,
+    chapterName,
+    enqueueShelfMutation,
+    mangaId,
+    ownedMangaDetail,
+    shelf,
+    sourceId,
+  ]);
 
   /** 章節尾頁是否已經呈現在畫面上；章節完讀判斷與尾頁動作必須共用。 */
   const isLastPageVisible =
@@ -1317,16 +1337,18 @@ export default function MangaReadPage() {
     setShelfSaving(true);
     try {
       if (shelf[shelfKey]) {
-        await deleteMangaShelf(sourceId, mangaId);
+        await enqueueShelfMutation(() => deleteMangaShelf(sourceId, mangaId));
       } else {
-        await saveMangaShelf(
-          sourceId,
-          mangaId,
-          buildMangaShelfItem({
-            detail: ownedMangaDetail,
-            currentChapter: { id: chapterId, name: chapterName },
-            unreadChapterCount: readerUnreadChapterCount,
-          })
+        await enqueueShelfMutation(() =>
+          saveMangaShelf(
+            sourceId,
+            mangaId,
+            buildMangaShelfItem({
+              detail: ownedMangaDetail,
+              currentChapter: { id: chapterId, name: chapterName },
+              unreadChapterCount: readerUnreadChapterCount,
+            })
+          )
         );
       }
     } catch {
@@ -1337,6 +1359,7 @@ export default function MangaReadPage() {
   }, [
     chapterId,
     chapterName,
+    enqueueShelfMutation,
     mangaId,
     ownedMangaDetail,
     readerUnreadChapterCount,

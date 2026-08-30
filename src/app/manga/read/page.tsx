@@ -26,6 +26,7 @@ import {
 
 import {
   deleteMangaShelf,
+  MangaShelfMutationCancelledError,
   getAllMangaReadRecords,
   getAllMangaShelf,
   saveMangaReadRecord,
@@ -624,6 +625,7 @@ export default function MangaReadPage() {
       if (shelfSyncTimer !== null && shelfSyncTimer !== undefined) {
         window.clearTimeout(shelfSyncTimer);
       }
+      shelfSyncAttemptRef.current = null;
       dispatchImmersiveChange(false);
       if (document.fullscreenElement) {
         void document.exitFullscreen?.().catch(() => undefined);
@@ -1151,9 +1153,13 @@ export default function MangaReadPage() {
             shelfSyncAttemptRef.current = null;
           }
         })
-        .catch(() => {
+        .catch((error) => {
           const current = shelfSyncAttemptRef.current;
           if (!current || current.signature !== syncSignature) return;
+          if (error instanceof MangaShelfMutationCancelledError) {
+            shelfSyncAttemptRef.current = null;
+            return;
+          }
           current.inflight = false;
           if (retriesLeft <= 0) return;
           current.timer = window.setTimeout(() => {

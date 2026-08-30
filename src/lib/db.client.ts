@@ -1794,73 +1794,94 @@ export async function getAllMangaShelf(
   }
 }
 
-export async function saveMangaShelf(
+const mangaShelfMutationQueues = new Map<string, Promise<void>>();
+
+function enqueueMangaShelfMutation(
+  key: string,
+  mutation: () => Promise<void>
+): Promise<void> {
+  const previous = mangaShelfMutationQueues.get(key) ?? Promise.resolve();
+  // 佇列尾端（tail）已吞掉 rejection，這裡直接串接即可；前一筆失敗不會卡住後續 mutation。
+  const queued = previous.then(mutation);
+  const tail = queued.catch(() => undefined);
+  mangaShelfMutationQueues.set(key, tail);
+  void tail.then(() => {
+    if (mangaShelfMutationQueues.get(key) === tail) {
+      mangaShelfMutationQueues.delete(key);
+    }
+  });
+  return queued;
+}
+
+export function saveMangaShelf(
   sourceId: string,
   mangaId: string,
   item: MangaShelfItem
 ): Promise<void> {
   const key = generateStorageKey(sourceId, mangaId);
+  return enqueueMangaShelfMutation(key, async () => {
+    if (STORAGE_TYPE !== 'localstorage') {
+      const cached = cacheManager.getCachedMangaShelf() || {};
+      cached[key] = item;
+      cacheManager.cacheMangaShelf(cached);
+      window.dispatchEvent(
+        new CustomEvent('mangaShelfUpdated', { detail: cached })
+      );
 
-  if (STORAGE_TYPE !== 'localstorage') {
-    const cached = cacheManager.getCachedMangaShelf() || {};
-    cached[key] = item;
-    cacheManager.cacheMangaShelf(cached);
-    window.dispatchEvent(
-      new CustomEvent('mangaShelfUpdated', { detail: cached })
-    );
-
-    try {
-      await fetchWithAuth('/api/manga/shelf', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ key, item }),
-      });
-    } catch (err) {
-      await handleDatabaseOperationFailure('mangaShelf', err);
-      throw err;
+      try {
+        await fetchWithAuth('/api/manga/shelf', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ key, item }),
+        });
+      } catch (err) {
+        await handleDatabaseOperationFailure('mangaShelf', err);
+        throw err;
+      }
+      return;
     }
-    return;
-  }
 
-  const allItems = await getAllMangaShelf();
-  allItems[key] = item;
-  localStorage.setItem(MANGA_SHELF_KEY, JSON.stringify(allItems));
-  window.dispatchEvent(
-    new CustomEvent('mangaShelfUpdated', { detail: allItems })
-  );
+    const allItems = await getAllMangaShelf();
+    allItems[key] = item;
+    localStorage.setItem(MANGA_SHELF_KEY, JSON.stringify(allItems));
+    window.dispatchEvent(
+      new CustomEvent('mangaShelfUpdated', { detail: allItems })
+    );
+  });
 }
 
-export async function deleteMangaShelf(
+export function deleteMangaShelf(
   sourceId: string,
   mangaId: string
 ): Promise<void> {
   const key = generateStorageKey(sourceId, mangaId);
+  return enqueueMangaShelfMutation(key, async () => {
+    if (STORAGE_TYPE !== 'localstorage') {
+      const cached = cacheManager.getCachedMangaShelf() || {};
+      delete cached[key];
+      cacheManager.cacheMangaShelf(cached);
+      window.dispatchEvent(
+        new CustomEvent('mangaShelfUpdated', { detail: cached })
+      );
 
-  if (STORAGE_TYPE !== 'localstorage') {
-    const cached = cacheManager.getCachedMangaShelf() || {};
-    delete cached[key];
-    cacheManager.cacheMangaShelf(cached);
-    window.dispatchEvent(
-      new CustomEvent('mangaShelfUpdated', { detail: cached })
-    );
-
-    try {
-      await fetchWithAuth(`/api/manga/shelf?key=${encodeURIComponent(key)}`, {
-        method: 'DELETE',
-      });
-    } catch (err) {
-      await handleDatabaseOperationFailure('mangaShelf', err);
-      throw err;
+      try {
+        await fetchWithAuth(`/api/manga/shelf?key=${encodeURIComponent(key)}`, {
+          method: 'DELETE',
+        });
+      } catch (err) {
+        await handleDatabaseOperationFailure('mangaShelf', err);
+        throw err;
+      }
+      return;
     }
-    return;
-  }
 
-  const allItems = await getAllMangaShelf();
-  delete allItems[key];
-  localStorage.setItem(MANGA_SHELF_KEY, JSON.stringify(allItems));
-  window.dispatchEvent(
-    new CustomEvent('mangaShelfUpdated', { detail: allItems })
-  );
+    const allItems = await getAllMangaShelf();
+    delete allItems[key];
+    localStorage.setItem(MANGA_SHELF_KEY, JSON.stringify(allItems));
+    window.dispatchEvent(
+      new CustomEvent('mangaShelfUpdated', { detail: allItems })
+    );
+  });
 }
 
 export async function clearAllMangaShelf(): Promise<void> {

@@ -26,15 +26,20 @@ import {
 
 import {
   deleteMangaShelf,
-  MangaShelfMutationCancelledError,
   getAllMangaReadRecords,
   getAllMangaShelf,
+  MangaShelfMutationCancelledError,
   saveMangaReadRecord,
   saveMangaShelf,
   subscribeToDataUpdates,
 } from '@/lib/db.client';
+import type {
+  MangaChapter,
+  MangaDetail,
+  MangaReadRecord,
+  MangaShelfItem,
+} from '@/lib/manga.types';
 import {
-  buildMangaAlternateSearchHref,
   buildMangaReadHref,
   buildMangaShelfItem,
   getHorizontalPageIndex,
@@ -46,12 +51,6 @@ import {
   orderMangaChapters,
   shouldEagerLoadVerticalRestorePage,
 } from '@/lib/manga-reader';
-import type {
-  MangaChapter,
-  MangaDetail,
-  MangaReadRecord,
-  MangaShelfItem,
-} from '@/lib/manga.types';
 import { processImageUrl } from '@/lib/utils';
 
 import ProxyImage from '@/components/ProxyImage';
@@ -226,6 +225,13 @@ export default function MangaReadPage() {
     Boolean(chapterId)
   );
   const [verticalRestoreActive, setVerticalRestoreActive] = useState(false);
+  /**
+   * 「重新载入当前页」用的 cache-busting token，key 是 page index。
+   * 只有被點過重載的頁會拿到 token，其餘頁維持原本的 URL 與快取行為。
+   */
+  const [pageReloadTokens, setPageReloadTokens] = useState<
+    Record<number, number>
+  >({});
 
   const verticalPageRefs = useRef<Array<HTMLDivElement | null>>([]);
   const horizontalContainerRef = useRef<HTMLDivElement | null>(null);
@@ -239,6 +245,7 @@ export default function MangaReadPage() {
   const progressDraftRef = useRef<number | null>(null);
   const preloadedImageUrlsRef = useRef<Set<string>>(new Set());
   const activeChapterRef = useRef<HTMLAnchorElement | null>(null);
+  const chapterScrollerRef = useRef<HTMLDivElement | null>(null);
   const mangaDetailOwnerRef = useRef('');
   const shelfSyncAttemptRef = useRef<{
     inflight: boolean;
@@ -424,6 +431,55 @@ export default function MangaReadPage() {
       ? 'eager'
       : 'lazy';
   };
+
+  /**
+   * 重抓目前畫面的圖片，不動 activePage、捲動位置、章節或閱讀設定。
+   * 雙頁模式的兩張都屬於目前畫面；其他模式只重抓 active page。
+   */
+  const reloadCurrentPage = () => {
+    if (!pages.length) return;
+    const raw =
+      readMode === 'vertical'
+        ? currentVerticalPageIndexRef.current
+        : activePage;
+    const index = Math.min(Math.max(raw, 0), pages.length - 1);
+    const reloadIndexes =
+      readMode === 'double' && index + 1 < pages.length
+        ? [index, index + 1]
+        : [index];
+
+    // 垂直模式先釘住容器高度；成功載入才移除，失敗時保留避免頁面塌陷。
+    if (readMode === 'vertical') {
+      const node = verticalPageRefs.current[index];
+      const height = node?.getBoundingClientRect().height ?? 0;
+      if (node && height > 0) node.style.minHeight = `${height}px`;
+    }
+    setPageReloadTokens((prev) => {
+      const next = { ...prev };
+      for (const pageIndex of reloadIndexes) {
+        next[pageIndex] = (next[pageIndex] ?? 0) + 1;
+      }
+      return next;
+    });
+  };
+
+  /** 換話後舊 token 不再對應任何頁，直接清掉。 */
+  useEffect(() => {
+    setPageReloadTokens((prev) => (Object.keys(prev).length ? {} : prev));
+  }, [chapterId]);
+
+  /** 沒有 token 時回傳 undefined，讓 ProxyImage 走它原本的 URL 解析。 */
+  const getPageDisplaySrc = (page: string, index: number) => {
+    const token = pageReloadTokens[index];
+    if (!token) return undefined;
+    const resolved = processImageUrl(page);
+    if (!resolved) return undefined;
+    return `${resolved}${resolved.includes('?') ? '&' : '?'}_reload=${token}`;
+  };
+
+  /** token 變更就換 key：舊的 retry／onLoad 不能覆蓋重載後的那張圖。 */
+  const getPageRenderKey = (index: number) =>
+    `page-${index}-${pageReloadTokens[index] ?? 0}`;
 
   /**
    * 在 UI 操作／scroll event 當下同步 stage 紀錄，不等待 React passive effect。
@@ -1315,9 +1371,6 @@ export default function MangaReadPage() {
       : 0;
   const shelfKey = `${sourceId}+${mangaId}`;
   const inShelf = Boolean(shelf[shelfKey]);
-  const alternateSourceHref = buildMangaAlternateSearchHref(
-    ownedMangaDetail?.title || title
-  );
   const toggleReaderShelf = useCallback(async () => {
     if (!ownedMangaDetail || !shelfLoaded || shelfSaving) return;
     const pendingSync = shelfSyncAttemptRef.current;
@@ -1433,11 +1486,28 @@ export default function MangaReadPage() {
     if (!chapterListOpen) return;
 
     const rafId = window.requestAnimationFrame(() => {
-      activeChapterRef.current?.scrollIntoView({
-        block: 'center',
-        inline: 'nearest',
-        behavior: 'auto',
-      });
+      const scroller = chapterScrollerRef.current;
+      const activeNode = activeChapterRef.current;
+      if (!scroller || !activeNode) return;
+
+      const viewport = scroller.clientHeight;
+      const maxScrollTop = Math.max(scroller.scrollHeight - viewport, 0);
+      const activeRect = activeNode.getBoundingClientRect();
+      const activeTop =
+        activeRect.top -
+        scroller.getBoundingClientRect().top +
+        scroller.scrollTop;
+      // 目前章節到清單尾端（含目前這一列）放得進一個 viewport 時直接對齊底部，
+      // 否則最後幾話會被 center 推到看不見的位置；放不進才把目前章節置中。
+      // 全程用 scroller 自己的 scrollTop，避免 scrollIntoView 連帶捲動 body。
+      const tailFitsViewport = scroller.scrollHeight - activeTop <= viewport;
+      const centeredTop = Math.max(
+        activeTop - (viewport - activeRect.height) / 2,
+        0
+      );
+      scroller.scrollTop = tailFitsViewport
+        ? maxScrollTop
+        : Math.min(centeredTop, maxScrollTop);
     });
 
     return () => {
@@ -1595,10 +1665,16 @@ export default function MangaReadPage() {
           onClick={() => setChapterListOpen(false)}
         >
           <div
-            className='absolute right-0 top-14 h-[calc(100vh-3.5rem)] w-full max-w-sm overflow-y-auto border-l border-gray-200 bg-white shadow-xl dark:border-gray-700 dark:bg-gray-950 sm:top-16 sm:h-[calc(100vh-4rem)]'
+            ref={chapterScrollerRef}
+            className='absolute right-0 top-[calc(3.5rem+env(safe-area-inset-top))] h-[calc(100dvh-3.5rem-env(safe-area-inset-top))] w-full max-w-sm overflow-y-auto border-l border-gray-200 bg-white shadow-xl dark:border-gray-700 dark:bg-gray-950 sm:top-[calc(4rem+env(safe-area-inset-top))] sm:h-[calc(100dvh-4rem-env(safe-area-inset-top))]'
             onClick={(event) => event.stopPropagation()}
           >
-            <div className='p-4'>
+            <div
+              className='p-4'
+              style={{
+                paddingBottom: 'calc(1rem + env(safe-area-inset-bottom))',
+              }}
+            >
               <div className='mb-3 flex items-center justify-end'>
                 <button
                   type='button'
@@ -1733,13 +1809,15 @@ export default function MangaReadPage() {
                 <Bookmark className='h-5 w-5' />
               )}
             </button>
-            <Link
-              href={alternateSourceHref}
+            <button
+              type='button'
+              onClick={reloadCurrentPage}
               className='inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-white/10 transition hover:bg-white/20'
-              aria-label='搜索／换源'
+              aria-label='重新载入当前页'
+              title='重新载入当前页'
             >
               <RefreshCw className='h-5 w-5' />
-            </Link>
+            </button>
             <button
               type='button'
               onClick={() => stepPage(-1)}
@@ -1906,7 +1984,9 @@ export default function MangaReadPage() {
                       PRELOAD_PAGE_COUNT
                     )) && (
                     <ProxyImage
+                      key={getPageRenderKey(index)}
                       originalSrc={page}
+                      displaySrc={getPageDisplaySrc(page, index)}
                       alt={`${chapterName}-${index + 1}`}
                       className={imageClassName}
                       loading={getImageLoadingStrategy(index)}
@@ -1931,7 +2011,9 @@ export default function MangaReadPage() {
                 >
                   <div className='w-full overflow-hidden bg-gray-100 shadow-sm dark:bg-gray-900'>
                     <ProxyImage
+                      key={getPageRenderKey(index)}
                       originalSrc={page}
+                      displaySrc={getPageDisplaySrc(page, index)}
                       alt={`${chapterName}-${index + 1}`}
                       className={imageClassName}
                       loading={getImageLoadingStrategy(index)}
@@ -1951,19 +2033,24 @@ export default function MangaReadPage() {
                 }`}
                 style={{ gap: `${pageGap}px` }}
               >
-                {pagedItems.map((page, index) => (
-                  <div
-                    key={`${page}-${index}`}
-                    className='overflow-hidden bg-gray-100 shadow-sm dark:bg-gray-900'
-                  >
-                    <ProxyImage
-                      originalSrc={page}
-                      alt={`${chapterName}-${activePage + index + 1}`}
-                      className={imageClassName}
-                      loading='eager'
-                    />
-                  </div>
-                ))}
+                {pagedItems.map((page, index) => {
+                  const pageIndex = activePage + index;
+                  return (
+                    <div
+                      key={`${page}-${index}`}
+                      className='overflow-hidden bg-gray-100 shadow-sm dark:bg-gray-900'
+                    >
+                      <ProxyImage
+                        key={getPageRenderKey(pageIndex)}
+                        originalSrc={page}
+                        displaySrc={getPageDisplaySrc(page, pageIndex)}
+                        alt={`${chapterName}-${pageIndex + 1}`}
+                        className={imageClassName}
+                        loading='eager'
+                      />
+                    </div>
+                  );
+                })}
                 {readMode === 'double' && pagedItems.length === 1 && (
                   <div className='hidden rounded-[24px] bg-transparent md:block' />
                 )}

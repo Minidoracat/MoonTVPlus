@@ -12,10 +12,14 @@ import type { MangaSearchItem } from '@/lib/manga.types';
 import { MAX_KEYWORD_LENGTH } from '@/lib/manga-search-params';
 import {
   buildSourceBuckets,
+  chunkMangaSearchSources,
   getMangaCreatorGroups,
   getMangaCreators,
   groupResultsBySource,
+  MANGA_SEARCH_BATCH_SIZE,
   matchesMangaCreator,
+  orderMangaSearchSources,
+  planMangaSearchBatches,
   selectVisibleResults,
 } from '@/lib/manga-search-view';
 
@@ -75,11 +79,7 @@ describe('作者／绘师解析與篩選', () => {
       },
     ]);
     // 舊合併 helper 仍跨欄位去重，相容既有呼叫端
-    expect(getMangaCreators(manga)).toEqual([
-      '作者甲',
-      '兩邊同名',
-      '繪師乙',
-    ]);
+    expect(getMangaCreators(manga)).toEqual(['作者甲', '兩邊同名', '繪師乙']);
   });
 
   it('creatorRole 只比對對應欄位；舊 URL 無 role 時相容兩欄', () => {
@@ -248,8 +248,11 @@ describe('作者／绘师解析與篩選', () => {
       { ...item('s1', '哔咔', '5', 'E'), author: 'q同人' },
     ];
     const filter = { sourceId: 's1', name: 'Q同人' };
-    expect(results.filter((manga) => matchesMangaCreator(manga, filter)).map((m) => m.id))
-      .toEqual(['1', '2', '5']);
+    expect(
+      results
+        .filter((manga) => matchesMangaCreator(manga, filter))
+        .map((m) => m.id)
+    ).toEqual(['1', '2', '5']);
     expect(
       selectVisibleResults(results, {
         sourceFilter: [],
@@ -405,7 +408,9 @@ describe('groupResultsBySource', () => {
       item('d2', '禁漫天堂', 'b3', 'T4'),
       item('d3', '喜漫漫画', 'c1', 'T5'), // 字典序第 2、1 筆
     ];
-    const divergentBuckets = buildSourceBuckets(divergent, { streaming: false });
+    const divergentBuckets = buildSourceBuckets(divergent, {
+      streaming: false,
+    });
     // 筆數降序：禁漫(3) → 包子(1) → 喜漫(1)
     expect(divergentBuckets.map((b) => b.sourceId)).toEqual(['d2', 'd1', 'd3']);
 
@@ -436,7 +441,9 @@ describe('groupResultsBySource', () => {
       item('d2', '禁漫天堂', 'b3', 'T4'),
       item('d3', '喜漫漫画', 'c1', 'T5'),
     ];
-    const divergentBuckets = buildSourceBuckets(divergent, { streaming: false });
+    const divergentBuckets = buildSourceBuckets(divergent, {
+      streaming: false,
+    });
     const before = divergentBuckets.map((bucket) => bucket.sourceId);
     const visible = selectVisibleResults(divergent, {
       sourceFilter: [],
@@ -463,5 +470,166 @@ describe('groupResultsBySource', () => {
     expect(groupResultsBySource([], buckets, { sortMode: 'arrival' })).toEqual(
       []
     );
+  });
+});
+
+describe('orderMangaSearchSources', () => {
+  const probe = {
+    fast: {
+      popularOk: true,
+      popularMs: 10,
+      searchOk: true,
+      searchMs: 120,
+      testedAt: 1,
+    },
+    slow: {
+      popularOk: true,
+      popularMs: 10,
+      searchOk: true,
+      searchMs: 3000,
+      testedAt: 1,
+    },
+    broken: {
+      popularOk: true,
+      popularMs: 10,
+      searchOk: false,
+      searchMs: 0,
+      testedAt: 1,
+    },
+  };
+
+  it('probe 成功依 searchMs 由快到慢', () => {
+    expect(orderMangaSearchSources(['slow', 'fast'], { probe })).toEqual([
+      'fast',
+      'slow',
+    ]);
+  });
+
+  it('已知成功 → 未知 → 逾時 → 失敗', () => {
+    const health = {
+      timeout: { failed: true, timedOut: true, measuredAt: 1 },
+      dead: { failed: true, measuredAt: 1 },
+    };
+    expect(
+      orderMangaSearchSources(['dead', 'timeout', 'unknown', 'fast'], {
+        probe,
+        health,
+      })
+    ).toEqual(['fast', 'unknown', 'timeout', 'dead']);
+  });
+
+  it('沒有 probe 時退回本機被動量測的耗時', () => {
+    const health = {
+      a: { failed: false, elapsedMs: 900, measuredAt: 1 },
+      b: { failed: false, elapsedMs: 200, measuredAt: 1 },
+    };
+    expect(orderMangaSearchSources(['a', 'b'], { health })).toEqual(['b', 'a']);
+  });
+
+  it('成功但没有耗时的本机量测仍排在未知来源之前', () => {
+    const health = { known: { failed: false, measuredAt: 1 } };
+    expect(orderMangaSearchSources(['unknown', 'known'], { health })).toEqual([
+      'known',
+      'unknown',
+    ]);
+  });
+
+  it('probe 成功排在只有本機量測成功的來源之前', () => {
+    // 本機量測比 probe 快也一樣：probe 是管理員實測的搜尋能力
+    const health = { local: { failed: false, elapsedMs: 5, measuredAt: 1 } };
+    expect(
+      orderMangaSearchSources(['local', 'slow'], { probe, health })
+    ).toEqual(['slow', 'local']);
+  });
+
+  it('probe 判定失敗時不被本機舊成功量測提前', () => {
+    const health = { broken: { failed: false, elapsedMs: 300, measuredAt: 1 } };
+    expect(
+      orderMangaSearchSources(['broken', 'unknown'], { probe, health })
+    ).toEqual(['unknown', 'broken']);
+  });
+
+  it('同級同耗時維持傳入順序，並去重', () => {
+    expect(orderMangaSearchSources(['c', 'a', 'b', 'a', ' '], {})).toEqual([
+      'c',
+      'a',
+      'b',
+    ]);
+  });
+});
+
+describe('chunkMangaSearchSources', () => {
+  it('預設批次大小是 5，最後一批可以不滿', () => {
+    const ids = Array.from({ length: 12 }, (_, i) => `s${i}`);
+    const chunks = chunkMangaSearchSources(ids);
+    expect(MANGA_SEARCH_BATCH_SIZE).toBe(5);
+    expect(chunks.map((chunk) => chunk.length)).toEqual([5, 5, 2]);
+    expect(chunks.flat()).toEqual(ids);
+  });
+
+  it('空清單回空陣列（不可產生一個空批讓迴圈空轉）', () => {
+    expect(chunkMangaSearchSources([])).toEqual([]);
+  });
+
+  it('size < 1 視為每批一顆，不會產生空批', () => {
+    expect(chunkMangaSearchSources(['a', 'b'], 0)).toEqual([['a'], ['b']]);
+  });
+
+  it.each([Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY])(
+    '非有限 size %s 使用默认批次大小，不会产生空批',
+    (size) => {
+      const ids = Array.from({ length: 7 }, (_, index) => `s${index}`);
+      expect(
+        chunkMangaSearchSources(ids, size).map((chunk) => chunk.length)
+      ).toEqual([5, 2]);
+    }
+  );
+});
+
+describe('planMangaSearchBatches', () => {
+  it('12 个候选只取全局上限 7 个，并按 5/2 分批', () => {
+    const sourceIds = Array.from({ length: 12 }, (_, index) => `s${index}`);
+    const batches = planMangaSearchBatches({
+      requestedSourceIds: sourceIds,
+      defaultSourceIds: [],
+      maxSources: 7,
+    });
+    expect(batches.map((batch) => batch.sourceIds?.length)).toEqual([5, 2]);
+    expect(batches.flatMap((batch) => batch.sourceIds || [])).toEqual(
+      sourceIds.slice(0, 7)
+    );
+    expect(batches.every((batch) => batch.total === 'planned')).toBe(true);
+  });
+
+  it('明确选源不受默认语言来源清单过滤', () => {
+    const batches = planMangaSearchBatches({
+      requestedSourceIds: ['zh', 'ja'],
+      defaultSourceIds: ['zh'],
+      maxSources: 10,
+    });
+    expect(batches).toEqual([{ sourceIds: ['zh', 'ja'], total: 'planned' }]);
+  });
+
+  it('来源 API 失败时，明确选源交给单一 server-counted request', () => {
+    const requestedSourceIds = Array.from(
+      { length: 12 },
+      (_, index) => `s${index}`
+    );
+    expect(
+      planMangaSearchBatches({
+        requestedSourceIds,
+        defaultSourceIds: [],
+      })
+    ).toEqual([{ sourceIds: requestedSourceIds, total: 'server' }]);
+  });
+
+  it('没有可规划来源时由服务器决定默认来源和总数', () => {
+    expect(
+      planMangaSearchBatches({
+        requestedSourceIds: [],
+        defaultSourceIds: [],
+        maxSources: 10,
+      })
+    ).toEqual([{ sourceIds: null, total: 'server' }]);
   });
 });

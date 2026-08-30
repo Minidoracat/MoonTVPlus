@@ -1,5 +1,9 @@
-import type { MangaSearchItem } from '@/lib/manga.types';
+import type {
+  MangaSearchItem,
+  MangaSourceProbeSummary,
+} from '@/lib/manga.types';
 import { MAX_KEYWORD_LENGTH } from '@/lib/manga-search-params';
+import type { MangaSourceHealth } from '@/lib/manga-source-health';
 
 /**
  * 搜尋結果的顯示邏輯：分桶、篩選＋排序、分組。
@@ -21,6 +25,7 @@ export interface MangaSourceBucket {
 }
 
 export interface MangaSourceGroup extends MangaSourceBucket {
+  /** 可是 render 窗口子集；繼承的 count 仍是來源 bucket 的完整筆數 */
   items: MangaSearchItem[];
 }
 
@@ -291,4 +296,161 @@ export function groupResultsBySource(
     ...bucket,
     items: bySource.get(bucket.sourceId) as MangaSearchItem[],
   }));
+}
+
+/**
+ * 一批同時查詢的來源數。
+ *
+ * 使用者勾的來源實測可到 51 顆；一次全部 fan-out 時，停止搜尋也無法略過
+ * 尚未開始的來源，而且數十顆同時完成會把結果 append 擠在同一小段時間。
+ *
+ * 5 是「一次能看到結果、又不會讓上游同時扛數十條連線」的折衷；序列批次還
+ * 讓「停止」有意義 —— 未開始的批次直接不發，而不是只能等伺服器自己收尾。
+ */
+export const MANGA_SEARCH_BATCH_SIZE = 5;
+
+/**
+ * 一次 render 的結果卡片上限。
+ *
+ * 放寬來源上限後單次搜尋 300～400 筆是常態，而每張卡片都帶封面圖與數個
+ * creator 按鈕。一次 render 全部會讓主執行緒在串流期間持續掉幀，
+ * 所以資料 state 保留全部、畫面分段展開。
+ */
+export const MANGA_RESULT_RENDER_PAGE_SIZE = 96;
+
+/**
+ * 來源的速度／可用性線索。
+ *
+ * 刻意用真正的 probe／health 型別而不是就地寫結構型別：這兩份資料的欄位
+ * （searchOk／failed／timedOut）任一邊改名，這裡才會編不過。
+ */
+export interface MangaSearchSourceHints {
+  /** 管理員最近一次探測的快取（跨使用者共用） */
+  probe?: Record<string, MangaSourceProbeSummary>;
+  /** 本機被動量測（只有這台瀏覽器搜過的來源才有） */
+  health?: Record<string, MangaSourceHealth>;
+}
+
+/**
+ * 分級：數字越小越先查。
+ * 0 = probe 成功、1 = 本機量測成功、2 = 沒有資料、
+ * 3 = 本機量測逾時、4 = probe 或本機量測明確失敗。
+ */
+type MangaSearchSourceTier = 0 | 1 | 2 | 3 | 4;
+
+function rankSearchSource(
+  probe: MangaSourceProbeSummary | undefined,
+  health: MangaSourceHealth | undefined
+): { tier: MangaSearchSourceTier; cost: number } {
+  // probe 是管理員實際測過的搜尋能力，存在時必須優先於本機舊量測。
+  if (probe) {
+    return probe.searchOk
+      ? { tier: 0, cost: probe.searchMs }
+      : { tier: 4, cost: 0 };
+  }
+  if (health && !health.failed) {
+    // failed=false 但沒有 elapsedMs：仍算成功，只是排在有數字的後面
+    return {
+      tier: 1,
+      cost:
+        typeof health.elapsedMs === 'number'
+          ? health.elapsedMs
+          : Number.MAX_SAFE_INTEGER,
+    };
+  }
+  // 逾時不等於失效（見 MangaSourceHealth.timedOut），所以排在明確失敗之前
+  if (health?.failed) return { tier: health.timedOut ? 3 : 4, cost: 0 };
+  return { tier: 2, cost: 0 };
+}
+
+/**
+ * 先依 probe／本機量測／未知／失敗分級，同級再依已知耗時排序。
+ *
+ * 序列批次讓順序變得有意義：第一批決定使用者等多久才看到第一張卡片。
+ * 已知失敗／逾時排在最後，因此 maxSources 截斷時會優先犧牲這些來源；
+ * 被截斷的來源仍可能有結果。
+ *
+ * 同級同耗時維持傳入順序（Array#sort 自 ES2019 起穩定），所以不會因為
+ * 兩顆來源速度相同就在每次搜尋間跳動。
+ */
+export function orderMangaSearchSources(
+  sourceIds: string[],
+  hints: MangaSearchSourceHints = {}
+): string[] {
+  // Set 保留首次出現順序，等同「去重後維持傳入順序」
+  const unique = Array.from(new Set(sourceIds.map((id) => id.trim()))).filter(
+    Boolean
+  );
+
+  return unique
+    .map((id, index) => ({
+      id,
+      index,
+      ...rankSearchSource(hints.probe?.[id], hints.health?.[id]),
+    }))
+    .sort((a, b) => a.tier - b.tier || a.cost - b.cost || a.index - b.index)
+    .map((entry) => entry.id);
+}
+
+/** 切成固定大小的批次；無效 size 用預設值，size < 1 時每批一顆 */
+export function chunkMangaSearchSources(
+  sourceIds: string[],
+  size: number = MANGA_SEARCH_BATCH_SIZE
+): string[][] {
+  if (sourceIds.length === 0) return [];
+  const step = Number.isFinite(size)
+    ? Math.max(1, Math.floor(size))
+    : MANGA_SEARCH_BATCH_SIZE;
+  const chunks: string[][] = [];
+  for (let i = 0; i < sourceIds.length; i += step) {
+    chunks.push(sourceIds.slice(i, i + step));
+  }
+  return chunks;
+}
+
+export type MangaSearchBatch =
+  | { sourceIds: string[]; total: 'planned' }
+  | { sourceIds: string[] | null; total: 'server' };
+
+interface MangaSearchBatchPlanOptions {
+  requestedSourceIds: string[];
+  defaultSourceIds: string[];
+  maxSources?: number;
+  hints?: MangaSearchSourceHints;
+}
+
+/**
+ * 規劃整輪搜尋。`defaultSourceIds` 只是目前預設語言的清單，不能拿來刪除
+ * 明確指定、但屬於其他語言的來源；每批仍由伺服器做最終授權。
+ *
+ * 來源清單 API 失敗時拿不到 maxSources。明確選源改成單一 server-counted
+ * request，讓伺服器維持全域上限；不可自行拆成多批後讓每批各吃一次上限。
+ */
+export function planMangaSearchBatches({
+  requestedSourceIds,
+  defaultSourceIds,
+  maxSources,
+  hints,
+}: MangaSearchBatchPlanOptions): MangaSearchBatch[] {
+  const requested = orderMangaSearchSources(requestedSourceIds, hints);
+  // null＝拿不到有效上限，這一輪不能自己拆批
+  const limit =
+    typeof maxSources === 'number' &&
+    Number.isFinite(maxSources) &&
+    maxSources > 0
+      ? Math.floor(maxSources)
+      : null;
+
+  const explicit = requested.length > 0;
+  const candidates = explicit
+    ? requested
+    : orderMangaSearchSources(defaultSourceIds, hints);
+
+  if (limit === null || candidates.length === 0) {
+    // 明確選源仍要送出，否則伺服器會退回預設語言清單
+    return [{ sourceIds: explicit ? requested : null, total: 'server' }];
+  }
+  return chunkMangaSearchSources(candidates.slice(0, limit)).map(
+    (sourceIds) => ({ sourceIds, total: 'planned' })
+  );
 }

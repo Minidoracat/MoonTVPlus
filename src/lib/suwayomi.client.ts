@@ -583,20 +583,23 @@ export class SuwayomiClient {
   private static readonly MANGA_DETAIL_TTL_MS = 5 * 60_000;
   private static readonly MANGA_DETAIL_CACHE_MAX = 32;
   /**
-   * 漫畫詳情的來源事實快取。
+   * 漫畫詳情的來源事實快取（stale-while-revalidate）。
    *
    * 一次詳情頁載入 = manga(id:) + fetchChapters 兩發上游，而 fetchChapters
    * 還會讓 Suwayomi 去來源站重抓章節；使用者返回列表再點進來就再來一輪。
    *
    * key 是 serverBaseUrl + mangaId，**不含政策也不含使用者**：
-   * 值裡沒有任何經過政策過濾的資料，而 assertPolicyKnown /
-   * assertSourceAllowed 在每次 getMangaDetail 都照跑，命中快取不跳過授權。
+   * 值裡沒有任何經過政策過濾的資料，而政策門與 assertSourceAllowed 在每次
+   * getMangaDetail 都照跑（包含回 stale 的那次），命中快取不跳過授權。
    */
   private mangaDetailCache = new Map<
     string,
     {
       at: number;
+      /** 冷啟動：尚無可回傳的值，呼叫端要等它 */
       inflight?: Promise<MangaDetailFacts>;
+      /** 背景重新驗證：呼叫端不等它，失敗也只是留著舊值 */
+      refresh?: Promise<void>;
       value?: MangaDetailFacts;
     }
   >();
@@ -1867,18 +1870,79 @@ ${fields}
   }
 
   /**
-   * 詳情的「來源事實」快取：5 分鐘、上限 32、同 key 併發合併成一發。
+   * 抓一輪詳情事實。整輪綁在同一份 snapshot 上（manga 與 chapters 打同一台）。
+   *
+   * 先驗權再取內容：getChapters 也會外發請求，順序顛倒等於先洩漏再檢查。
+   */
+  private async fetchMangaDetailFacts(
+    snapshot: ResolvedSuwayomiConfig,
+    mangaId: string
+  ): Promise<MangaDetailFacts> {
+    const resolvedSource = await this.resolveMangaSource(mangaId, snapshot);
+    await this.assertSourceAllowed(resolvedSource.sourceId);
+    return {
+      // key 與 value 同源，跨伺服器汙染在資料流上就不可能發生
+      serverBaseUrl: snapshot.serverBaseUrl,
+      trueSourceId: resolvedSource.sourceId,
+      manga: resolvedSource.manga,
+      chapters: await this.getChapters(mangaId, snapshot),
+    };
+  }
+
+  /**
+   * 背景重新驗證。呼叫端已經拿著 stale 值走了，這裡不阻塞任何人。
+   *
+   * 網路／上游暫時失敗時保留舊 value 與**舊 at**，下一次呼叫仍可立即回覆並
+   * 再試；來源歸屬或政策已禁止則刪除 stale，下一次必須重新 fail closed。
+   * 整條背景鏈自己收斂 rejection —— 沒有人 await 它，漏出去就是
+   * unhandled rejection。
+   */
+  private refreshMangaDetailFacts(
+    key: string,
+    snapshot: ResolvedSuwayomiConfig,
+    mangaId: string
+  ): void {
+    const refresh: Promise<void> = this.fetchMangaDetailFacts(snapshot, mangaId)
+      .then((value) => {
+        // compare-and-set：容量汰除或後續呼叫可能已讓這個 key 指向別的一輪，
+        // 較舊的 refresh 不可覆寫較新的結果
+        const entry = this.mangaDetailCache.get(key);
+        if (entry?.refresh !== refresh) return;
+        this.mangaDetailCache.delete(key);
+        this.mangaDetailCache.set(key, { at: Date.now(), value });
+      })
+      .catch((error) => {
+        const entry = this.mangaDetailCache.get(key);
+        if (entry?.refresh !== refresh) return;
+        if (error instanceof MangaSourceForbiddenError) {
+          // 來源歸屬／政策已變成禁止：舊來源的 stale 不能繼續冒充可用內容。
+          this.mangaDetailCache.delete(key);
+          return;
+        }
+        // 網路／上游暫時失敗才保留 stale。at 維持不變，下一次仍會再試。
+        this.mangaDetailCache.set(key, { at: entry.at, value: entry.value });
+      });
+
+    const current = this.mangaDetailCache.get(key);
+    // 這一瞬間條目已被汰除的話就不要復活它：一筆沒有 value 的殘骸會讓
+    // 下一位呼叫者以為有東西可等
+    if (!current) return;
+    this.mangaDetailCache.set(key, { ...current, refresh });
+  }
+
+  /**
+   * 詳情的「來源事實」快取：5 分鐘 TTL、上限 32、同 key 併發合併成一發，
+   * 過期後 stale-while-revalidate。
    *
    * 一次詳情頁載入是 manga(id:) + fetchChapters 兩發上游，而 fetchChapters
    * 還會讓 Suwayomi 去來源站重抓；使用者返回列表再點回來就再來一輪，
-   * 書架批次更新同一部漫畫也會重複打。
+   * 書架批次更新同一部漫畫也會重複打。詳情內容變動慢，過了 TTL 讓下一位
+   * 使用者空等一整輪不划算 —— 手上有值就先交出去，背景更新完下一位拿新的。
    *
    * 快取裡只有伺服器事實 —— 授權完全不在裡面：政策門由呼叫端在進來之前
-   * 用最新的 config 擋，assertSourceAllowed 在這裡（miss 時、送 getChapters
-   * 之前）與 getMangaDetail 尾端各跑一次，所以命中快取不會跳過任何一道。
-   *
-   * snapshot 由呼叫端傳入並貫穿整輪（manga 與 chapters 打同一台）：key 與
-   * value 因此同源，跨伺服器汙染在資料流上就不可能發生，不需寫入前比對。
+   * 用最新的 config 擋，assertSourceAllowed 在這裡（冷啟動與背景更新都在
+   * 送 getChapters 之前）與 getMangaDetail 尾端各跑一次，所以無論回的是
+   * 新值還是 stale 值，都不會跳過任何一道檢查。
    */
   private loadMangaDetailFacts(
     snapshot: ResolvedSuwayomiConfig,
@@ -1888,25 +1952,20 @@ ${fields}
     const now = Date.now();
     const hit = this.mangaDetailCache.get(key);
 
-    if (hit) {
-      if (hit.inflight) return hit.inflight;
-      if (hit.value && now - hit.at < SuwayomiClient.MANGA_DETAIL_TTL_MS) {
-        return Promise.resolve(hit.value);
+    if (hit?.value) {
+      // 已過期就順手起一輪背景更新（同 key 最多一輪），但立刻回舊值
+      if (now - hit.at >= SuwayomiClient.MANGA_DETAIL_TTL_MS && !hit.refresh) {
+        this.refreshMangaDetailFacts(key, snapshot, mangaId);
       }
+      return Promise.resolve(hit.value);
     }
+    // 冷啟動：沒有任何值可交，併發者一起等同一發
+    if (hit?.inflight) return hit.inflight;
 
-    const inflight: Promise<MangaDetailFacts> = (async () => {
-      // 先驗權再取內容：getChapters 也會外發請求，順序顛倒等於先洩漏再檢查。
-      const resolvedSource = await this.resolveMangaSource(mangaId, snapshot);
-      await this.assertSourceAllowed(resolvedSource.sourceId);
-      return {
-        // 整輪綁在同一份 snapshot 上，key 與 value 因此同源
-        serverBaseUrl: snapshot.serverBaseUrl,
-        trueSourceId: resolvedSource.sourceId,
-        manga: resolvedSource.manga,
-        chapters: await this.getChapters(mangaId, snapshot),
-      };
-    })()
+    const inflight: Promise<MangaDetailFacts> = this.fetchMangaDetailFacts(
+      snapshot,
+      mangaId
+    )
       .then((value) => {
         // compare-and-set：容量汰除或後續呼叫可能已讓這個 key 指向別的
         // inflight，較舊的 promise 不可覆寫較新的結果
@@ -1921,7 +1980,7 @@ ${fields}
         return value;
       })
       .catch((error) => {
-        // 失敗不留快取，下次重新嘗試；同樣只清掉自己那一筆
+        // 冷啟動失敗不留快取，下次重新嘗試；同樣只清掉自己那一筆
         if (this.mangaDetailCache.get(key)?.inflight === inflight) {
           this.mangaDetailCache.delete(key);
         }

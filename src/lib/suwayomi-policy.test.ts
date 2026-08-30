@@ -250,14 +250,20 @@ describe('getMangaDetail 的詳情快取', () => {
     ).toHaveLength(1);
   });
 
-  it('5 分钟后重新读取来源事实', async () => {
+  it('5 分钟后在背景重新读取来源事实（呼叫端先拿到 stale）', async () => {
     await client.getMangaDetail({ mangaId: MANGA_ID, sourceId: SOURCE_ID });
     const now = Date.now();
     const dateSpy = jest
       .spyOn(Date, 'now')
       .mockReturnValue(now + 5 * 60_000 + 1);
     try {
+      // 過期的這次不阻塞呼叫端：兩份事實由背景那一輪重抓
       await client.getMangaDetail({ mangaId: MANGA_ID, sourceId: SOURCE_ID });
+      // 背景鏈全是 microtask，排空即等於跑完（stale-while-revalidate 的
+      // 完整行為另見 suwayomi-detail-swr.test.ts）
+      for (let tick = 0; tick < 50; tick += 1) {
+        await Promise.resolve();
+      }
     } finally {
       dateSpy.mockRestore();
     }

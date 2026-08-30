@@ -541,10 +541,12 @@ export default function MangaReadPage() {
         setShelfLoaded(true);
       }
     );
-    getAllMangaShelf()
-      .then(setShelf)
-      .catch(() => undefined)
-      .finally(() => setShelfLoaded(true));
+    getAllMangaShelf({ throwOnError: true })
+      .then((nextShelf) => {
+        setShelf(nextShelf);
+        setShelfLoaded(true);
+      })
+      .catch(() => setShelfLoaded(false));
     return unsubscribe;
   }, []);
 

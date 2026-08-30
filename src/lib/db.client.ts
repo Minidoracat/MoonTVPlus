@@ -1745,9 +1745,9 @@ export async function clearAllFavorites(): Promise<void> {
 
 // ---------------- 漫画书架 / 历史 API ----------------
 
-export async function getAllMangaShelf(): Promise<
-  Record<string, MangaShelfItem>
-> {
+export async function getAllMangaShelf(
+  options: { throwOnError?: boolean } = {}
+): Promise<Record<string, MangaShelfItem>> {
   if (typeof window === 'undefined') return {};
 
   if (STORAGE_TYPE !== 'localstorage') {
@@ -1777,6 +1777,7 @@ export async function getAllMangaShelf(): Promise<
     } catch (err) {
       console.error('获取漫画书架失败:', err);
       triggerGlobalError('获取漫画书架失败');
+      if (options.throwOnError) throw err;
       return {};
     }
   }
@@ -1788,6 +1789,7 @@ export async function getAllMangaShelf(): Promise<
   } catch (err) {
     console.error('读取漫画书架失败:', err);
     triggerGlobalError('读取漫画书架失败');
+    if (options.throwOnError) throw err;
     return {};
   }
 }

@@ -23,6 +23,7 @@ const SOURCE_ID = '123';
 const DETAIL_OP = 'MangaDetail';
 /** 與 SuwayomiClient.MANGA_DETAIL_TTL_MS 同值 */
 const TTL_MS = 5 * 60_000;
+const RETRY_MS = 30_000;
 
 function upstreamResponse(payload: unknown): Response {
   const response = {
@@ -197,9 +198,19 @@ describe('詳情快取的 stale-while-revalidate', () => {
     await settle();
     expect(detailRequests).toBe(2);
 
-    // 失敗不改 at：這筆仍是 stale，下一次呼叫再試一輪
+    // backoff 内不因流量重复打来源，所有请求都立即拿 stale。
     detailFails = false;
     upstreamTitle = '新标题';
+    const duringBackoff = await Promise.all([load(), load(), load()]);
+    expect(duringBackoff.map((item) => item.title)).toEqual([
+      '旧标题',
+      '旧标题',
+      '旧标题',
+    ]);
+    expect(detailRequests).toBe(2);
+
+    // backoff 到期后才允许下一轮背景重试。
+    nowMs += RETRY_MS + 1;
     expect((await load()).title).toBe('旧标题');
     expect(detailRequests).toBe(3);
 

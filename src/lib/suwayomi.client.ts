@@ -581,6 +581,7 @@ export class SuwayomiClient {
     { at: number; sourceId: string }
   >();
   private static readonly MANGA_DETAIL_TTL_MS = 5 * 60_000;
+  private static readonly MANGA_DETAIL_REFRESH_RETRY_MS = 30_000;
   private static readonly MANGA_DETAIL_CACHE_MAX = 32;
   /**
    * 漫畫詳情的來源事實快取（stale-while-revalidate）。
@@ -600,6 +601,8 @@ export class SuwayomiClient {
       inflight?: Promise<MangaDetailFacts>;
       /** 背景重新驗證：呼叫端不等它，失敗也只是留著舊值 */
       refresh?: Promise<void>;
+      /** 上次背景刷新失敗後的最早重試時間 */
+      retryAt?: number;
       value?: MangaDetailFacts;
     }
   >();
@@ -1892,10 +1895,10 @@ ${fields}
   /**
    * 背景重新驗證。呼叫端已經拿著 stale 值走了，這裡不阻塞任何人。
    *
-   * 網路／上游暫時失敗時保留舊 value 與**舊 at**，下一次呼叫仍可立即回覆並
-   * 再試；來源歸屬或政策已禁止則刪除 stale，下一次必須重新 fail closed。
-   * 整條背景鏈自己收斂 rejection —— 沒有人 await 它，漏出去就是
-   * unhandled rejection。
+   * 網路／上游暫時失敗時保留舊 value 與**舊 at**，下一次呼叫仍可立即回覆；
+   * 背景重試有 30 秒 backoff，避免故障期間每個 request 都打來源。來源歸屬或
+   * 政策已禁止則刪除 stale，下一次必須重新 fail closed。整條背景鏈自己收斂
+   * rejection —— 沒有人 await 它，漏出去就是 unhandled rejection。
    */
   private refreshMangaDetailFacts(
     key: string,
@@ -1919,8 +1922,12 @@ ${fields}
           this.mangaDetailCache.delete(key);
           return;
         }
-        // 網路／上游暫時失敗才保留 stale。at 維持不變，下一次仍會再試。
-        this.mangaDetailCache.set(key, { at: entry.at, value: entry.value });
+        // 一般暫時失敗保留 stale，並短暫節流；舊 at 仍表示內容已過期。
+        this.mangaDetailCache.set(key, {
+          at: entry.at,
+          retryAt: Date.now() + SuwayomiClient.MANGA_DETAIL_REFRESH_RETRY_MS,
+          value: entry.value,
+        });
       });
 
     const current = this.mangaDetailCache.get(key);
@@ -1953,8 +1960,12 @@ ${fields}
     const hit = this.mangaDetailCache.get(key);
 
     if (hit?.value) {
-      // 已過期就順手起一輪背景更新（同 key 最多一輪），但立刻回舊值
-      if (now - hit.at >= SuwayomiClient.MANGA_DETAIL_TTL_MS && !hit.refresh) {
+      // 已過期且 backoff 結束就起一輪背景更新（同 key 最多一輪），立刻回舊值。
+      if (
+        now - hit.at >= SuwayomiClient.MANGA_DETAIL_TTL_MS &&
+        !hit.refresh &&
+        (!hit.retryAt || now >= hit.retryAt)
+      ) {
         this.refreshMangaDetailFacts(key, snapshot, mangaId);
       }
       return Promise.resolve(hit.value);

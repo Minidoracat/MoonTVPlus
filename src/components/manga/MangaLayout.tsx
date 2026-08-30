@@ -273,9 +273,7 @@ export default function MangaLayout({ children }: MangaLayoutProps) {
           readerImmersive
             ? 'min-h-[100dvh] max-w-none p-0'
             : isReadingPage
-            ? readerControlsVisible
-              ? 'mx-auto max-w-7xl px-0 pt-[calc(5rem+env(safe-area-inset-top))] pb-24 sm:px-0 sm:pt-[calc(6rem+env(safe-area-inset-top))] sm:pb-28 lg:pb-10'
-              : 'mx-auto min-h-screen max-w-7xl px-0 pb-2'
+            ? 'mx-auto max-w-7xl px-0 pt-[calc(5rem+env(safe-area-inset-top))] pb-24 sm:px-0 sm:pt-[calc(6rem+env(safe-area-inset-top))] sm:pb-28 lg:pb-10'
             : 'mx-auto max-w-7xl px-3 pt-[calc(5rem+env(safe-area-inset-top))] pb-[calc(5rem+env(safe-area-inset-bottom))] sm:px-6 sm:pt-[calc(6rem+env(safe-area-inset-top))] sm:pb-[calc(5rem+env(safe-area-inset-bottom))] lg:pb-10'
         }
       >

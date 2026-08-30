@@ -64,6 +64,7 @@ const PAGE_GAP_STORAGE_KEY = 'mangaPageGap';
 const SAVE_INTERVAL_MS = 10000;
 const PRELOAD_PAGE_COUNT = 5;
 const VERTICAL_RESTORE_TIMEOUT_MS = 4000;
+const SHELF_SYNC_RETRY_MS = 30_000;
 
 const READ_MODE_OPTIONS: Array<{ value: ReadMode; label: string }> = [
   { value: 'single', label: '单页' },
@@ -238,7 +239,11 @@ export default function MangaReadPage() {
   const preloadedImageUrlsRef = useRef<Set<string>>(new Set());
   const activeChapterRef = useRef<HTMLAnchorElement | null>(null);
   const mangaDetailOwnerRef = useRef('');
-  const shelfSyncAttemptRef = useRef('');
+  const shelfSyncAttemptRef = useRef<{
+    inflight: boolean;
+    signature: string;
+    timer: number | null;
+  } | null>(null);
   /** pages 目前屬於哪一話；防止「新 chapterId + 舊 pages」寫入髒紀錄 */
   const pagesChapterIdRef = useRef('');
   const pendingRecordVersionRef = useRef(0);
@@ -614,6 +619,10 @@ export default function MangaReadPage() {
       dispatchControlsChange(true);
       if (verticalRestoreTimeoutRef.current !== null) {
         window.clearTimeout(verticalRestoreTimeoutRef.current);
+      }
+      const shelfSyncTimer = shelfSyncAttemptRef.current?.timer;
+      if (shelfSyncTimer !== null && shelfSyncTimer !== undefined) {
+        window.clearTimeout(shelfSyncTimer);
       }
       dispatchImmersiveChange(false);
       if (document.fullscreenElement) {
@@ -1085,8 +1094,18 @@ export default function MangaReadPage() {
         ? Math.max(orderedChapters.length - currentChapterIndex - 1, 0)
         : 0;
 
+    const clearPendingShelfSync = () => {
+      const pending = shelfSyncAttemptRef.current;
+      if (pending?.timer !== null && pending?.timer !== undefined) {
+        window.clearTimeout(pending.timer);
+      }
+      shelfSyncAttemptRef.current = null;
+    };
     const item = shelf[key];
-    if (!item) return;
+    if (!item) {
+      clearPendingShelfSync();
+      return;
+    }
     const nextItem: MangaShelfItem = {
       ...item,
       lastChapterId: chapterId,
@@ -1103,7 +1122,12 @@ export default function MangaReadPage() {
       nextItem.latestChapterName !== item.latestChapterName ||
       nextItem.latestChapterCount !== item.latestChapterCount ||
       nextItem.unreadChapterCount !== item.unreadChapterCount;
-    if (!changed) return;
+    if (!changed) {
+      if (shelfSyncAttemptRef.current?.inflight === false) {
+        clearPendingShelfSync();
+      }
+      return;
+    }
     const syncSignature = JSON.stringify([
       key,
       nextItem.lastChapterId,
@@ -1113,11 +1137,37 @@ export default function MangaReadPage() {
       nextItem.latestChapterCount,
       nextItem.unreadChapterCount,
     ]);
-    // recovery 事件可能把伺服器舊值寫回 shelf；同一 desired state 只嘗試一次，
-    // 避免 POST 失敗 → recovery GET → event → POST 的無界迴圈。
-    if (shelfSyncAttemptRef.current === syncSignature) return;
-    shelfSyncAttemptRef.current = syncSignature;
-    saveMangaShelf(sourceId, mangaId, nextItem).catch(() => undefined);
+    if (shelfSyncAttemptRef.current?.signature === syncSignature) return;
+    clearPendingShelfSync();
+
+    const sync = (retriesLeft: number) => {
+      const pending = shelfSyncAttemptRef.current;
+      if (!pending || pending.signature !== syncSignature) return;
+      pending.inflight = true;
+      pending.timer = null;
+      saveMangaShelf(sourceId, mangaId, nextItem)
+        .then(() => {
+          if (shelfSyncAttemptRef.current?.signature === syncSignature) {
+            shelfSyncAttemptRef.current = null;
+          }
+        })
+        .catch(() => {
+          const current = shelfSyncAttemptRef.current;
+          if (!current || current.signature !== syncSignature) return;
+          current.inflight = false;
+          if (retriesLeft <= 0) return;
+          current.timer = window.setTimeout(() => {
+            sync(retriesLeft - 1);
+          }, SHELF_SYNC_RETRY_MS);
+        });
+    };
+
+    shelfSyncAttemptRef.current = {
+      inflight: false,
+      signature: syncSignature,
+      timer: null,
+    };
+    sync(1);
   }, [chapterId, chapterName, mangaId, ownedMangaDetail, shelf, sourceId]);
 
   /** 章節尾頁是否已經呈現在畫面上；章節完讀判斷與尾頁動作必須共用。 */

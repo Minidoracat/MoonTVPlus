@@ -9,7 +9,7 @@ import {
   MetaInfo,
   setCachedMetaInfo,
 } from '@/lib/openlist-cache';
-import { getTMDBImageUrl } from '@/lib/tmdb.search';
+import { getTMDBImageUrl } from '@/lib/tmdb-image-base';
 import { yellowWords } from '@/lib/yellow';
 
 export const runtime = 'nodejs';

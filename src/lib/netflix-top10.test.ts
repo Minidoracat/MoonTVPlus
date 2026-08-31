@@ -11,8 +11,6 @@ import {
 // resolveTudumRows 的验证重点是「不丢列」与快取，不是 TMDB 的 HTTP 行为
 jest.mock('@/lib/tmdb.search', () => ({
   searchTMDB: jest.fn(),
-  getTMDBImageUrl: (path: string | null) =>
-    path ? `https://image.tmdb.org/t/p/w500${path}` : '',
 }));
 
 const searchMock = searchTMDB as jest.MockedFunction<typeof searchTMDB>;

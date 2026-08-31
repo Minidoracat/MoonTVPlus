@@ -1,4 +1,5 @@
 import { getTMDBHotList } from '@/lib/tmdb.client';
+import { getTMDBImageUrl } from '@/lib/tmdb-image-base';
 
 // jsdom 测试环境没有 AbortSignal.timeout（universalFetch 依赖）
 if (typeof AbortSignal.timeout !== 'function') {
@@ -32,6 +33,27 @@ jest.mock('node-fetch', () =>
     };
   })
 );
+
+describe('getTMDBImageUrl', () => {
+  afterEach(() => {
+    localStorage.removeItem('tmdbImageBaseUrl');
+  });
+
+  it('preserves null, absolute URL, default size, and custom size behavior', () => {
+    localStorage.setItem('tmdbImageBaseUrl', 'https://images.example.com');
+
+    expect(getTMDBImageUrl(null)).toBe('');
+    expect(getTMDBImageUrl('https://cdn.example.com/poster.jpg')).toBe(
+      'https://cdn.example.com/poster.jpg'
+    );
+    expect(getTMDBImageUrl('/poster.jpg')).toBe(
+      'https://images.example.com/t/p/w500/poster.jpg'
+    );
+    expect(getTMDBImageUrl('/poster.jpg', 'w342')).toBe(
+      'https://images.example.com/t/p/w342/poster.jpg'
+    );
+  });
+});
 
 describe('getTMDBHotList', () => {
   it('maps start/limit onto TMDB fixed 20-per-page pagination without gaps', async () => {

@@ -8,7 +8,8 @@ import {
   NetflixTop10Row,
   NetflixWeekSnapshot,
 } from '@/lib/netflix.client';
-import { getTMDBImageUrl, searchTMDB } from '@/lib/tmdb.search';
+import { getTMDBImageUrl } from '@/lib/tmdb-image-base';
+import { searchTMDB } from '@/lib/tmdb.search';
 import { DoubanItem } from '@/lib/types';
 
 // 型别定义在 client-safe 的 netflix.client.ts（UI 也要用地区表），这里转出一份，

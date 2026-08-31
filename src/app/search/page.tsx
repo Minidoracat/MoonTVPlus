@@ -51,6 +51,7 @@ import SearchResultFilter, {
   SearchFilterCategory,
 } from '@/components/SearchResultFilter';
 import SearchSuggestions from '@/components/SearchSuggestions';
+import Toast, { type ToastProps } from '@/components/Toast';
 import VideoCard, { VideoCardHandle } from '@/components/VideoCard';
 import VirtualScrollableGrid from '@/components/VirtualScrollableGrid';
 import { loadTraditionalToSimplifiedConverter } from '@/lib/danmaku/traditional-to-simplified';
@@ -127,10 +128,7 @@ function SearchPageClient() {
   const [privateLibrarySearchEnabled, setPrivateLibrarySearchEnabled] =
     useState(false);
   const [featureFlagsReady, setFeatureFlagsReady] = useState(false);
-  // 繁体转简体转换器
-  const converterRef = useRef<((text: string) => string) | null>(null);
-  // 转换器是否已初始化
-  const [converterReady, setConverterReady] = useState(false);
+  const [toast, setToast] = useState<ToastProps | null>(null);
 
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -138,6 +136,8 @@ function SearchPageClient() {
   const searchMode: VideoSearchMode =
     searchParams.get('mode') === 'person' ? 'person' : 'title';
   const currentQueryRef = useRef<string>('');
+  const searchActionIdRef = useRef(0);
+  const pendingSearchActionRef = useRef<number | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [showResults, setShowResults] = useState(false);
@@ -277,6 +277,31 @@ function SearchPageClient() {
     return shouldResolveAliases
       ? `&alias=1&aliasMode=${searchMode === 'person' ? 'person' : 'title'}`
       : '';
+  };
+
+  const convertSearchText = async (text: string) => {
+    if (
+      typeof window === 'undefined' ||
+      localStorage.getItem('searchTraditionalToSimplified') !== 'true'
+    ) {
+      return text;
+    }
+
+    try {
+      const converter = await loadTraditionalToSimplifiedConverter();
+      if (converter) {
+        return converter(text);
+      }
+    } catch (error) {
+      console.error('繁体转简体转换失败:', error);
+    }
+
+    setToast({
+      message: '繁簡轉換載入失敗，已使用原關鍵字搜尋，請稍後重試。',
+      type: 'error',
+      onClose: () => setToast(null),
+    });
+    return text;
   };
 
   const getGroupRef = (key: string) => {
@@ -1130,20 +1155,6 @@ function SearchPageClient() {
     }
     setFeatureFlagsReady(true);
 
-    // 初始化繁体转简体转换器
-    if (typeof window !== 'undefined') {
-      loadTraditionalToSimplifiedConverter()
-        .then((converter) => {
-          converterRef.current = converter;
-          setConverterReady(true);
-        })
-        .catch(() => {
-          setConverterReady(true); // 即使失败也设置为 true，避免阻塞
-        });
-    } else {
-      setConverterReady(true);
-    }
-
     // 初始加载搜索历史
     getSearchHistory().then(setSearchHistory);
 
@@ -1255,43 +1266,31 @@ function SearchPageClient() {
   ]);
 
   useEffect(() => {
-    // 等待转换器和私人影库搜索设置初始化完成
-    if (!converterReady || !privateLibraryOnlyReady) {
+    if (!privateLibraryOnlyReady) {
       return;
     }
 
-    // 当搜索参数变化时更新搜索状态
-    let query = searchParams.get('q') || '';
+    let cancelled = false;
+    const runSearch = async () => {
+      // 当搜索参数变化时更新搜索状态
+      let query = searchParams.get('q') || '';
 
-    // 如果开启了繁体转简体，进行转换
-    if (query && typeof window !== 'undefined') {
-      const searchTraditionalToSimplified = localStorage.getItem(
-        'searchTraditionalToSimplified'
-      );
+      if (query) {
+        const originalQuery = query;
+        query = await convertSearchText(query);
+        if (cancelled) return;
 
-      if (searchTraditionalToSimplified === 'true' && converterRef.current) {
-        try {
-          const originalQuery = query;
-          query = converterRef.current(query);
-
-          // 如果转换后的文本与原文本不同，更新 URL
-          if (originalQuery !== query) {
-            const trimmedConverted = query.trim();
-            const nextType =
-              searchParams.get('type') === 'pansou'
-                ? 'pansou'
-                : searchParams.get('type') === 'acg'
-                ? 'acg'
-                : 'video';
-            // 使用 replace 而不是 push，避免在历史记录中留下繁体版本
-            router.replace(buildSearchUrl(trimmedConverted, nextType));
-            return; // 等待 URL 更新后重新触发此 effect
-          }
-        } catch (error) {
-          console.error('[URL参数监听] 繁体转简体转换失败:', error);
+        // 如果转换后的文本与原文本不同，更新 URL
+        if (originalQuery !== query) {
+          const urlType = searchParams.get('type');
+          const nextType =
+            urlType === 'pansou' || urlType === 'acg' ? urlType : 'video';
+          // 使用 replace 而不是 push，避免在历史记录中留下繁体版本
+          router.replace(buildSearchUrl(query.trim(), nextType));
+          return; // 等待 URL 更新后重新触发此 effect
         }
       }
-    }
+
 
     currentQueryRef.current = query.trim();
 
@@ -1559,14 +1558,19 @@ function SearchPageClient() {
 
       // 保存到搜索历史 (事件监听会自动更新界面)
       addSearchHistory(query);
-    } else {
-      setShowResults(false);
-      setShowSuggestions(false);
-    }
+      } else {
+        setShowResults(false);
+        setShowSuggestions(false);
+      }
+    };
+
+    void runSearch();
+    return () => {
+      cancelled = true;
+    };
   }, [
     searchParams,
     forceRefresh,
-    converterReady,
     privateLibraryOnlyReady,
     privateLibraryOnly,
   ]);
@@ -1612,12 +1616,26 @@ function SearchPageClient() {
         flushTimerRef.current = null;
       }
       pendingResultsRef.current = [];
+      searchActionIdRef.current += 1;
+      pendingSearchActionRef.current = null;
     };
   }, []);
 
   // 输入框内容变化时触发，显示搜索建议
+  const invalidateSearchAction = () => {
+    const hadPendingAction = pendingSearchActionRef.current !== null;
+    searchActionIdRef.current += 1;
+    pendingSearchActionRef.current = null;
+    if (hadPendingAction) setIsLoading(false);
+  };
+
+  useEffect(() => {
+    invalidateSearchAction();
+  }, [searchParams]);
+
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const value = e.target.value;
+    invalidateSearchAction();
     setSearchQuery(value);
 
     if (value.trim()) {
@@ -1634,88 +1652,42 @@ function SearchPageClient() {
     }
   };
 
-  // 搜索表单提交时触发，处理搜索逻辑
-  const handleSearch = (e: React.FormEvent) => {
-    e.preventDefault();
-    let trimmed = searchQuery.trim().replace(/\s+/g, ' ');
-    if (!trimmed) return;
+  const runSearchAction = async (rawQuery: string) => {
+    const query = rawQuery.trim().replace(/\s+/g, ' ');
+    if (!query) return;
 
-    // 如果开启了繁体转简体，进行转换
-    if (typeof window !== 'undefined') {
-      const searchTraditionalToSimplified = localStorage.getItem(
-        'searchTraditionalToSimplified'
-      );
-      if (searchTraditionalToSimplified === 'true' && converterRef.current) {
-        try {
-          trimmed = converterRef.current(trimmed);
-        } catch (error) {
-          console.error('繁体转简体转换失败:', error);
-        }
-      }
-    }
-
-    // 回显搜索框
-    setSearchQuery(trimmed);
+    const actionId = ++searchActionIdRef.current;
+    pendingSearchActionRef.current = actionId;
+    const tab = activeTab;
     setShowResults(true);
     setShowSuggestions(false);
-    // 立即设置加载状态，避免显示"未找到相关结果"
     setIsLoading(true);
 
-    // 根据当前选项卡执行不同的搜索
-    if (activeTab === 'video') {
-      // 影视搜索
-      router.push(buildSearchUrl(trimmed, 'video'));
-      // 其余由 searchParams 变化的 effect 处理
-    } else if (activeTab === 'pansou') {
-      // 网盘搜索 - 触发搜索
-      router.push(buildSearchUrl(trimmed, 'pansou'));
-      setTriggerPansouSearch((prev) => !prev); // 切换状态来触发搜索
-    } else if (activeTab === 'acg') {
-      // ACG 磁力搜索 - 触发搜索
-      router.push(buildSearchUrl(trimmed, 'acg'));
+    const processedQuery = await convertSearchText(query);
+    if (actionId !== searchActionIdRef.current) return;
+    pendingSearchActionRef.current = null;
+
+    setSearchQuery(processedQuery);
+    router.push(buildSearchUrl(processedQuery, tab));
+
+    if (tab === 'pansou') {
+      setTriggerPansouSearch((prev) => !prev);
+    } else if (tab === 'acg') {
       setTriggerAcgSearch((prev) => !prev);
     }
   };
 
+  const submitSearch = () => {
+    void runSearchAction(searchQuery);
+  };
+
+  const handleSearch = (e: React.FormEvent) => {
+    e.preventDefault();
+    submitSearch();
+  };
+
   const handleSuggestionSelect = (suggestion: string) => {
-    let processedSuggestion = suggestion;
-
-    // 如果开启了繁体转简体，进行转换
-    if (typeof window !== 'undefined') {
-      const searchTraditionalToSimplified = localStorage.getItem(
-        'searchTraditionalToSimplified'
-      );
-      if (searchTraditionalToSimplified === 'true' && converterRef.current) {
-        try {
-          processedSuggestion = converterRef.current(suggestion);
-        } catch (error) {
-          console.error('繁体转简体转换失败:', error);
-        }
-      }
-    }
-
-    setSearchQuery(processedSuggestion);
-    setShowSuggestions(false);
-
-    // 自动执行搜索
-    setShowResults(true);
-    // 立即设置加载状态，避免显示"未找到相关结果"
-    setIsLoading(true);
-
-    // 根据当前选项卡执行不同的搜索
-    if (activeTab === 'video') {
-      // 影视搜索
-      router.push(buildSearchUrl(processedSuggestion, 'video'));
-      // 其余由 searchParams 变化的 effect 处理
-    } else if (activeTab === 'pansou') {
-      // 网盘搜索 - 触发搜索
-      router.push(buildSearchUrl(processedSuggestion, 'pansou'));
-      setTriggerPansouSearch((prev) => !prev);
-    } else if (activeTab === 'acg') {
-      // ACG 磁力搜索 - 触发搜索
-      router.push(buildSearchUrl(processedSuggestion, 'acg'));
-      setTriggerAcgSearch((prev) => !prev);
-    }
+    void runSearchAction(suggestion);
   };
 
   const togglePansouCloudType = (cloudType: string) => {
@@ -1843,6 +1815,7 @@ function SearchPageClient() {
 
   // 处理标签切换
   const handleTabChange = (newTab: 'video' | 'pansou' | 'acg') => {
+    invalidateSearchAction();
     setActiveTab(newTab);
 
     // 如果有搜索关键词，更新 URL
@@ -1854,6 +1827,7 @@ function SearchPageClient() {
 
   const handleSearchModeChange = (mode: VideoSearchMode) => {
     if (mode === searchMode) return;
+    invalidateSearchAction();
 
     const currentQuery = (
       searchQuery.trim() ||
@@ -1905,6 +1879,7 @@ function SearchPageClient() {
                 <button
                   type='button'
                   onClick={() => {
+                    invalidateSearchAction();
                     setSearchQuery('');
                     setShowSuggestions(false);
                     document.getElementById('searchInput')?.focus();
@@ -1923,20 +1898,7 @@ function SearchPageClient() {
                 onSelect={handleSuggestionSelect}
                 onClose={() => setShowSuggestions(false)}
                 onEnterKey={() => {
-                  // 当用户按回车键时，使用搜索框的实际内容进行搜索
-                  const trimmed = searchQuery.trim().replace(/\s+/g, ' ');
-                  if (!trimmed) return;
-
-                  // 回显搜索框
-                  setSearchQuery(trimmed);
-                  setShowResults(true);
-                  setShowSuggestions(false);
-                  router.push(buildSearchUrl(trimmed, activeTab));
-                  if (activeTab === 'pansou') {
-                    setTriggerPansouSearch((prev) => !prev);
-                  } else if (activeTab === 'acg') {
-                    setTriggerAcgSearch((prev) => !prev);
-                  }
+                  void submitSearch();
                 }}
               />
             </div>
@@ -2638,6 +2600,7 @@ function SearchPageClient() {
                   <div key={item} className='relative group'>
                     <button
                       onClick={() => {
+                        invalidateSearchAction();
                         setSearchQuery(item);
                         setShowResults(true);
                         // 立即设置加载状态，避免显示"未找到相关结果"
@@ -2708,6 +2671,8 @@ function SearchPageClient() {
           playLabel='播放'
         />
       )}
+
+      {toast && <Toast {...toast} />}
 
       {/* 返回顶部悬浮按钮 */}
       <button

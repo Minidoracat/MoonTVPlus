@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 import { getConfig } from '@/lib/config';
+import { getTMDBImageUrl } from '@/lib/tmdb-image-base';
 import {
-  getTMDBImageUrl,
   getTMDBMovieRecommendations,
   getTMDBTVRecommendations,
   searchTMDBMulti,

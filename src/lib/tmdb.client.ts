@@ -2,7 +2,7 @@
 
 import { safeFetch } from './safe-http';
 
-import { getTmdbImageBaseUrl } from './tmdb-image-base';
+import { getTMDBImageUrl } from './tmdb-image-base';
 
 // TMDB API 默认 Base URL（不包含 /3/，由程序拼接）
 const DEFAULT_TMDB_BASE_URL = 'https://api.themoviedb.org';
@@ -565,27 +565,6 @@ export async function fetchTMDBHot(params: {
     throw new Error(`HTTP error! Status: ${response.status}`);
   }
   return response.json();
-}
-
-/**
- * 获取 TMDB 图片完整 URL
- * @param path - 图片路径
- * @param size - 图片尺寸，默认 w500
- * @returns 完整的图片 URL
- */
-export function getTMDBImageUrl(
-  path: string | null,
-  size = 'w500'
-): string {
-  if (!path) return '';
-
-  // 如果已经是完整的 URL (http:// 或 https://),直接返回
-  if (path.startsWith('http://') || path.startsWith('https://')) {
-    return path;
-  }
-
-  const baseUrl = getTmdbImageBaseUrl();
-  return `${baseUrl}/t/p/${size}${path}`;
 }
 
 /**

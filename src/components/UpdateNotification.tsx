@@ -1,12 +1,19 @@
 'use client';
 
+import dynamic from 'next/dynamic';
 import { useEffect, useState } from 'react';
 
 import { getAuthInfoFromBrowserCookie } from '@/lib/auth';
 import { UpdateStatus } from '@/lib/version_check';
 
+import LazyPanelBoundary from './LazyPanelBoundary';
+import LazyPanelFallback from './LazyPanelFallback';
 import { useVersionCheck } from './VersionCheckProvider';
-import { VersionPanel } from './VersionPanel';
+
+const VersionPanel = dynamic(
+  () => import('./VersionPanel').then((mod) => mod.VersionPanel),
+  { loading: LazyPanelFallback }
+);
 
 export const UpdateNotification: React.FC = () => {
   const { updateStatus, isChecking } = useVersionCheck();
@@ -47,10 +54,14 @@ export const UpdateNotification: React.FC = () => {
       </button>
 
       {/* 版本面板 */}
-      <VersionPanel
-        isOpen={isVersionPanelOpen}
-        onClose={() => setIsVersionPanelOpen(false)}
-      />
+      {isVersionPanelOpen && (
+        <LazyPanelBoundary>
+          <VersionPanel
+            isOpen={isVersionPanelOpen}
+            onClose={() => setIsVersionPanelOpen(false)}
+          />
+        </LazyPanelBoundary>
+      )}
     </>
   );
 };

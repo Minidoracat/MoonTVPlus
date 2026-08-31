@@ -13,6 +13,7 @@ import {
   Trash2,
   Youtube,
 } from 'lucide-react';
+import dynamic from 'next/dynamic';
 import Image from 'next/image';
 import { useRouter } from 'next/navigation';
 import React, {
@@ -50,13 +51,20 @@ import {
 } from '@/lib/utils';
 import { useLongPress } from '@/hooks/useLongPress';
 
-import AIChatPanel from '@/components/AIChatPanel';
 import AnimeSubscribeModal from '@/components/AnimeSubscribeModal';
-import DetailPanel from '@/components/DetailPanel';
 import { ImagePlaceholder } from '@/components/ImagePlaceholder';
+import LazyPanelBoundary from '@/components/LazyPanelBoundary';
+import LazyPanelFallback from '@/components/LazyPanelFallback';
 import ImageViewer from '@/components/ImageViewer';
 import MobileActionSheet from '@/components/MobileActionSheet';
 import TrailerPickerDialog from '@/components/TrailerPickerDialog';
+
+const AIChatPanel = dynamic(() => import('@/components/AIChatPanel'), {
+  loading: LazyPanelFallback,
+});
+const DetailPanel = dynamic(() => import('@/components/DetailPanel'), {
+  loading: LazyPanelFallback,
+});
 
 export interface VideoCardProps {
   id?: string;
@@ -2140,49 +2148,53 @@ const VideoCard = forwardRef<VideoCardHandle, VideoCardProps>(
 
         {/* AI问片面板 - 只在打开或正在流式响应时渲染 */}
         {aiEnabled && (showAIChat || isAIStreaming) && (
-          <AIChatPanel
-            isOpen={showAIChat}
-            onClose={() => setShowAIChat(false)}
-            onStreamingChange={setIsAIStreaming}
-            context={{
-              title: actualTitle,
-              year: actualYear,
-              douban_id: actualDoubanId,
-              tmdb_id,
-              type: actualSearchType as 'movie' | 'tv',
-              currentEpisode,
-            }}
-            welcomeMessage={
-              aiDefaultMessageWithVideo
-                ? aiDefaultMessageWithVideo.replace(
-                    '{title}',
-                    actualTitle || ''
-                  )
-                : `想了解《${actualTitle}》的更多信息吗？我可以帮你查询剧情、演员、评价等。`
-            }
-          />
+          <LazyPanelBoundary>
+            <AIChatPanel
+              isOpen={showAIChat}
+              onClose={() => setShowAIChat(false)}
+              onStreamingChange={setIsAIStreaming}
+              context={{
+                title: actualTitle,
+                year: actualYear,
+                douban_id: actualDoubanId,
+                tmdb_id,
+                type: actualSearchType as 'movie' | 'tv',
+                currentEpisode,
+              }}
+              welcomeMessage={
+                aiDefaultMessageWithVideo
+                  ? aiDefaultMessageWithVideo.replace(
+                      '{title}',
+                      actualTitle || ''
+                    )
+                  : `想了解《${actualTitle}》的更多信息吗？我可以帮你查询剧情、演员、评价等。`
+              }
+            />
+          </LazyPanelBoundary>
         )}
 
         {/* 详情面板 */}
         {showDetailPanel && (
-          <DetailPanel
-            isOpen={showDetailPanel}
-            onClose={() => setShowDetailPanel(false)}
-            title={actualTitle}
-            poster={displayPoster}
-            doubanId={actualDoubanId}
-            bangumiId={isBangumi ? actualDoubanId : undefined}
-            isBangumi={isBangumi}
-            tmdbId={tmdb_id}
-            type={actualSearchType as 'movie' | 'tv'}
-            seasonNumber={seasonNumber}
-            currentEpisode={currentEpisode}
-            cmsData={cmsData}
-            sourceId={id}
-            source={source}
-            onPlay={handlePlay}
-            playLabel={playTime && playTime > 0 ? '继续播放' : '播放'}
-          />
+          <LazyPanelBoundary>
+            <DetailPanel
+              isOpen={showDetailPanel}
+              onClose={() => setShowDetailPanel(false)}
+              title={actualTitle}
+              poster={displayPoster}
+              doubanId={actualDoubanId}
+              bangumiId={isBangumi ? actualDoubanId : undefined}
+              isBangumi={isBangumi}
+              tmdbId={tmdb_id}
+              type={actualSearchType as 'movie' | 'tv'}
+              seasonNumber={seasonNumber}
+              currentEpisode={currentEpisode}
+              cmsData={cmsData}
+              sourceId={id}
+              source={source}
+              onPlay={handlePlay}
+              playLabel={playTime && playTime > 0 ? '继续播放' : '播放'}
+            />
+          </LazyPanelBoundary>
         )}
 
         {/* 添加追番订阅（管理员） */}

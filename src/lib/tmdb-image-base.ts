@@ -36,3 +36,20 @@ export function getTmdbImageBaseUrl(): string {
 
   return serverTmdbImageBaseUrl || DEFAULT_TMDB_IMAGE_BASE_URL;
 }
+
+/**
+ * 获取 TMDB 图片完整 URL
+ * @param path - 图片路径
+ * @param size - 图片尺寸，默认 w500
+ * @returns 完整的图片 URL
+ */
+export function getTMDBImageUrl(path: string | null, size = 'w500'): string {
+  if (!path) return '';
+
+  // 如果已经是完整的 URL (http:// 或 https://),直接返回
+  if (path.startsWith('http://') || path.startsWith('https://')) {
+    return path;
+  }
+
+  return `${getTmdbImageBaseUrl()}/t/p/${size}${path}`;
+}

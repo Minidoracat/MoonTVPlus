@@ -130,25 +130,21 @@ export default function ContinueWatching({ className }: ContinueWatchingProps) {
             </div>
           )}
         </div>
-        {loading ? (
-          <div className='flex gap-2 overflow-x-auto scrollbar-hide pb-2 pt-2'>
-            {Array.from({ length: 8 }).map((_, index) => (
-              <div
-                key={index}
-                className='min-w-[180px] w-48 sm:min-w-[200px] sm:w-52'
-              >
-                <div className='relative aspect-[3/2] w-full overflow-hidden rounded-lg bg-gray-200 animate-pulse dark:bg-gray-800'>
-                  <div className='absolute inset-0 bg-gray-300 dark:bg-gray-700' />
+        <div>
+          <VirtualScrollableRow>
+            {loading ? (
+              Array.from({ length: 8 }).map((_, index) => (
+                <div
+                  key={index}
+                  className='min-w-[180px] w-48 sm:min-w-[200px] sm:w-52'
+                >
+                  <div className='relative aspect-[3/2] w-full overflow-hidden rounded-lg bg-gray-200 animate-pulse dark:bg-gray-800'>
+                    <div className='absolute inset-0 bg-gray-300 dark:bg-gray-700' />
+                  </div>
                 </div>
-                <div className='mt-1 h-1 rounded bg-gray-200 animate-pulse dark:bg-gray-800' />
-                <div className='mt-2 h-4 w-3/4 rounded bg-gray-200 animate-pulse dark:bg-gray-800' />
-              </div>
-            ))}
-          </div>
-        ) : (
-          <div>
-            <VirtualScrollableRow>
-              {playRecords.map((record) => {
+              ))
+            ) : (
+              playRecords.map((record) => {
                 const { source, id } = parseKey(record.key);
                 return (
                   <div
@@ -236,10 +232,10 @@ export default function ContinueWatching({ className }: ContinueWatchingProps) {
                     )}
                   </div>
                 );
-              })}
-            </VirtualScrollableRow>
-          </div>
-        )}
+              })
+            )}
+          </VirtualScrollableRow>
+        </div>
       </section>
 
       {showConfirmDialog &&

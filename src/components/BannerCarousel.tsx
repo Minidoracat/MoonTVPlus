@@ -20,8 +20,8 @@ import {
 import {
   type TMDBItem,
   getGenreNames,
-  getTMDBImageUrl,
 } from '@/lib/tmdb.client';
+import { getTMDBImageUrl } from '@/lib/tmdb-image-base';
 import { getDoubanDetail } from '@/lib/douban.client';
 
 import DetailPanel from '@/components/DetailPanel';

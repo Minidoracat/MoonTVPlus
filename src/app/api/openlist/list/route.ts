@@ -15,7 +15,7 @@ import {
   listPathMetaCategories,
   resolvePathMeta,
 } from '@/lib/openlist-path-meta';
-import { getTMDBImageUrl } from '@/lib/tmdb.search';
+import { getTMDBImageUrl } from '@/lib/tmdb-image-base';
 
 export const runtime = 'nodejs';
 

@@ -3,6 +3,7 @@
 'use client';
 
 import { AlertCircle, Cloud, Heart, Keyboard, Loader2, Router, Sparkles, X } from 'lucide-react';
+import dynamic from 'next/dynamic';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { Suspense, useEffect, useMemo, useRef, useState } from 'react';
 
@@ -69,22 +70,22 @@ import {
   convertSubtitleFileToVttObjectUrl,
   CUSTOM_SUBTITLE_ACCEPT,
 } from '@/lib/subtitle-converter';
-import { getTMDBImageUrl } from '@/lib/tmdb.search';
+import { getTMDBImageUrl } from '@/lib/tmdb-image-base';
 import { DanmakuFilterConfig, EpisodeFilterConfig, SearchResult } from '@/lib/types';
 import { base58Decode, getVideoResolutionFromM3u8, processImageUrl } from '@/lib/utils';
 import { useEnableAIComments } from '@/hooks/useEnableAIComments';
 import { useEnableComments } from '@/hooks/useEnableComments';
 import { usePlaySync } from '@/hooks/usePlaySync';
 
-import AIChatPanel from '@/components/AIChatPanel';
 import AIComments from '@/components/AIComments';
 import CorrectDialog from '@/components/CorrectDialog';
 import DanmakuFilterSettings from '@/components/DanmakuFilterSettings';
-import DetailPanel from '@/components/DetailPanel';
 import DoubanComments from '@/components/DoubanComments';
 import DownloadEpisodeSelector from '@/components/DownloadEpisodeSelector';
 import Drawer from '@/components/Drawer';
 import EpisodeSelector from '@/components/EpisodeSelector';
+import LazyPanelBoundary from '@/components/LazyPanelBoundary';
+import LazyPanelFallback from '@/components/LazyPanelFallback';
 import PageLayout from '@/components/PageLayout';
 import PansouSearch from '@/components/PansouSearch';
 import ProxyImage from '@/components/ProxyImage';
@@ -99,6 +100,13 @@ import {
   isIOSStandaloneWebApp,
   supportsProgrammaticPictureInPicture,
 } from '@/lib/ios-pwa';
+
+const AIChatPanel = dynamic(() => import('@/components/AIChatPanel'), {
+  loading: LazyPanelFallback,
+});
+const DetailPanel = dynamic(() => import('@/components/DetailPanel'), {
+  loading: LazyPanelFallback,
+});
 
 // 扩展 HTMLVideoElement 类型以支持 hls 属性
 declare global {
@@ -245,6 +253,7 @@ function PlayPageClient() {
 
   // AI问片状态
   const [showAIChat, setShowAIChat] = useState(false);
+  const [hasOpenedAIChat, setHasOpenedAIChat] = useState(false);
   const [aiEnabled, setAiEnabled] = useState(false);
   const [aiDefaultMessageWithVideo, setAiDefaultMessageWithVideo] = useState('');
 
@@ -253,6 +262,7 @@ function PlayPageClient() {
 
   // 详情面板状态
   const [showDetailPanel, setShowDetailPanel] = useState(false);
+  const [hasOpenedDetailPanel, setHasOpenedDetailPanel] = useState(false);
 
   // 快捷键说明弹窗状态
   const [showShortcutDialog, setShowShortcutDialog] = useState(false);
@@ -290,6 +300,8 @@ function PlayPageClient() {
 
   // 抽屉管理：打开指定抽屉时关闭其他抽屉
   const openDrawer = (drawerName: 'pansou' | 'aiChat' | 'correct' | 'detail') => {
+    if (drawerName === 'aiChat') setHasOpenedAIChat(true);
+    if (drawerName === 'detail') setHasOpenedDetailPanel(true);
     if (!isLargeScreen) {
       // 小屏设备不需要互斥
       switch (drawerName) {
@@ -11293,7 +11305,8 @@ function PlayPageClient() {
       )}
 
       {/* AI问片面板 */}
-      {aiEnabled && detail && (
+      {aiEnabled && detail && hasOpenedAIChat && (
+        <LazyPanelBoundary>
         <AIChatPanel
           isOpen={showAIChat}
           onClose={() => setShowAIChat(false)}
@@ -11307,6 +11320,7 @@ function PlayPageClient() {
           useDrawer={isLargeScreen}
           drawerWidth='w-[400px]'
         />
+        </LazyPanelBoundary>
       )}
 
       {/* 纠错弹窗 - 仅小雅源显示 */}
@@ -11336,7 +11350,8 @@ function PlayPageClient() {
       )}
 
       {/* 详情面板 */}
-      {detail && (
+      {detail && hasOpenedDetailPanel && (
+        <LazyPanelBoundary>
         <DetailPanel
           isOpen={showDetailPanel}
           onClose={() => setShowDetailPanel(false)}
@@ -11385,6 +11400,7 @@ function PlayPageClient() {
           useDrawer={isLargeScreen}
           drawerWidth='w-[400px]'
         />
+        </LazyPanelBoundary>
       )}
     </PageLayout>
   );

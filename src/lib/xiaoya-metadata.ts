@@ -1,6 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 import { NFOMetadata,parseNFO } from './nfo-parser';
+import { getTMDBImageUrl } from './tmdb-image-base';
 import { parseVideoFileName } from './video-parser';
 import { XiaoyaClient } from './xiaoya.client';
 
@@ -216,7 +217,7 @@ export async function getXiaoyaMetadata(
     const isSeasonEpisode = /^S\d+E\d+/i.test(searchQuery);
 
     if (!isPureNumber && !isSeasonEpisode) {
-      const { searchTMDB, getTMDBImageUrl } = await import('./tmdb.search');
+      const { searchTMDB } = await import('./tmdb.search');
       const tmdbResult = await searchTMDB(tmdbApiKey, searchQuery, tmdbProxy, undefined, tmdbReverseProxy);
 
       if (tmdbResult.code === 200 && tmdbResult.result) {
@@ -244,7 +245,7 @@ export async function getXiaoyaMetadata(
       .replace(/\d{4}/g, '')
       .trim();
 
-    const { searchTMDB, getTMDBImageUrl } = await import('./tmdb.search');
+    const { searchTMDB } = await import('./tmdb.search');
     const tmdbResult = await searchTMDB(tmdbApiKey, searchQuery, tmdbProxy, undefined, tmdbReverseProxy);
 
     if (tmdbResult.code === 200 && tmdbResult.result) {

@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation';
 import { useEffect,useState } from 'react';
 import { createPortal } from 'react-dom';
 
-import { getTMDBImageUrl } from '@/lib/tmdb.client';
+import { getTMDBImageUrl } from '@/lib/tmdb-image-base';
 import { processImageUrl } from '@/lib/utils';
 
 import PageLayout from '@/components/PageLayout';

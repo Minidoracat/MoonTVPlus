@@ -19,7 +19,7 @@ import { createPortal } from 'react-dom';
 
 import { getBangumiSubject, getBangumiSubjectUrl } from '@/lib/bangumi.client';
 import { appendSpecialSourceParam } from '@/lib/special-source.client';
-import { getTMDBImageUrl } from '@/lib/tmdb.client';
+import { getTMDBImageUrl } from '@/lib/tmdb-image-base';
 import { processImageUrl } from '@/lib/utils';
 
 import ImageViewer from '@/components/ImageViewer';

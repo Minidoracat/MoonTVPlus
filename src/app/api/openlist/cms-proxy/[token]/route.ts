@@ -3,6 +3,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 import { getConfig } from '@/lib/config';
+import { getTMDBImageUrl } from '@/lib/tmdb-image-base';
 import { hasFeaturePermission } from '@/lib/permissions';
 
 export const runtime = 'nodejs';
@@ -172,8 +173,6 @@ export async function GET(
  * 处理搜索请求
  */
 async function handleSearch(metaInfo: any, query: string, request: NextRequest) {
-  const { getTMDBImageUrl } = await import('@/lib/tmdb.search');
-
   const lowerQuery = query.toLowerCase();
   const results = Object.entries(metaInfo.folders)
     .filter(([folderName, info]: [string, any]) => {
@@ -254,8 +253,6 @@ async function handleDetail(
   token: string,
   request: NextRequest
 ) {
-  const { getTMDBImageUrl } = await import('@/lib/tmdb.search');
-
   // 查找文件夹信息
   const folderMeta = metaInfo.folders?.[folderKey];
   if (!folderMeta) {

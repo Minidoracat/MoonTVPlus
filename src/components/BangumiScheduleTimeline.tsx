@@ -65,18 +65,11 @@ function TimelineSkeleton() {
   );
 }
 
-/** 挑选一张可用的海报 URL（优先级从大到小） */
+/** 挑选一张适合列表卡片的海报 URL，large 仅作为最后备选 */
 function pickPoster(item: BangumiScheduleItem): string {
   const img = item.images;
   if (!img) return '';
-  return (
-    img.large ||
-    img.common ||
-    img.medium ||
-    img.small ||
-    img.grid ||
-    ''
-  );
+  return img.common || img.medium || img.small || img.grid || img.large || '';
 }
 
 /** 单条时刻表条目：固定宽度 + 复用 VideoCard（与网格卡片行为一致） */

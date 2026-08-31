@@ -1,6 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 import { getConfig } from '@/lib/config';
+import { getTMDBImageUrl } from '@/lib/tmdb-image-base';
 import { SearchResult } from '@/lib/types';
 
 /**
@@ -285,7 +286,6 @@ export async function getOpenListDetail(
     });
 
   // 3. 从 metainfo 中获取元数据
-  const { getTMDBImageUrl } = await import('@/lib/tmdb.search');
   const { resolvePathMeta } = await import('@/lib/openlist-path-meta');
   // folderName 为 metainfo 中的完整路径，PathMeta 按最长前缀匹配
   const pathMetaResolved = resolvePathMeta(

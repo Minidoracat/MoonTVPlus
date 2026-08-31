@@ -34,6 +34,7 @@ import {
   User,
   X,
 } from 'lucide-react';
+import dynamic from 'next/dynamic';
 import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
@@ -45,22 +46,56 @@ import { clearBangumiImageFallbackCache } from '@/lib/utils';
 import { CURRENT_VERSION } from '@/lib/version';
 import { UpdateStatus } from '@/lib/version_check';
 
-import { DeviceManagementPanel } from './DeviceManagementPanel';
-import { DownloadManagementPanel } from './DownloadManagementPanel';
-import { EmailSettingsPanel } from './EmailSettingsPanel';
-import { FavoritesPanel } from './FavoritesPanel';
-import { NotificationPanel } from './NotificationPanel';
-import { OfflineDownloadPanel } from './OfflineDownloadPanel';
-import { PersonalCenterPanel } from './PersonalCenterPanel';
 import {
   isTraditionalChineseEnabled,
   setTraditionalChineseEnabled,
   TRADITIONAL_CHINESE_CHANGE_EVENT,
   TRADITIONAL_CHINESE_STORAGE_KEY,
 } from './TraditionalChineseProvider';
-import TVRemotePanel from './tv/TVRemotePanel';
+import LazyPanelFallback from './LazyPanelFallback';
+import LazyPanelBoundary from './LazyPanelBoundary';
 import { useVersionCheck } from './VersionCheckProvider';
-import { VersionPanel } from './VersionPanel';
+
+const DeviceManagementPanel = dynamic(
+  () =>
+    import('./DeviceManagementPanel').then((mod) => mod.DeviceManagementPanel),
+  { loading: LazyPanelFallback }
+);
+const DownloadManagementPanel = dynamic(
+  () =>
+    import('./DownloadManagementPanel').then(
+      (mod) => mod.DownloadManagementPanel
+    ),
+  { loading: LazyPanelFallback }
+);
+const EmailSettingsPanel = dynamic(
+  () => import('./EmailSettingsPanel').then((mod) => mod.EmailSettingsPanel),
+  { loading: LazyPanelFallback }
+);
+const FavoritesPanel = dynamic(
+  () => import('./FavoritesPanel').then((mod) => mod.FavoritesPanel),
+  { loading: LazyPanelFallback }
+);
+const NotificationPanel = dynamic(
+  () => import('./NotificationPanel').then((mod) => mod.NotificationPanel),
+  { loading: LazyPanelFallback }
+);
+const OfflineDownloadPanel = dynamic(
+  () =>
+    import('./OfflineDownloadPanel').then((mod) => mod.OfflineDownloadPanel),
+  { loading: LazyPanelFallback }
+);
+const PersonalCenterPanel = dynamic(
+  () => import('./PersonalCenterPanel').then((mod) => mod.PersonalCenterPanel),
+  { loading: LazyPanelFallback }
+);
+const TVRemotePanel = dynamic(() => import('./tv/TVRemotePanel'), {
+  loading: LazyPanelFallback,
+});
+const VersionPanel = dynamic(
+  () => import('./VersionPanel').then((mod) => mod.VersionPanel),
+  { loading: LazyPanelFallback }
+);
 
 interface AuthInfo {
   username?: string;
@@ -5456,32 +5491,35 @@ export const UserMenu: React.FC = () => {
       {/* 使用 Portal 将菜单面板渲染到 document.body */}
       {isOpen && mounted && createPortal(menuPanel, document.body)}
 
-      <PersonalCenterPanel
-        isOpen={isProfileCenterOpen}
-        mounted={mounted}
-        onClose={() => setIsProfileCenterOpen(false)}
-        username={currentUsername}
-        roleText={currentRoleText}
-        showRoleBadge={shouldShowRoleBadge}
-        avatarText={avatarText}
-        roleBadgeClassName={roleBadgeClassName}
-        showDeviceManagement={storageType !== 'localstorage'}
-        showChangePassword={showChangePassword}
-        onOpenEmailSettings={() => {
-          setIsProfileCenterOpen(false);
-          setIsEmailSettingsOpen(true);
-          loadEmailSettings();
-        }}
-        onOpenDeviceManagement={() => {
-          setIsProfileCenterOpen(false);
-          setIsDeviceManagementOpen(true);
-          loadDevices();
-        }}
-        onOpenChangePassword={() => {
-          setIsProfileCenterOpen(false);
-          handleChangePassword();
-        }}
-      />
+      <LazyPanelBoundary>
+      {isProfileCenterOpen && (
+        <PersonalCenterPanel
+          isOpen={isProfileCenterOpen}
+          mounted={mounted}
+          onClose={() => setIsProfileCenterOpen(false)}
+          username={currentUsername}
+          roleText={currentRoleText}
+          showRoleBadge={shouldShowRoleBadge}
+          avatarText={avatarText}
+          roleBadgeClassName={roleBadgeClassName}
+          showDeviceManagement={storageType !== 'localstorage'}
+          showChangePassword={showChangePassword}
+          onOpenEmailSettings={() => {
+            setIsProfileCenterOpen(false);
+            setIsEmailSettingsOpen(true);
+            loadEmailSettings();
+          }}
+          onOpenDeviceManagement={() => {
+            setIsProfileCenterOpen(false);
+            setIsDeviceManagementOpen(true);
+            loadDevices();
+          }}
+          onOpenChangePassword={() => {
+            setIsProfileCenterOpen(false);
+            handleChangePassword();
+          }}
+        />
+      )}
 
       {/* 使用 Portal 将设置面板渲染到 document.body */}
       {isSettingsOpen && mounted && createPortal(settingsPanel, document.body)}
@@ -5497,16 +5535,20 @@ export const UserMenu: React.FC = () => {
         createPortal(subscribePanel, document.body)}
 
       {/* 版本面板 */}
-      <VersionPanel
-        isOpen={isVersionPanelOpen}
-        onClose={() => setIsVersionPanelOpen(false)}
-      />
+      {isVersionPanelOpen && (
+        <VersionPanel
+          isOpen={isVersionPanelOpen}
+          onClose={() => setIsVersionPanelOpen(false)}
+        />
+      )}
 
       {/* 离线下载面板 */}
-      <OfflineDownloadPanel
-        isOpen={isOfflineDownloadPanelOpen}
-        onClose={() => setIsOfflineDownloadPanelOpen(false)}
-      />
+      {isOfflineDownloadPanelOpen && (
+        <OfflineDownloadPanel
+          isOpen={isOfflineDownloadPanelOpen}
+          onClose={() => setIsOfflineDownloadPanelOpen(false)}
+        />
+      )}
 
       {/* 使用 Portal 将通知面板渲染到 document.body */}
       {isNotificationPanelOpen &&
@@ -5549,50 +5591,57 @@ export const UserMenu: React.FC = () => {
           document.body
         )}
 
-      <EmailSettingsPanel
-        isOpen={isEmailSettingsOpen}
-        mounted={mounted}
-        onClose={() => setIsEmailSettingsOpen(false)}
-        userEmail={userEmail}
-        onUserEmailChange={setUserEmail}
-        emailNotifications={emailNotifications}
-        onEmailNotificationsChange={setEmailNotifications}
-        pushNotifications={pushNotifications}
-        onPushNotificationsChange={handlePushNotificationsChange}
-        pushNotificationsSupported={pushNotificationsSupported}
-        pushNotificationsConfigured={pushNotificationsConfigured}
-        pushNotificationsBusy={pushNotificationsBusy}
-        telegramEnabled={telegramEnabled}
-        telegramBound={telegramBound}
-        telegramUsername={telegramUsername}
-        telegramBindCode={telegramBindCode}
-        telegramDeepLink={telegramDeepLink}
-        telegramBindingBusy={telegramBindingBusy}
-        onCreateTelegramBindCode={handleCreateTelegramBindCode}
-        emailSettingsLoading={emailSettingsLoading}
-        emailSettingsSaving={emailSettingsSaving}
-        onSave={handleSaveEmailSettings}
-        statusMessage={emailSettingsMessage}
-        statusType={emailSettingsMessageType}
-      />
+      {isEmailSettingsOpen && (
+        <EmailSettingsPanel
+          isOpen={isEmailSettingsOpen}
+          mounted={mounted}
+          onClose={() => setIsEmailSettingsOpen(false)}
+          userEmail={userEmail}
+          onUserEmailChange={setUserEmail}
+          emailNotifications={emailNotifications}
+          onEmailNotificationsChange={setEmailNotifications}
+          pushNotifications={pushNotifications}
+          onPushNotificationsChange={handlePushNotificationsChange}
+          pushNotificationsSupported={pushNotificationsSupported}
+          pushNotificationsConfigured={pushNotificationsConfigured}
+          pushNotificationsBusy={pushNotificationsBusy}
+          telegramEnabled={telegramEnabled}
+          telegramBound={telegramBound}
+          telegramUsername={telegramUsername}
+          telegramBindCode={telegramBindCode}
+          telegramDeepLink={telegramDeepLink}
+          telegramBindingBusy={telegramBindingBusy}
+          onCreateTelegramBindCode={handleCreateTelegramBindCode}
+          emailSettingsLoading={emailSettingsLoading}
+          emailSettingsSaving={emailSettingsSaving}
+          onSave={handleSaveEmailSettings}
+          statusMessage={emailSettingsMessage}
+          statusType={emailSettingsMessageType}
+        />
+      )}
 
-      <DeviceManagementPanel
-        isOpen={isDeviceManagementOpen}
-        mounted={mounted}
-        onClose={() => setIsDeviceManagementOpen(false)}
-        devices={devices}
-        devicesLoading={devicesLoading}
-        revoking={revoking}
-        onRevokeDevice={handleRevokeDevice}
-        onRevokeAllDevices={handleRevokeAllDevices}
-        getDeviceIcon={getDeviceIcon}
-      />
+      {isDeviceManagementOpen && (
+        <DeviceManagementPanel
+          isOpen={isDeviceManagementOpen}
+          mounted={mounted}
+          onClose={() => setIsDeviceManagementOpen(false)}
+          devices={devices}
+          devicesLoading={devicesLoading}
+          revoking={revoking}
+          onRevokeDevice={handleRevokeDevice}
+          onRevokeAllDevices={handleRevokeAllDevices}
+          getDeviceIcon={getDeviceIcon}
+        />
+      )}
 
-      <TVRemotePanel
-        isOpen={isTVRemoteOpen}
-        mounted={mounted}
-        onClose={() => setIsTVRemoteOpen(false)}
-      />
+      {isTVRemoteOpen && (
+        <TVRemotePanel
+          isOpen={isTVRemoteOpen}
+          mounted={mounted}
+          onClose={() => setIsTVRemoteOpen(false)}
+        />
+      )}
+      </LazyPanelBoundary>
 
       {/* 使用 Portal 将生态应用面板渲染到 document.body */}
       {isEcoAppsOpen && mounted && createPortal(ecoAppsPanel, document.body)}

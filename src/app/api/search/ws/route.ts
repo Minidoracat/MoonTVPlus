@@ -16,6 +16,7 @@ import {
   resolveTitleAliases,
   searchFromApiWithQueries,
 } from '@/lib/title-alias';
+import { getTMDBImageUrl } from '@/lib/tmdb-image-base';
 import { yellowWords } from '@/lib/yellow';
 
 export const runtime = 'nodejs';
@@ -292,7 +293,6 @@ export async function GET(request: NextRequest) {
           (async () => {
             try {
               const { getCachedMetaInfo, setCachedMetaInfo } = await import('@/lib/openlist-cache');
-              const { getTMDBImageUrl } = await import('@/lib/tmdb.search');
               const { db } = await import('@/lib/db');
 
               let metaInfo = getCachedMetaInfo();

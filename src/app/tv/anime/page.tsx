@@ -36,11 +36,11 @@ function bangumiToItem(anime: BangumiCalendarData['items'][number]): TVItem {
     id: String(anime.id),
     title,
     poster:
-      anime.images?.large ||
       anime.images?.common ||
       anime.images?.medium ||
       anime.images?.small ||
       anime.images?.grid ||
+      anime.images?.large ||
       '',
     rate: anime.rating?.score ? anime.rating.score.toFixed(1) : '新番',
     year: anime.air_date?.split('-')?.[0] || '更新中',

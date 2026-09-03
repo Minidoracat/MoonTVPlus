@@ -9,7 +9,7 @@ jest.mock('@/lib/db.client', () => ({
     mockFetchMangaChapterSummaries(...args),
 }));
 
-test('retries a failed summary key once', async () => {
+test('does not resend a failed summary key', async () => {
   let intersect: (element: Element) => void;
   jest.useFakeTimers();
   Object.defineProperty(global, 'IntersectionObserver', {
@@ -48,6 +48,6 @@ test('retries a failed summary key once', async () => {
   await enterViewport();
   await enterViewport();
 
-  expect(mockFetchMangaChapterSummaries).toHaveBeenCalledTimes(2);
+  expect(mockFetchMangaChapterSummaries).toHaveBeenCalledTimes(1);
   jest.useRealTimers();
 });

@@ -14,7 +14,7 @@
  * 如后续需要在客户端读取收藏等其它数据，可按同样方式在此文件中补充实现。
  */
 
-import { getAuthInfoFromBrowserCookie, clearAuthCookie } from './auth';
+import { clearAuthCookie,getAuthInfoFromBrowserCookie } from './auth';
 import { normalizeEpisodeFilterConfig } from './episode-filter';
 import { MangaReadRecord, MangaShelfItem } from './manga.types';
 import { isLoginPathname, resolveLoginPath } from './tv-mode';
@@ -761,6 +761,22 @@ export async function fetchWithAuth(
 async function fetchFromApi<T>(path: string): Promise<T> {
   const res = await fetchWithAuth(path);
   return (await res.json()) as T;
+}
+
+export async function fetchMangaChapterSummaries(
+  items: Array<{ sourceId: string; mangaId: string }>,
+  signal?: AbortSignal
+): Promise<Record<string, { count: number; latestName?: string }>> {
+  const res = await fetchWithAuth('/api/manga/chapter-summary', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ items }),
+    signal,
+  });
+  const data = (await res.json()) as {
+    summaries?: Record<string, { count: number; latestName?: string }>;
+  };
+  return data.summaries || {};
 }
 
 /**

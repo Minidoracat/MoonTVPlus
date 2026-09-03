@@ -114,6 +114,13 @@ describe('降級設定下的授權（fail closed）', () => {
       expect(fetchMock).not.toHaveBeenCalled();
     });
 
+    it('getChapterSummaries 要拒絕，且不得先讀 summary cache 或外連', async () => {
+      await expect(
+        client.getChapterSummaries([{ mangaId: '1307', sourceId: '123' }])
+      ).rejects.toThrow(FORBIDDEN);
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
     it('getChapterPages 要拒絕，且不得先送 ChapterSource 反查', async () => {
       await expect(client.getChapterPages('6505')).rejects.toThrow(FORBIDDEN);
       expect(fetchMock).not.toHaveBeenCalled();
@@ -356,5 +363,151 @@ describe('getMangaDetail 的詳情快取', () => {
     });
     expect(script.realUrl).toBeUndefined();
     expect(script.chapters[0].realUrl).toBeUndefined();
+  });
+});
+
+describe('getChapterSummaries 的摘要補抓', () => {
+  const SOURCE_ID = 'summary-source';
+  const OTHER_SOURCE_ID = 'summary-source-other';
+  const BLOCKED_SOURCE_ID = 'summary-source-blocked';
+  const READY_ID = '92001';
+  const UNFETCHED_ID = '92002';
+  const STALE_ID = '92005';
+  const BLOCKED_ID = '92003';
+  const MISMATCH_ID = '92004';
+  const SUMMARY_QUERY = 'GetMangaChapterSummary';
+  const CHAPTERS_QUERY = 'GET_MANGA_CHAPTERS_FETCH';
+
+  let client: SuwayomiClient;
+  let requestBodies: string[];
+  let returnedSourceId: string;
+  const originalFetch = global.fetch;
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    setConfigState(false, [SOURCE_ID]);
+    client = new SuwayomiClient();
+    requestBodies = [];
+    returnedSourceId = SOURCE_ID;
+    global.fetch = jest.fn(async (_url: string, init?: RequestInit) => {
+      const body = String(init?.body ?? '');
+      requestBodies.push(body);
+      const variables = JSON.parse(body).variables || {};
+      let payload: unknown = { data: {} };
+
+      if (body.includes(SUMMARY_QUERY)) {
+        const mangaId = String(variables.id);
+        const hasSummary = mangaId === READY_ID || mangaId === STALE_ID;
+        payload = {
+          data: {
+            manga: {
+              sourceId: returnedSourceId,
+              chaptersLastFetchedAt:
+                mangaId === STALE_ID
+                  ? 1
+                  : hasSummary
+                    ? Math.floor(Date.now() / 1000)
+                    : 0,
+              chapters: { totalCount: hasSummary ? 7 : 0 },
+              latestUploadedChapter:
+                hasSummary ? { name: '第 7 话' } : null,
+            },
+          },
+        };
+      } else if (body.includes(CHAPTERS_QUERY)) {
+        payload = {
+          data: {
+            fetchChapters: {
+              chapters: [
+                { id: 3, name: '第 3 话', chapterNumber: 3, uploadDate: 3 },
+                { id: 1, name: '第 1 话', chapterNumber: 1, uploadDate: 1 },
+                { id: 2, name: '第 2 话', chapterNumber: 2, uploadDate: 2 },
+              ],
+            },
+          },
+        };
+      } else if (body.includes('sources')) {
+        payload = {
+          data: {
+            sources: {
+              nodes: [
+                { id: SOURCE_ID, name: '摘要来源', lang: 'zh' },
+                { id: OTHER_SOURCE_ID, name: '其他摘要来源', lang: 'zh' },
+              ],
+            },
+          },
+        };
+      }
+
+      return {
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify(payload),
+      } as unknown as Response;
+    }) as unknown as typeof global.fetch;
+  });
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+  });
+
+  it('已抓取者直接讀摘要，未抓取者補抓並依章節順序取最後一話，之後命中 cache', async () => {
+    const items = [
+      { sourceId: SOURCE_ID, mangaId: READY_ID },
+      { sourceId: SOURCE_ID, mangaId: UNFETCHED_ID },
+    ];
+    const expected = {
+      [`${SOURCE_ID}+${READY_ID}`]: { count: 7, latestName: '第 7 话' },
+      [`${SOURCE_ID}+${UNFETCHED_ID}`]: {
+        count: 3,
+        latestName: '第 3 话',
+      },
+    };
+
+    await expect(client.getChapterSummaries(items)).resolves.toEqual(expected);
+    expect(requestBodies.filter((body) => body.includes(SUMMARY_QUERY))).toHaveLength(2);
+    expect(requestBodies.filter((body) => body.includes(CHAPTERS_QUERY))).toHaveLength(1);
+
+    const requestCount = requestBodies.length;
+    await expect(client.getChapterSummaries(items)).resolves.toEqual(expected);
+    expect(requestBodies).toHaveLength(requestCount);
+  });
+
+  it('摘要過期時補抓章節', async () => {
+    await expect(
+      client.getChapterSummaries([
+        { sourceId: SOURCE_ID, mangaId: STALE_ID },
+      ])
+    ).resolves.toEqual({
+      [`${SOURCE_ID}+${STALE_ID}`]: { count: 3, latestName: '第 3 话' },
+    });
+    expect(requestBodies.filter((body) => body.includes(CHAPTERS_QUERY))).toHaveLength(1);
+  });
+
+  it('伺服器回傳的來源不在允許清單時略過，且不補抓章節', async () => {
+    returnedSourceId = BLOCKED_SOURCE_ID;
+
+    await expect(
+      client.getChapterSummaries([
+        { sourceId: SOURCE_ID, mangaId: BLOCKED_ID },
+      ])
+    ).resolves.toEqual({});
+    expect(requestBodies.some((body) => body.includes('fetchChapters'))).toBe(
+      false
+    );
+  });
+
+  it('trueSourceId 與請求來源不同時略過，且不補抓章節', async () => {
+    setConfigState(false, [SOURCE_ID, OTHER_SOURCE_ID]);
+    returnedSourceId = OTHER_SOURCE_ID;
+
+    await expect(
+      client.getChapterSummaries([
+        { sourceId: SOURCE_ID, mangaId: MISMATCH_ID },
+      ])
+    ).resolves.toEqual({});
+    expect(requestBodies.some((body) => body.includes('fetchChapters'))).toBe(
+      false
+    );
   });
 });

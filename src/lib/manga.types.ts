@@ -327,6 +327,8 @@ export interface MangaSearchItem {
   status?: string;
   artist?: string;
   genre?: string;
+  latestChapterCount?: number;
+  latestChapterName?: string;
 }
 
 export interface MangaSearchFailure {

@@ -43,6 +43,7 @@ import {
   readMangaSourceHealth,
   recordMangaSourceHealth,
 } from '@/lib/manga-source-health';
+import { useMangaChapterSummaryQueue } from '@/hooks/useMangaChapterSummaryQueue';
 
 import MangaSourceMultiPicker from '@/components/manga/MangaSourceMultiPicker';
 import MangaCard from '@/components/MangaCard';
@@ -203,11 +204,30 @@ export default function MangaSearchPage() {
   const [sourcesReady, setSourcesReady] = useState(false);
   /** 空陣列 = 不篩選（顯示全部來源的結果） */
   const [sourceFilter, setSourceFilter] = useState<string[]>([]);
-  const [sortMode, setSortMode] = useState<MangaResultSort>('arrival');
+  const [sortMode, setSortMode] = useState<MangaResultSort>('chapters');
   const [groupBySource, setGroupBySource] = useState(false);
   const [showFailedDetail, setShowFailedDetail] = useState(false);
   /** 實際 render 的卡片數上限；資料 state 仍保留全部結果 */
   const [renderLimit, setRenderLimit] = useState(MANGA_RESULT_RENDER_PAGE_SIZE);
+  const {
+    observe: observeChapterSummary,
+    reset: resetChapterSummaryQueue,
+  } = useMangaChapterSummaryQueue({
+    onSummaries: (summaries) => {
+      setResults((prev) =>
+        prev.map((item) => {
+          const summary = summaries[`${item.sourceId}+${item.id}`];
+          return summary
+            ? {
+                ...item,
+                latestChapterCount: summary.count,
+                latestChapterName: summary.latestName,
+              }
+            : item;
+        })
+      );
+    },
+  });
 
   useEffect(() => {
     setSourceHealth(readMangaSourceHealth());
@@ -644,6 +664,7 @@ export default function MangaSearchPage() {
 
       // 結果一律重新向伺服器取得。不從本地快取先畫 ——
       // 那會讓剛被停用的來源內容短暫顯示出來，等同繞過授權。
+      resetChapterSummaryQueue();
       setResults([]);
 
       const currentFluidSearch = readFluidSearchSetting();
@@ -740,6 +761,7 @@ export default function MangaSearchPage() {
       flushPendingHealth,
       flushPendingResults,
       readFluidSearchSetting,
+      resetChapterSummaryQueue,
       runFluidBatch,
       runRestBatch,
       saveSearchState,
@@ -765,6 +787,7 @@ export default function MangaSearchPage() {
       setSourceId('');
       cancelActiveSearch();
       clearPendingResults();
+      resetChapterSummaryQueue();
       setResults([]);
       setLoading(false);
       setStopped(false);
@@ -783,6 +806,7 @@ export default function MangaSearchPage() {
   }, [
     cancelActiveSearch,
     clearPendingResults,
+    resetChapterSummaryQueue,
     restoreSearchState,
     urlQuery,
     urlSourceId,
@@ -966,7 +990,11 @@ export default function MangaSearchPage() {
       sourceHealth[item.sourceId]
     );
     return (
-      <div key={key} className='space-y-2'>
+      <div
+        key={key}
+        ref={(element) => observeChapterSummary(element, item)}
+        className='space-y-2'
+      >
         <MangaCard
           item={item}
           href={`/manga/detail?mangaId=${item.id}&sourceId=${
@@ -984,6 +1012,11 @@ export default function MangaSearchPage() {
           )}&returnTo=${encodeURIComponent(returnTo)}`}
           subtitle={[
             item.sourceName,
+            item.latestChapterName
+              ? `最新 ${item.latestChapterName}`
+              : item.latestChapterCount
+                ? `共 ${item.latestChapterCount} 话`
+                : undefined,
             sourceStatus?.label,
             item.author || item.status || item.description,
           ]
@@ -1091,6 +1124,7 @@ export default function MangaSearchPage() {
                     }
                     className='min-h-9 cursor-pointer rounded-xl border border-gray-200 bg-gray-50 px-2 text-xs text-gray-900 outline-none transition focus:border-sky-500 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-100'
                   >
+                    <option value='chapters'>话数</option>
                     <option value='arrival'>來源回應順序</option>
                     <option value='source'>來源名稱</option>
                     <option value='title'>標題</option>

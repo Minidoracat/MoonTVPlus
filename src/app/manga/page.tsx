@@ -4,26 +4,35 @@ import { Flame, Search, Sparkles } from 'lucide-react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
-import { deleteMangaShelf, getAllMangaShelf, saveMangaShelf } from '@/lib/db.client';
-import { getMangaSourceCategory } from '@/lib/manga-source-groups';
+import {
+  deleteMangaShelf,
+  getAllMangaShelf,
+  saveMangaShelf,
+} from '@/lib/db.client';
 import type {
   MangaFilterSelection,
   MangaSourceFilterOption,
   MangaSourceProbeSummary,
 } from '@/lib/manga.types';
 import {
-  upsertFilterSelection,
   MangaRecommendResult,
   MangaRecommendType,
   MangaSearchItem,
   MangaShelfItem,
   MangaSource,
+  upsertFilterSelection,
 } from '@/lib/manga.types';
+import {
+  MANGA_BROWSE_STATE_KEY,
+  parseMangaBrowseState,
+} from '@/lib/manga-browse-state';
+import { getMangaSourceCategory } from '@/lib/manga-source-groups';
+import { useMangaChapterSummaryQueue } from '@/hooks/useMangaChapterSummaryQueue';
 
 import CapsuleSwitch from '@/components/CapsuleSwitch';
-import MangaCard from '@/components/MangaCard';
 import MangaFilterGroupChips from '@/components/manga/MangaFilterGroupChips';
 import MangaSourcePicker from '@/components/manga/MangaSourcePicker';
+import MangaCard from '@/components/MangaCard';
 
 function MangaCardSkeleton({ withButton = false }: { withButton?: boolean }) {
   return (
@@ -96,12 +105,36 @@ export default function MangaRecommendPage() {
   const [shelf, setShelf] = useState<Record<string, MangaShelfItem>>({});
   const loadMoreRef = useRef<HTMLDivElement | null>(null);
   const recommendRequestRef = useRef(0);
+  const pendingRestoreRef = useRef<{
+    keyword: string;
+    filters: MangaFilterSelection[];
+  } | null>(null);
   const [sourceFilters, setSourceFilters] = useState<MangaSourceFilterOption[]>([]);
   /** 源內搜尋：輸入框內容與「已提交」的關鍵字分開 —— 打字過程中不該每個字都打上游 */
   const [keywordInput, setKeywordInput] = useState('');
   const [keyword, setKeyword] = useState('');
   const [filterSelections, setFilterSelections] = useState<MangaFilterSelection[]>([]);
   const [filtersError, setFiltersError] = useState('');
+  const {
+    observe: observeChapterSummary,
+    reset: resetChapterSummaryQueue,
+  } = useMangaChapterSummaryQueue({
+    onSummaries: (summaries) => {
+      setResult((prev) => ({
+        ...prev,
+        mangas: prev.mangas.map((item) => {
+          const summary = summaries[`${item.sourceId}+${item.id}`];
+          return summary
+            ? {
+                ...item,
+                latestChapterCount: summary.count,
+                latestChapterName: summary.latestName,
+              }
+            : item;
+        }),
+      }));
+    },
+  });
 
   /*
    * 換來源時「在 render 期」重設，而不是在 effect 裡。
@@ -236,6 +269,7 @@ export default function MangaRecommendPage() {
     if (append) {
       setLoadingMore(true);
     } else {
+      resetChapterSummaryQueue();
       setLoading(true);
       setError('');
     }
@@ -295,12 +329,37 @@ export default function MangaRecommendPage() {
         setLoadingMore(false);
       }
     }
-  }, [filterSelections, keyword, recommendType, sourceId]);
+  }, [filterSelections, keyword, recommendType, resetChapterSummaryQueue, sourceId]);
 
   const listHref = useMemo(
     () => mangaHomeHref(sourceId, recommendType),
     [recommendType, sourceId]
   );
+
+  const saveBrowseState = () => {
+    if (result.mangas.length > 300) return;
+    try {
+      sessionStorage.setItem(
+        MANGA_BROWSE_STATE_KEY,
+        JSON.stringify({
+          listHref,
+          keyword,
+          filterSelections,
+          page,
+          mangas: result.mangas,
+          hasNextPage: result.hasNextPage,
+          scrollY: Math.max(
+            window.scrollY,
+            document.documentElement.scrollTop,
+            document.body.scrollTop
+          ),
+          savedAt: Date.now(),
+        })
+      );
+    } catch {
+      // ignore unavailable or full session storage
+    }
+  };
 
   useEffect(() => {
     if (searchParams.get('q')?.trim()) return;
@@ -314,8 +373,86 @@ export default function MangaRecommendPage() {
   }, [listHref, router, searchParams, sourceId]);
 
   useEffect(() => {
+    let raw: string | null;
+    try {
+      raw = sessionStorage.getItem(MANGA_BROWSE_STATE_KEY);
+    } catch {
+      return;
+    }
+    if (!raw) return;
+    if (sources === null) return;
+
+    const cached = parseMangaBrowseState(raw);
+    if (
+      !cached ||
+      cached.listHref !== listHref ||
+      !sources.some((source) => source.id === sourceId) ||
+      cached.mangas.some((item) => item.sourceId !== sourceId)
+    ) {
+      sessionStorage.removeItem(MANGA_BROWSE_STATE_KEY);
+      window.scrollTo(0, 0);
+      document.documentElement.scrollTop = 0;
+      document.body.scrollTop = 0;
+      return;
+    }
+
+    pendingRestoreRef.current = {
+      keyword: cached.keyword,
+      filters: cached.filterSelections,
+    };
+    setKeywordInput(cached.keyword);
+    setKeyword(cached.keyword);
+    setFilterSelections(cached.filterSelections);
+    setPage(cached.page);
+    setResult({
+      mangas: cached.mangas,
+      hasNextPage: cached.hasNextPage,
+    });
+    setLoading(false);
+    setLoadingMore(false);
+    setError('');
+
+    let attempts = 0;
+    let rafId = 0;
+    const restoreScroll = () => {
+      attempts += 1;
+      if (
+        Math.max(
+          document.documentElement.scrollHeight,
+          document.body.scrollHeight
+        ) >=
+          cached.scrollY + window.innerHeight ||
+        attempts > 60
+      ) {
+        window.scrollTo(0, cached.scrollY);
+        document.documentElement.scrollTop = cached.scrollY;
+        document.body.scrollTop = cached.scrollY;
+        sessionStorage.removeItem(MANGA_BROWSE_STATE_KEY);
+        return;
+      }
+      rafId = window.requestAnimationFrame(restoreScroll);
+    };
+    rafId = window.requestAnimationFrame(restoreScroll);
+
+    return () => {
+      window.cancelAnimationFrame(rafId);
+    };
+  }, [listHref, sourceId, sources]);
+
+  useEffect(() => {
+    if (sources === null) return;
+    if (pendingRestoreRef.current) {
+      if (
+        keyword === pendingRestoreRef.current.keyword &&
+        filterSelections === pendingRestoreRef.current.filters
+      ) {
+        pendingRestoreRef.current = null;
+      }
+      return;
+    }
     recommendRequestRef.current += 1;
     if (!sourceId) {
+      resetChapterSummaryQueue();
       setResult({ mangas: [], hasNextPage: false });
       setPage(1);
       setLoading(false);
@@ -323,7 +460,7 @@ export default function MangaRecommendPage() {
       return;
     }
     void fetchRecommend(1, false);
-  }, [fetchRecommend, sourceId]);
+  }, [fetchRecommend, resetChapterSummaryQueue, sourceId, sources]);
 
   useEffect(() => {
     const node = loadMoreRef.current;
@@ -750,21 +887,36 @@ export default function MangaRecommendPage() {
               {result.mangas.map((item) => {
                 const key = `${item.sourceId}+${item.id}`;
                 return (
-                  <div key={key} className='space-y-2'>
-                    <MangaCard
-                      item={item}
-                      href={`/manga/detail?mangaId=${item.id}&sourceId=${item.sourceId}&title=${encodeURIComponent(item.title)}&cover=${encodeURIComponent(item.cover)}&sourceName=${encodeURIComponent(item.sourceName)}&description=${encodeURIComponent(item.description || '')}&author=${encodeURIComponent(item.author || '')}&status=${encodeURIComponent(item.status || '')}&returnTo=${encodeURIComponent(listHref)}`}
-                      subtitle={item.author || item.status || item.description}
-                      badge={
-                        keyword
-                          ? '搜尋'
-                          : filterSelections.length > 0
-                            ? '筛选'
-                            : recommendType === 'POPULAR'
-                              ? '热门'
-                              : '最新'
-                      }
-                    />
+                  <div
+                    key={key}
+                    ref={(element) => observeChapterSummary(element, item)}
+                    className='space-y-2'
+                  >
+                    <div onClick={saveBrowseState}>
+                      <MangaCard
+                        item={item}
+                        href={`/manga/detail?mangaId=${item.id}&sourceId=${item.sourceId}&title=${encodeURIComponent(item.title)}&cover=${encodeURIComponent(item.cover)}&sourceName=${encodeURIComponent(item.sourceName)}&description=${encodeURIComponent(item.description || '')}&author=${encodeURIComponent(item.author || '')}&status=${encodeURIComponent(item.status || '')}&returnTo=${encodeURIComponent(listHref)}`}
+                        subtitle={[
+                          item.latestChapterName
+                            ? `最新 ${item.latestChapterName}`
+                            : item.latestChapterCount
+                              ? `共 ${item.latestChapterCount} 话`
+                              : undefined,
+                          item.author || item.status || item.description,
+                        ]
+                          .filter(Boolean)
+                          .join(' · ')}
+                        badge={
+                          keyword
+                            ? '搜尋'
+                            : filterSelections.length > 0
+                              ? '筛选'
+                              : recommendType === 'POPULAR'
+                                ? '热门'
+                                : '最新'
+                        }
+                      />
+                    </div>
                     <button
                       onClick={() => toggleShelf(item)}
                       className='w-full rounded-2xl border border-gray-200 px-3 py-2 text-xs font-medium text-gray-700 transition hover:border-sky-500 hover:text-sky-600 dark:border-gray-700 dark:text-gray-200'

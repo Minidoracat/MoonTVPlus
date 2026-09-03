@@ -16,7 +16,7 @@ import type { MangaSourceHealth } from '@/lib/manga-source-health';
  */
 
 /** 結果的排列方式。arrival 是既有行為：誰先回應誰在前。 */
-export type MangaResultSort = 'arrival' | 'source' | 'title';
+export type MangaResultSort = 'arrival' | 'chapters' | 'source' | 'title';
 
 export interface MangaSourceBucket {
   sourceId: string;
@@ -250,7 +250,12 @@ export function selectVisibleResults(
    * 而下一次 append 又是基於被改過的陣列。
    */
   const sorted = [...filtered];
-  if (sortMode === 'title') {
+  if (sortMode === 'chapters') {
+    sorted.sort(
+      (a, b) =>
+        (b.latestChapterCount ?? -1) - (a.latestChapterCount ?? -1)
+    );
+  } else if (sortMode === 'title') {
     sorted.sort((a, b) => a.title.localeCompare(b.title, 'zh-Hant'));
   } else {
     // source：來源名排序，同來源內維持到達順序（Array#sort 自 ES2019 起穩定）

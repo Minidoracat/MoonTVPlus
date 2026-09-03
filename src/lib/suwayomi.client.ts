@@ -7,13 +7,12 @@ import {
   buildFilterChangeInputs,
   isMangaSourceAllowed,
   MANGA_DISABLE_ALL_SENTINEL,
-  matchesSourceLang,
   MangaChapter,
   MangaDetail,
   MangaFilterSelection,
   MangaRecommendResult,
-  MangaSearchFailure,
   MangaRecommendType,
+  MangaSearchFailure,
   MangaSearchItem,
   MangaSearchResult,
   MangaSearchSourceRef,
@@ -24,8 +23,10 @@ import {
   MangaSourceProbeOutcome,
   MangaSourceSearchOutcome,
   MangaSourceSearchResponse,
+  matchesSourceLang,
   SourceExternalUrl,
 } from './manga.types';
+import { orderMangaChapters } from './manga-reader';
 import {
   isSuwayomiUnknownFieldError,
   MangaSourceForbiddenError,
@@ -138,6 +139,69 @@ interface SearchDeadlineSentinel {
 }
 
 const SEARCH_DEADLINE: SearchDeadlineSentinel = { deadlineReached: true };
+
+interface ChapterSummary {
+  count: number;
+  latestName?: string;
+}
+
+interface ChapterSummaryCacheEntry {
+  at?: number;
+  failedAt?: number;
+  inflight?: Promise<ChapterSummary | undefined>;
+  value?: ChapterSummary;
+}
+
+const CHAPTER_SUMMARY_FRESH_MS = 6 * 3600_000;
+const CHAPTER_SUMMARY_TTL_MS = 10 * 60_000;
+const CHAPTER_SUMMARY_FAILURE_TTL_MS = 2 * 60_000;
+const CHAPTER_SUMMARY_CACHE_MAX = 500;
+const FETCH_CHAPTERS_CONCURRENCY = 4;
+const CHAPTER_SUMMARY_DEADLINE_MS = 12_000;
+const chapterSummaryCache = new Map<string, ChapterSummaryCacheEntry>();
+let activeFetchChapters = 0;
+const fetchChaptersQueue: Array<() => void> = [];
+
+function throwIfChapterSummaryAborted(signal: AbortSignal): void {
+  if (signal.aborted) {
+    throw signal.reason || new Error('章节摘要读取已取消');
+  }
+}
+
+async function withFetchChaptersSlot<T>(
+  signal: AbortSignal | undefined,
+  task: () => Promise<T>
+): Promise<T> {
+  if (signal?.aborted) throw signal.reason;
+
+  await new Promise<void>((resolve, reject) => {
+    const run = () => {
+      signal?.removeEventListener('abort', abort);
+      activeFetchChapters += 1;
+      resolve();
+    };
+    const abort = () => {
+      const index = fetchChaptersQueue.indexOf(run);
+      if (index >= 0) fetchChaptersQueue.splice(index, 1);
+      reject(signal?.reason);
+    };
+
+    if (activeFetchChapters < FETCH_CHAPTERS_CONCURRENCY) {
+      run();
+    } else {
+      fetchChaptersQueue.push(run);
+      signal?.addEventListener('abort', abort, { once: true });
+    }
+  });
+
+  try {
+    if (signal) throwIfChapterSummaryAborted(signal);
+    return await task();
+  } finally {
+    activeFetchChapters -= 1;
+    fetchChaptersQueue.shift()?.();
+  }
+}
 
 const suwayomiSessionCache = new Map<string, SuwayomiSessionCacheEntry>();
 /**
@@ -937,6 +1001,9 @@ ${fields}
             artist
             genre
             status
+            chaptersLastFetchedAt
+            chapters { totalCount }
+            latestUploadedChapter { name chapterNumber }
           }
         }
       }
@@ -954,6 +1021,12 @@ ${fields}
           artist?: string;
           genre?: string;
           status?: string;
+          chaptersLastFetchedAt?: number;
+          chapters?: { totalCount?: number };
+          latestUploadedChapter?: {
+            name?: string;
+            chapterNumber?: number;
+          } | null;
         }>;
       };
     }>(
@@ -991,6 +1064,14 @@ ${fields}
         artist: manga.artist,
         genre: manga.genre,
         status: normalizeMangaStatus(manga.status),
+        latestChapterCount:
+          typeof manga.chapters?.totalCount === 'number' &&
+          manga.chapters.totalCount > 0 &&
+          Date.now() - (manga.chaptersLastFetchedAt || 0) * 1000 <
+            CHAPTER_SUMMARY_FRESH_MS
+            ? manga.chapters.totalCount
+            : undefined,
+        latestChapterName: manga.latestUploadedChapter?.name || undefined,
       }));
 
     return { source, results };
@@ -1456,6 +1537,9 @@ ${fields}
         artist
         genre
         status
+        chaptersLastFetchedAt
+        chapters { totalCount }
+        latestUploadedChapter { name chapterNumber }
       }
 
       mutation GET_SOURCE_MANGAS_FETCH($input: FetchSourceMangaInput!) {
@@ -1519,6 +1603,12 @@ ${fields}
             artist?: string;
             genre?: string;
             status?: string;
+            chaptersLastFetchedAt?: number;
+            chapters?: { totalCount?: number };
+            latestUploadedChapter?: {
+              name?: string;
+              chapterNumber?: number;
+            } | null;
           }>;
         };
       }>(
@@ -1556,6 +1646,14 @@ ${fields}
         artist: manga.artist,
         genre: manga.genre,
         status: normalizeMangaStatus(manga.status),
+        latestChapterCount:
+          typeof manga.chapters?.totalCount === 'number' &&
+          manga.chapters.totalCount > 0 &&
+          Date.now() - (manga.chaptersLastFetchedAt || 0) * 1000 <
+            CHAPTER_SUMMARY_FRESH_MS
+            ? manga.chapters.totalCount
+            : undefined,
+        latestChapterName: manga.latestUploadedChapter?.name || undefined,
       }));
 
       // 順手把 mangaId→sourceId 填進快取：這裡已經知道每本的來源，
@@ -1603,6 +1701,179 @@ ${fields}
     return published;
   }
 
+  async getChapterSummaries(
+    items: Array<{ sourceId: string; mangaId: string }>
+  ): Promise<Record<string, ChapterSummary>> {
+    const controller = new AbortController();
+    const summaries: Record<string, ChapterSummary> = {};
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const deadline = new Promise<Record<string, ChapterSummary>>((resolve) => {
+      timer = setTimeout(() => {
+        controller.abort(new Error('章节摘要读取超时'));
+        resolve(summaries);
+      }, CHAPTER_SUMMARY_DEADLINE_MS);
+    });
+    const work = (async (): Promise<Record<string, ChapterSummary>> => {
+      const snapshot = await resolveSuwayomiConfig(this.options);
+      if (!snapshot.policyKnown) {
+        throw new MangaSourceForbiddenError(
+          '无法读取来源限制设置，已暂时拒绝访问'
+        );
+      }
+
+      const uniqueItems = Array.from(
+        new Map(
+          items.map((item) => [`${item.sourceId}+${item.mangaId}`, item])
+        ).values()
+      );
+      for (const sourceId of Array.from(
+        new Set(uniqueItems.map((item) => item.sourceId))
+      )) {
+        await this.assertSourceAllowed(sourceId);
+      }
+
+      const readCachedSummary = (
+        cacheKey: string
+      ): Promise<ChapterSummary | undefined> | null => {
+        const cached = chapterSummaryCache.get(cacheKey);
+        if (!cached) return null;
+        const now = Date.now();
+        if (
+          cached.inflight ||
+          (cached.value && cached.at && now - cached.at < CHAPTER_SUMMARY_TTL_MS) ||
+          (cached.failedAt &&
+            now - cached.failedAt < CHAPTER_SUMMARY_FAILURE_TTL_MS)
+        ) {
+          chapterSummaryCache.delete(cacheKey);
+          chapterSummaryCache.set(cacheKey, cached);
+          return cached.inflight ?? Promise.resolve(cached.value);
+        }
+        chapterSummaryCache.delete(cacheKey);
+        return null;
+      };
+
+      const loadSummary = async (
+        item: { sourceId: string; mangaId: string },
+        signal: AbortSignal
+      ): Promise<ChapterSummary | undefined> => {
+        const expectedCacheKey = `${snapshot.serverBaseUrl}::${item.sourceId}::${item.mangaId}`;
+        const cached = readCachedSummary(expectedCacheKey);
+        if (cached) return cached;
+
+        const { data } = await this.graphqlNodeQuery<{
+          manga?: {
+            sourceId?: string | number;
+            chaptersLastFetchedAt?: number;
+            chapters?: { totalCount?: number };
+            latestUploadedChapter?: { name?: string } | null;
+          };
+        }>(
+          (idType) => `
+            query GetMangaChapterSummary($id: ${idType}) {
+              manga(id: $id) {
+                sourceId
+                chaptersLastFetchedAt
+                chapters { totalCount }
+                latestUploadedChapter { name }
+              }
+            }
+          `,
+          item.mangaId,
+          'GetMangaChapterSummary',
+          snapshot,
+          signal
+        );
+        const manga = data.manga;
+        const trueSourceId = manga?.sourceId ? String(manga.sourceId) : '';
+        if (!manga || !trueSourceId) return undefined;
+        if (trueSourceId !== item.sourceId) return undefined;
+        await this.assertSourceAllowed(trueSourceId);
+
+        const cacheKey = `${snapshot.serverBaseUrl}::${trueSourceId}::${item.mangaId}`;
+        const populated = readCachedSummary(cacheKey);
+        if (populated) return populated;
+
+        const inflight = (async (): Promise<ChapterSummary> => {
+          throwIfChapterSummaryAborted(signal);
+          const totalCount = manga.chapters?.totalCount || 0;
+          if (
+            totalCount > 0 &&
+            Date.now() - (manga.chaptersLastFetchedAt || 0) * 1000 <
+              CHAPTER_SUMMARY_FRESH_MS
+          ) {
+            return {
+              count: totalCount,
+              latestName: manga.latestUploadedChapter?.name || undefined,
+            };
+          }
+
+          const chapters = await this.getChapters(item.mangaId, snapshot, signal);
+          throwIfChapterSummaryAborted(signal);
+          const ordered = orderMangaChapters(chapters);
+          return {
+            count: chapters.length,
+            latestName: ordered[ordered.length - 1]?.name,
+          };
+        })();
+        const published = inflight
+          .then((value) => {
+            if (chapterSummaryCache.get(cacheKey)?.inflight === published) {
+              chapterSummaryCache.delete(cacheKey);
+              chapterSummaryCache.set(cacheKey, { at: Date.now(), value });
+              SuwayomiClient.capMap(
+                chapterSummaryCache,
+                CHAPTER_SUMMARY_CACHE_MAX
+              );
+            }
+            return value;
+          })
+          .catch((error) => {
+            if (chapterSummaryCache.get(cacheKey)?.inflight === published) {
+              chapterSummaryCache.delete(cacheKey);
+              if (!(error instanceof MangaSourceForbiddenError)) {
+                chapterSummaryCache.set(cacheKey, { failedAt: Date.now() });
+                SuwayomiClient.capMap(
+                  chapterSummaryCache,
+                  CHAPTER_SUMMARY_CACHE_MAX
+                );
+              }
+            }
+            throw error;
+          });
+
+        chapterSummaryCache.set(cacheKey, { inflight: published });
+        SuwayomiClient.capMap(chapterSummaryCache, CHAPTER_SUMMARY_CACHE_MAX);
+        return published;
+      };
+
+      const pending = Promise.all(
+        uniqueItems.map(async (item) => {
+          if (controller.signal.aborted) return;
+          const resultKey = `${item.sourceId}+${item.mangaId}`;
+          try {
+            const value = await loadSummary(item, controller.signal);
+            if (value && !controller.signal.aborted) summaries[resultKey] = value;
+          } catch (error) {
+            if (error instanceof MangaSourceForbiddenError) throw error;
+            console.warn(
+              `[Suwayomi] chapter summary failed: ${item.sourceId}+${item.mangaId} - ${
+                error instanceof Error ? error.message : '未知错误'
+              }`
+            );
+          }
+        })
+      ).then(() => undefined);
+      await pending;
+      return summaries;
+    })();
+    try {
+      return await Promise.race([work, deadline]);
+    } finally {
+      clearTimeout(timer);
+      controller.abort();
+    }
+  }
+
   /**
    * realUrl 舊 schema 相容協商：manga / chapter 共用同一套三態規則。
    *
@@ -1633,7 +1904,8 @@ ${fields}
 
   async getChapters(
     mangaId: string,
-    resolvedConfig?: ResolvedSuwayomiConfig
+    resolvedConfig?: ResolvedSuwayomiConfig,
+    signal?: AbortSignal
   ): Promise<MangaChapter[]> {
     // 詳情路徑會把自己的 snapshot 傳進來：manga 與 chapters 必須來自同一台
     // 伺服器，中途 admin 換 ServerURL 會讓兩者拼成不同漫畫的混合體。
@@ -1679,27 +1951,30 @@ ${fields}
         buildMutation(realUrlField),
         { input: { mangaId: Number(mangaId) || mangaId } },
         'GET_MANGA_CHAPTERS_FETCH',
-        resolved
+        resolved,
+        signal
       );
 
-    const data = await this.negotiateRealUrlField(
-      `${resolved.serverBaseUrl}::chapter`,
-      '\n            realUrl',
-      run
-    );
+    return withFetchChaptersSlot(signal, async () => {
+      const data = await this.negotiateRealUrlField(
+        `${resolved.serverBaseUrl}::chapter`,
+        '\n            realUrl',
+        run
+      );
 
-    return (data.fetchChapters?.chapters || []).map((chapter) => ({
-      id: String(chapter.id),
-      mangaId: String(chapter.mangaId || mangaId),
-      name: chapter.name || '未命名章节',
-      chapterNumber: chapter.chapterNumber,
-      scanlator: chapter.scanlator,
-      isRead: chapter.isRead,
-      isDownloaded: chapter.isDownloaded,
-      pageCount: chapter.pageCount,
-      uploadDate: chapter.uploadDate,
-      realUrl: sanitizeSourceRealUrl(chapter.realUrl),
-    }));
+      return (data.fetchChapters?.chapters || []).map((chapter) => ({
+        id: String(chapter.id),
+        mangaId: String(chapter.mangaId || mangaId),
+        name: chapter.name || '未命名章节',
+        chapterNumber: chapter.chapterNumber,
+        scanlator: chapter.scanlator,
+        isRead: chapter.isRead,
+        isDownloaded: chapter.isDownloaded,
+        pageCount: chapter.pageCount,
+        uploadDate: chapter.uploadDate,
+        realUrl: sanitizeSourceRealUrl(chapter.realUrl),
+      }));
+    });
   }
 
   /**
@@ -1713,7 +1988,8 @@ ${fields}
     buildQuery: (idType: 'Int!' | 'LongString!') => string,
     id: string,
     operationName: string,
-    resolvedConfig?: ResolvedSuwayomiConfig
+    resolvedConfig?: ResolvedSuwayomiConfig,
+    signal?: AbortSignal
   ): Promise<{ data: T; resolved: ResolvedSuwayomiConfig }> {
     const resolved =
       resolvedConfig ?? (await resolveSuwayomiConfig(this.options));
@@ -1738,7 +2014,8 @@ ${fields}
           buildQuery(idType),
           { id: idType === 'Int!' ? asInt : id },
           operationName,
-          resolved
+          resolved,
+          signal
         );
         this.nodeIdGraphqlType.set(cacheKey, idType);
         return { data, resolved };

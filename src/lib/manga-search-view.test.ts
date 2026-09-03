@@ -375,6 +375,24 @@ describe('selectVisibleResults', () => {
     );
     expect(out.map((i) => i.title)).toEqual(['Apple', 'Mango', 'Zebra']);
   });
+
+  it('chapters 依話數降序，未知墊底且同值維持到達順序', () => {
+    const out = selectVisibleResults(
+      [
+        { ...item('s1', 'A', 'unknown', 'Unknown') },
+        { ...item('s2', 'B', 'five-a', 'Five A'), latestChapterCount: 5 },
+        { ...item('s3', 'C', 'two', 'Two'), latestChapterCount: 2 },
+        { ...item('s4', 'D', 'five-b', 'Five B'), latestChapterCount: 5 },
+      ],
+      { sourceFilter: [], sortMode: 'chapters' }
+    );
+    expect(out.map((i) => i.id)).toEqual([
+      'five-a',
+      'five-b',
+      'two',
+      'unknown',
+    ]);
+  });
 });
 
 describe('groupResultsBySource', () => {

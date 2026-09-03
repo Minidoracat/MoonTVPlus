@@ -59,6 +59,8 @@ export class D1Storage implements IStorage {
       'ALTER TABLE manga_shelf ADD COLUMN latest_chapter_name TEXT',
       'ALTER TABLE manga_shelf ADD COLUMN latest_chapter_count INTEGER',
       'ALTER TABLE manga_shelf ADD COLUMN unread_chapter_count INTEGER',
+      'ALTER TABLE manga_shelf ADD COLUMN update_time INTEGER',
+      'ALTER TABLE manga_shelf ADD COLUMN favorite INTEGER',
     ];
 
     for (const statement of statements) {
@@ -2220,6 +2222,8 @@ export class D1Storage implements IStorage {
           result.unread_chapter_count === undefined
             ? undefined
             : Number(result.unread_chapter_count),
+        updateTime: result.update_time ? Number(result.update_time) : undefined,
+        favorite: !!Number(result.favorite || 0),
       };
     } catch (err) {
       console.error('D1Storage.getMangaShelf error:', err);
@@ -2240,9 +2244,10 @@ export class D1Storage implements IStorage {
           INSERT INTO manga_shelf (
             username, key, source_id, source_name, manga_id, title, cover, save_time,
             description, author, status, last_chapter_id, last_chapter_name,
-            latest_chapter_id, latest_chapter_name, latest_chapter_count, unread_chapter_count
+            latest_chapter_id, latest_chapter_name, latest_chapter_count, unread_chapter_count,
+            update_time, favorite
           )
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           ON CONFLICT(username, key) DO UPDATE SET
             source_id = excluded.source_id,
             source_name = excluded.source_name,
@@ -2258,7 +2263,9 @@ export class D1Storage implements IStorage {
             latest_chapter_id = excluded.latest_chapter_id,
             latest_chapter_name = excluded.latest_chapter_name,
             latest_chapter_count = excluded.latest_chapter_count,
-            unread_chapter_count = excluded.unread_chapter_count
+            unread_chapter_count = excluded.unread_chapter_count,
+            update_time = excluded.update_time,
+            favorite = excluded.favorite
         `
         )
         .bind(
@@ -2278,7 +2285,9 @@ export class D1Storage implements IStorage {
           item.latestChapterId || null,
           item.latestChapterName || null,
           item.latestChapterCount ?? null,
-          item.unreadChapterCount ?? null
+          item.unreadChapterCount ?? null,
+          item.updateTime ?? null,
+          item.favorite ? 1 : 0
         )
         .run();
     } catch (err) {
@@ -2327,6 +2336,8 @@ export class D1Storage implements IStorage {
             row.unread_chapter_count === undefined
               ? undefined
               : Number(row.unread_chapter_count),
+          updateTime: row.update_time ? Number(row.update_time) : undefined,
+          favorite: !!Number(row.favorite || 0),
         };
       }
 

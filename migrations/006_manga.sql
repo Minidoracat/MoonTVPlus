@@ -16,6 +16,8 @@ CREATE TABLE IF NOT EXISTS manga_shelf (
   latest_chapter_name TEXT,
   latest_chapter_count INTEGER,
   unread_chapter_count INTEGER,
+  update_time INTEGER,
+  favorite INTEGER,
   PRIMARY KEY (username, key),
   FOREIGN KEY (username) REFERENCES users(username) ON DELETE CASCADE
 );

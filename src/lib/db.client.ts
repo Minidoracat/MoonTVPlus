@@ -1867,7 +1867,9 @@ export function saveMangaShelf(
   const key = generateStorageKey(sourceId, mangaId);
   if (STORAGE_TYPE !== 'localstorage') {
     const applyOptimistic = () => {
-      const cached = cacheManager.getCachedMangaShelf() || {};
+      const cached = cacheManager.getCachedMangaShelf();
+      // cache 過期時由呼叫端維持本地 optimistic state，避免單筆 cache 覆蓋完整書架。
+      if (!cached) return;
       cached[key] = item;
       cacheManager.cacheMangaShelf(cached);
       window.dispatchEvent(
@@ -1909,7 +1911,8 @@ export function deleteMangaShelf(
   const key = generateStorageKey(sourceId, mangaId);
   if (STORAGE_TYPE !== 'localstorage') {
     const applyOptimistic = () => {
-      const cached = cacheManager.getCachedMangaShelf() || {};
+      const cached = cacheManager.getCachedMangaShelf();
+      if (!cached) return;
       delete cached[key];
       cacheManager.cacheMangaShelf(cached);
       window.dispatchEvent(

@@ -153,6 +153,8 @@ export default function MangaLayout({ children }: MangaLayoutProps) {
   return (
     <div
       className={`min-h-screen ${
+        isReadingPage || readerImmersive ? '' : 'touch-manipulation'
+      } ${
         readerImmersive
           ? 'bg-black text-white'
           : 'bg-gray-50 text-gray-900 dark:bg-black dark:text-gray-100'

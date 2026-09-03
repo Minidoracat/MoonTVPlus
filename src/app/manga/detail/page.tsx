@@ -178,7 +178,10 @@ export default function MangaDetailPage() {
     };
 
     // 只后台清零，当前页保留进入时看到的更新提示，刷新后再消失。
-    saveMangaShelf(sourceId, mangaId, nextItem).catch(() => undefined);
+    saveMangaShelf(sourceId, mangaId, nextItem).catch((err) => {
+      clearedOnOpenRef.current = null;
+      console.error('清除未读标记失败', err);
+    });
   }, [chronologicalChapters.length, detail, key, latestChapter, mangaId, shelf, sourceId]);
 
   const toggleShelf = async () => {

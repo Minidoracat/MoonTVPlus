@@ -1144,13 +1144,7 @@ export default function MangaReadPage() {
     const key = `${sourceId}+${mangaId}`;
     const orderedChapters = orderMangaChapters(ownedMangaDetail.chapters || []);
     const latestChapter = orderedChapters[orderedChapters.length - 1];
-    const currentChapterIndex = orderedChapters.findIndex(
-      (chapter) => chapter.id === chapterId
-    );
-    const nextUnreadChapterCount =
-      currentChapterIndex >= 0
-        ? Math.max(orderedChapters.length - currentChapterIndex - 1, 0)
-        : 0;
+    // 未读数只代表「cron 侦测到的新章节」；进入阅读器即视为已看过更新，故归零。
 
     const clearPendingShelfSync = () => {
       const pending = shelfSyncAttemptRef.current;
@@ -1171,7 +1165,7 @@ export default function MangaReadPage() {
       latestChapterId: latestChapter?.id || item.latestChapterId,
       latestChapterName: latestChapter?.name || item.latestChapterName,
       latestChapterCount: orderedChapters.length || item.latestChapterCount,
-      unreadChapterCount: nextUnreadChapterCount,
+      unreadChapterCount: 0,
     };
     const changed =
       nextItem.lastChapterId !== item.lastChapterId ||
@@ -1362,13 +1356,6 @@ export default function MangaReadPage() {
   const sourceCommentsUrl =
     chapterList.find((chapter) => chapter.id === chapterId)?.realUrl ||
     ownedMangaDetail?.realUrl;
-  const readerChapterIndex = chapterList.findIndex(
-    (chapter) => chapter.id === chapterId
-  );
-  const readerUnreadChapterCount =
-    readerChapterIndex >= 0
-      ? Math.max(chapterList.length - readerChapterIndex - 1, 0)
-      : 0;
   const shelfKey = `${sourceId}+${mangaId}`;
   const inShelf = Boolean(shelf[shelfKey]);
   const toggleReaderShelf = useCallback(async () => {
@@ -1389,7 +1376,7 @@ export default function MangaReadPage() {
           buildMangaShelfItem({
             detail: ownedMangaDetail,
             currentChapter: { id: chapterId, name: chapterName },
-            unreadChapterCount: readerUnreadChapterCount,
+            unreadChapterCount: 0,
           })
         );
       }
@@ -1403,7 +1390,6 @@ export default function MangaReadPage() {
     chapterName,
     mangaId,
     ownedMangaDetail,
-    readerUnreadChapterCount,
     shelf,
     shelfKey,
     shelfLoaded,

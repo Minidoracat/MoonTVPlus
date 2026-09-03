@@ -60,6 +60,8 @@ export class PostgresStorage implements IStorage {
       'ALTER TABLE manga_shelf ADD COLUMN IF NOT EXISTS latest_chapter_name TEXT',
       'ALTER TABLE manga_shelf ADD COLUMN IF NOT EXISTS latest_chapter_count INTEGER',
       'ALTER TABLE manga_shelf ADD COLUMN IF NOT EXISTS unread_chapter_count INTEGER',
+      'ALTER TABLE manga_shelf ADD COLUMN IF NOT EXISTS update_time BIGINT',
+      'ALTER TABLE manga_shelf ADD COLUMN IF NOT EXISTS favorite INTEGER',
     ];
 
     for (const statement of statements) {
@@ -2201,6 +2203,8 @@ export class PostgresStorage implements IStorage {
           result.unread_chapter_count === undefined
             ? undefined
             : Number(result.unread_chapter_count),
+        updateTime: result.update_time ? Number(result.update_time) : undefined,
+        favorite: !!Number(result.favorite || 0),
       };
     } catch (err) {
       console.error('PostgresStorage.getMangaShelf error:', err);
@@ -2221,9 +2225,10 @@ export class PostgresStorage implements IStorage {
           INSERT INTO manga_shelf (
             username, key, source_id, source_name, manga_id, title, cover, save_time,
             description, author, status, last_chapter_id, last_chapter_name,
-            latest_chapter_id, latest_chapter_name, latest_chapter_count, unread_chapter_count
+            latest_chapter_id, latest_chapter_name, latest_chapter_count, unread_chapter_count,
+            update_time, favorite
           )
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
           ON CONFLICT (username, key) DO UPDATE SET
             source_id = EXCLUDED.source_id,
             source_name = EXCLUDED.source_name,
@@ -2239,7 +2244,9 @@ export class PostgresStorage implements IStorage {
             latest_chapter_id = EXCLUDED.latest_chapter_id,
             latest_chapter_name = EXCLUDED.latest_chapter_name,
             latest_chapter_count = EXCLUDED.latest_chapter_count,
-            unread_chapter_count = EXCLUDED.unread_chapter_count
+            unread_chapter_count = EXCLUDED.unread_chapter_count,
+            update_time = EXCLUDED.update_time,
+            favorite = EXCLUDED.favorite
         `
         )
         .bind(
@@ -2259,7 +2266,9 @@ export class PostgresStorage implements IStorage {
           item.latestChapterId || null,
           item.latestChapterName || null,
           item.latestChapterCount ?? null,
-          item.unreadChapterCount ?? null
+          item.unreadChapterCount ?? null,
+          item.updateTime ?? null,
+          item.favorite ? 1 : 0
         )
         .run();
     } catch (err) {
@@ -2308,6 +2317,8 @@ export class PostgresStorage implements IStorage {
             row.unread_chapter_count === undefined
               ? undefined
               : Number(row.unread_chapter_count),
+          updateTime: row.update_time ? Number(row.update_time) : undefined,
+          favorite: !!Number(row.favorite || 0),
         };
       }
 

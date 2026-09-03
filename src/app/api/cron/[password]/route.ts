@@ -696,6 +696,7 @@ async function refreshRecordAndFavorites() {
               latestChapterId,
               latestChapterName,
               latestChapterCount,
+              updateTime: hasNewChapters ? now : item.updateTime,
               unreadChapterCount: nextUnreadChapterCount,
             };
 

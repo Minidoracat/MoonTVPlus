@@ -10,12 +10,13 @@ import ProxyImage from './ProxyImage';
 interface MangaCardProps {
   item: MangaSearchItem | MangaShelfItem | MangaReadRecord;
   href: string;
+  className?: string;
   subtitle?: string;
   badge?: string;
   updateCount?: number;
 }
 
-export default function MangaCard({ item, href, subtitle, badge, updateCount }: MangaCardProps) {
+export default function MangaCard({ item, href, className, subtitle, badge, updateCount }: MangaCardProps) {
   const sourceName = useMemo(() => {
     if ('sourceName' in item) return item.sourceName;
     return '';
@@ -24,7 +25,7 @@ export default function MangaCard({ item, href, subtitle, badge, updateCount }: 
   return (
     <Link
       href={href}
-      className='group overflow-hidden rounded-2xl border border-gray-200/70 bg-white/90 shadow-sm transition hover:-translate-y-1 hover:shadow-xl dark:border-gray-700 dark:bg-gray-900/80'
+      className={`group overflow-hidden rounded-2xl border border-gray-200/70 bg-white/90 shadow-sm transition hover:-translate-y-1 hover:shadow-xl dark:border-gray-700 dark:bg-gray-900/80 ${className ?? ''}`}
     >
       <div className='relative aspect-[3/4] overflow-hidden bg-gray-100 dark:bg-gray-800'>
         {item.cover ? (
@@ -41,7 +42,7 @@ export default function MangaCard({ item, href, subtitle, badge, updateCount }: 
             {badge}
           </span>
         )}
-        {updateCount && updateCount > 0 && (
+        {(updateCount ?? 0) > 0 && (
           <div
             style={{
               position: 'absolute',
@@ -49,8 +50,8 @@ export default function MangaCard({ item, href, subtitle, badge, updateCount }: 
               right: '10px',
               zIndex: 20,
               pointerEvents: 'none',
-              width: '28px',
-              height: '28px',
+              width: 'auto',
+              height: '24px',
             }}
           >
             <div
@@ -73,8 +74,10 @@ export default function MangaCard({ item, href, subtitle, badge, updateCount }: 
             />
             <div
               style={{
-                position: 'absolute',
-                inset: '0',
+                position: 'relative',
+                height: '100%',
+                padding: '0 8px',
+                whiteSpace: 'nowrap',
                 borderRadius: '9999px',
                 background:
                   'linear-gradient(to bottom right, rgb(14 165 233), rgb(2 132 199))',
@@ -89,7 +92,7 @@ export default function MangaCard({ item, href, subtitle, badge, updateCount }: 
                 animation: 'badge-scale 2s ease-in-out infinite',
               }}
             >
-              +{updateCount}
+              未读 +{updateCount}
             </div>
           </div>
         )}

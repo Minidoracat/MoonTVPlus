@@ -16,6 +16,8 @@ CREATE TABLE IF NOT EXISTS manga_shelf (
   latest_chapter_name TEXT,
   latest_chapter_count INTEGER,
   unread_chapter_count INTEGER,
+  update_time BIGINT,
+  favorite INTEGER,
   PRIMARY KEY (username, key),
   FOREIGN KEY (username) REFERENCES users(username) ON DELETE CASCADE
 );
@@ -26,6 +28,8 @@ ALTER TABLE manga_shelf ADD COLUMN IF NOT EXISTS latest_chapter_id TEXT;
 ALTER TABLE manga_shelf ADD COLUMN IF NOT EXISTS latest_chapter_name TEXT;
 ALTER TABLE manga_shelf ADD COLUMN IF NOT EXISTS latest_chapter_count INTEGER;
 ALTER TABLE manga_shelf ADD COLUMN IF NOT EXISTS unread_chapter_count INTEGER;
+ALTER TABLE manga_shelf ADD COLUMN IF NOT EXISTS update_time BIGINT;
+ALTER TABLE manga_shelf ADD COLUMN IF NOT EXISTS favorite INTEGER;
 
 CREATE TABLE IF NOT EXISTS manga_read_records (
   username TEXT NOT NULL,

@@ -538,6 +538,9 @@ export interface MangaShelfItem {
   latestChapterName?: string;
   latestChapterCount?: number;
   unreadChapterCount?: number;
+  /** 最近一次检测到新章节的时间 */
+  updateTime?: number;
+  favorite?: boolean;
 }
 
 export interface MangaReadRecord {

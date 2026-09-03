@@ -23,6 +23,7 @@ export function useMangaChapterSummaryQueue({
   const observedElementsRef = useRef(new Map<string, Element>());
   const queuedRef = useRef(new Map<string, QueueItem>());
   const requestedRef = useRef(new Set<string>());
+  const failedOnceRef = useRef(new Set<string>());
   const timerRef = useRef<number | null>(null);
   const controllerRef = useRef<AbortController | null>(null);
   const generationRef = useRef(0);
@@ -53,10 +54,25 @@ export function useMangaChapterSummaryQueue({
     )
       .then((summaries) => {
         if (!controller.signal.aborted && generation === generationRef.current) {
+          for (const item of batch) {
+            const key = `${item.sourceId}+${item.id}`;
+            if (summaries[key] || failedOnceRef.current.has(key)) continue;
+            failedOnceRef.current.add(key);
+            requestedRef.current.delete(key);
+          }
           onSummariesRef.current(summaries);
         }
       })
-      .catch(() => undefined)
+      .catch(() => {
+        if (controller.signal.aborted || generation !== generationRef.current)
+          return;
+        for (const item of batch) {
+          const key = `${item.sourceId}+${item.id}`;
+          if (failedOnceRef.current.has(key)) continue;
+          failedOnceRef.current.add(key);
+          requestedRef.current.delete(key);
+        }
+      })
       .finally(() => {
         if (controllerRef.current === controller) controllerRef.current = null;
         if (generation === generationRef.current && queuedRef.current.size > 0) {
@@ -93,6 +109,7 @@ export function useMangaChapterSummaryQueue({
     controllerRef.current = null;
     queuedRef.current.clear();
     requestedRef.current.clear();
+    failedOnceRef.current.clear();
     observerRef.current?.disconnect();
     observedItemsRef.current.clear();
     observedElementsRef.current.clear();

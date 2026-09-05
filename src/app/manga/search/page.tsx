@@ -204,7 +204,9 @@ export default function MangaSearchPage() {
   const [sourcesReady, setSourcesReady] = useState(false);
   /** 空陣列 = 不篩選（顯示全部來源的結果） */
   const [sourceFilter, setSourceFilter] = useState<string[]>([]);
-  const [sortMode, setSortMode] = useState<MangaResultSort>('chapters');
+  const [sortMode, setSortMode] = useState<MangaResultSort>('relevance');
+  /** 目前這批結果對應的關鍵字；relevance 排序拿它比對，不用輸入框的即時值 */
+  const [searchedQuery, setSearchedQuery] = useState('');
   const [groupBySource, setGroupBySource] = useState(false);
   const [showFailedDetail, setShowFailedDetail] = useState(false);
   /** 實際 render 的卡片數上限；資料 state 仍保留全部結果 */
@@ -666,6 +668,7 @@ export default function MangaSearchPage() {
       // 那會讓剛被停用的來源內容短暫顯示出來，等同繞過授權。
       resetChapterSummaryQueue();
       setResults([]);
+      setSearchedQuery(trimmedQuery);
 
       const currentFluidSearch = readFluidSearchSetting();
 
@@ -889,8 +892,9 @@ export default function MangaSearchPage() {
         sourceFilter,
         sortMode,
         creatorFilter,
+        query: searchedQuery,
       }),
-    [results, sourceFilter, sortMode, creatorFilter]
+    [results, sourceFilter, sortMode, creatorFilter, searchedQuery]
   );
 
   const groupedSourceBuckets = useMemo(
@@ -1124,6 +1128,7 @@ export default function MangaSearchPage() {
                     }
                     className='min-h-9 cursor-pointer rounded-xl border border-gray-200 bg-gray-50 px-2 text-xs text-gray-900 outline-none transition focus:border-sky-500 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-100'
                   >
+                    <option value='relevance'>相關度</option>
                     <option value='chapters'>话数</option>
                     <option value='arrival'>來源回應順序</option>
                     <option value='source'>來源名稱</option>

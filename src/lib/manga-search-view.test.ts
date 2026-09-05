@@ -44,6 +44,26 @@ const SLOW_FIRST: MangaSearchItem[] = [
   item('s3', '禁漫天堂', 'c1', 'Zebra'),
 ];
 
+describe('相關度排序', () => {
+  it('完全同名 > 續篇（前綴）> 同人（包含）> 簡繁一字之差 > 熱門榜雜訊，話數不能翻盤', () => {
+    const results: MangaSearchItem[] = [
+      { ...item('s2', '包子漫画', 'x1', '死灵法师！我即是天灾'), latestChapterCount: 900 },
+      item('s1', 'NoyAcg', 'x2', '徹夜之歌'),
+      { ...item('s4', 'JComic', 'x4', '[Seya] 彻夜之歌 貂蝉'), latestChapterCount: 50 },
+      { ...item('s5', '喜漫', 'x5', '彻夜之歌 乐园篇'), latestChapterCount: 40 },
+      { ...item('s3', '瓜子漫画', 'x3', '彻夜之歌'), latestChapterCount: 10 },
+    ];
+    const visible = selectVisibleResults(results, {
+      sourceFilter: [],
+      sortMode: 'relevance',
+      query: '彻夜之歌',
+    });
+    expect(visible.map((r) => r.id)).toEqual(['x3', 'x5', 'x4', 'x2', 'x1']);
+    // 不得就地改動 state
+    expect(results.map((r) => r.id)).toEqual(['x1', 'x2', 'x4', 'x5', 'x3']);
+  });
+});
+
 describe('作者／绘师解析與篩選', () => {
   it('合併 author / artist，拆常見分隔符並去重', () => {
     const manga = {

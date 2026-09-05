@@ -130,6 +130,19 @@ html:not(.dark) body {
   }
 }
 
+/*
+ * iOS Safari 對 font-size < 16px 的輸入框 focus 時會自動放大整頁。
+ * 只鎖 touch 裝置，桌面 text-sm / text-xs 的輸入框不受影響。
+ * !important：要壓過 Tailwind 的 text-xs/text-sm utility。
+ */
+@media (hover: none) and (pointer: coarse) {
+  input:not([type='checkbox']):not([type='radio']):not([type='range']),
+  select,
+  textarea {
+    font-size: max(16px, 1em) !important;
+  }
+}
+
 /* 隐藏所有滚动条（兼容 WebKit、Firefox、IE/Edge） */
 * {
   -ms-overflow-style: none; /* IE & Edge */

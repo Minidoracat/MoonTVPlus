@@ -16,7 +16,36 @@ import type { MangaSourceHealth } from '@/lib/manga-source-health';
  */
 
 /** 結果的排列方式。arrival 是既有行為：誰先回應誰在前。 */
-export type MangaResultSort = 'arrival' | 'chapters' | 'source' | 'title';
+export type MangaResultSort =
+  | 'relevance'
+  | 'arrival'
+  | 'chapters'
+  | 'source'
+  | 'title';
+
+/** 比對用：小寫、去掉空白與標點。不做簡繁轉換 —— 靠字元交集吃掉零星差異 */
+function normalizeMatchText(text: string): string {
+  return text.toLowerCase().replace(/[\s\p{P}\p{S}]+/gu, '');
+}
+
+/**
+ * 標題與查詢的相關度 0..1：完全相同 > 前綴 > 包含 > 「查詢字元出現在標題的比例」。
+ * 最後一級讓 `彻夜之歌`／`徹夜之歌` 這種只差一兩個簡繁字的仍排在雜訊前面。
+ * 上游來源（尤其包子漫画）查不到時會回整頁熱門榜，這層排序就是把那些壓到後面。
+ */
+export function scoreMangaRelevance(title: string, query: string): number {
+  const q = normalizeMatchText(query);
+  if (!q) return 0;
+  const t = normalizeMatchText(title);
+  if (t === q) return 1;
+  if (t.startsWith(q)) return 0.95;
+  if (t.includes(q)) return 0.9;
+  const chars = new Set(t);
+  let hit = 0;
+  for (const ch of q) if (chars.has(ch)) hit += 1;
+  // ponytail: 純字元交集，不管順序；要更準再上 opencc 簡繁正規化或 bigram
+  return (hit / q.length) * 0.8;
+}
 
 export interface MangaSourceBucket {
   sourceId: string;
@@ -233,9 +262,11 @@ export function selectVisibleResults(
     sourceFilter: string[];
     sortMode: MangaResultSort;
     creatorFilter?: MangaCreatorFilter | null;
+    /** relevance 排序時比對的查詢字串 */
+    query?: string;
   }
 ): MangaSearchItem[] {
-  const { sourceFilter, sortMode, creatorFilter } = options;
+  const { sourceFilter, sortMode, creatorFilter, query = '' } = options;
   const allowed = sourceFilter.length > 0 ? new Set(sourceFilter) : null;
   const sourceFiltered = allowed
     ? results.filter((item) => allowed.has(item.sourceId))
@@ -250,7 +281,16 @@ export function selectVisibleResults(
    * 而下一次 append 又是基於被改過的陣列。
    */
   const sorted = [...filtered];
-  if (sortMode === 'chapters') {
+  if (sortMode === 'relevance') {
+    // 同分時話數多的在前，再同分維持到達順序
+    const score = new Map<MangaSearchItem, number>();
+    for (const item of sorted) score.set(item, scoreMangaRelevance(item.title, query));
+    sorted.sort(
+      (a, b) =>
+        (score.get(b) ?? 0) - (score.get(a) ?? 0) ||
+        (b.latestChapterCount ?? -1) - (a.latestChapterCount ?? -1)
+    );
+  } else if (sortMode === 'chapters') {
     sorted.sort(
       (a, b) =>
         (b.latestChapterCount ?? -1) - (a.latestChapterCount ?? -1)

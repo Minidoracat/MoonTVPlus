@@ -31,18 +31,27 @@ export default function TopProgressBar() {
     const originalBack = router.back;
     const originalForward = router.forward;
 
+    /**
+     * 路徑會變才顯示進度條（/play、/live 例外：參數變化也顯示）。
+     * 導航中途折返回目前這頁（載入慢時按退出／返回）：Next 會取消前一次導航，
+     * pathname 不會變、下面靠 pathname 的 effect 永遠不會 done，只能在這裡收掉。
+     */
+    const beginNavigation = (targetPathname: string, showOnParamChange = false) => {
+      if (showOnParamChange || targetPathname !== previousPathnameRef.current) {
+        isNavigatingRef.current = true;
+        NProgress.start();
+      } else if (isNavigatingRef.current) {
+        isNavigatingRef.current = false;
+        NProgress.done();
+      }
+    };
+
     // 拦截 router.push
     router.push = function (...args: Parameters<typeof originalPush>) {
       const targetUrl = args[0] as string;
       const targetPathname = new URL(targetUrl, window.location.href).pathname;
       const currentPathname = window.location.pathname;
-
-      // /play 和 /live 页面：参数变化也显示进度条
-      // 其他页面：仅路径变化时显示进度条
-      if (currentPathname === '/play' || currentPathname === '/live' || targetPathname !== previousPathnameRef.current) {
-        isNavigatingRef.current = true;
-        NProgress.start();
-      }
+      beginNavigation(targetPathname, currentPathname === '/play' || currentPathname === '/live');
       return originalPush.apply(this, args);
     };
 
@@ -51,13 +60,7 @@ export default function TopProgressBar() {
       const targetUrl = args[0] as string;
       const targetPathname = new URL(targetUrl, window.location.href).pathname;
       const currentPathname = window.location.pathname;
-
-      // /play 和 /live 页面：参数变化也显示进度条
-      // 其他页面：仅路径变化时显示进度条
-      if (currentPathname === '/play' || currentPathname === '/live' || targetPathname !== previousPathnameRef.current) {
-        isNavigatingRef.current = true;
-        NProgress.start();
-      }
+      beginNavigation(targetPathname, currentPathname === '/play' || currentPathname === '/live');
       return originalReplace.apply(this, args);
     };
 
@@ -77,33 +80,22 @@ export default function TopProgressBar() {
 
     // 监听所有链接点击事件
     const handleAnchorClick = (event: MouseEvent) => {
-      const target = event.target as HTMLElement;
-      const anchor = target.closest('a');
-
-      if (anchor && anchor.href) {
-        const currentUrl = window.location.href;
-        const targetUrl = anchor.href;
-
-        if (targetUrl !== currentUrl && !anchor.target && !anchor.download) {
-          const currentOrigin = window.location.origin;
-          try {
-            const targetOrigin = new URL(targetUrl, currentOrigin).origin;
-            const targetPathname = new URL(targetUrl, currentOrigin).pathname;
-            if (currentOrigin === targetOrigin && targetPathname !== previousPathnameRef.current) {
-              isNavigatingRef.current = true;
-              NProgress.start();
-            }
-          } catch (e) {
-            // URL 解析失败，忽略
-          }
-        }
+      const anchor = (event.target as HTMLElement).closest('a');
+      if (!anchor?.href || anchor.target || anchor.download) return;
+      let target: URL;
+      try {
+        target = new URL(anchor.href, window.location.origin);
+      } catch {
+        return;
       }
+      if (target.origin !== window.location.origin) return;
+      beginNavigation(target.pathname);
     };
 
-    // 监听浏览器前进后退按钮
+    // 监听浏览器前进后退按钮（popstate 觸發時 location 已是目標頁）
     const handlePopState = () => {
-      isNavigatingRef.current = true;
-      NProgress.start();
+      const { pathname } = window.location;
+      beginNavigation(pathname, pathname === '/play' || pathname === '/live');
     };
 
     document.addEventListener('click', handleAnchorClick, true);

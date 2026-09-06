@@ -78,8 +78,10 @@ export default function TopProgressBar() {
       return originalForward.apply(this);
     };
 
-    // 监听所有链接点击事件
+    // 监听所有链接点击事件（只負責跨路徑的起始提示）
     const handleAnchorClick = (event: MouseEvent) => {
+      // 修飾鍵／中鍵是另開分頁，本頁不會導航，起了進度條就永遠收不掉
+      if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
       const anchor = (event.target as HTMLElement).closest('a');
       if (!anchor?.href || anchor.target || anchor.download) return;
       let target: URL;
@@ -89,7 +91,9 @@ export default function TopProgressBar() {
         return;
       }
       if (target.origin !== window.location.origin) return;
-      beginNavigation(target.pathname);
+      // capture 階段看不到 React onClick 的 preventDefault，同路徑的點擊不一定真的導航；
+      // 折返回目前這頁的 done() 交給 router.push／replace／popstate（Next Link 走 push）
+      if (target.pathname !== previousPathnameRef.current) beginNavigation(target.pathname);
     };
 
     // 监听浏览器前进后退按钮（popstate 觸發時 location 已是目標頁）

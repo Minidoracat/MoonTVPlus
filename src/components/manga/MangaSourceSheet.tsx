@@ -103,7 +103,8 @@ export default function MangaSourceSheet({
     return () => {
       document.body.style.overflow = previous;
       window.removeEventListener('keydown', onKeyDown);
-      triggerRef.current?.focus();
+      // trigger 在頁面頂端；不加 preventScroll 會把已捲到下方的頁面拉回頂端
+      triggerRef.current?.focus({ preventScroll: true });
     };
   }, [open, triggerRef]);
 

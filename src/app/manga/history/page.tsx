@@ -28,33 +28,23 @@ export default function MangaHistoryPage() {
   const [history, setHistory] = useState<Record<string, MangaReadRecord>>({});
   const [loading, setLoading] = useState(true);
   const [shelf, setShelf] = useState<Record<string, MangaShelfItem>>({});
-  const [displayAll, setDisplayAll] = useState(false);
-
-  const updateHistory = (nextHistory: Record<string, MangaReadRecord>) => {
-    const sortedCount = Object.keys(nextHistory).length;
-    setHistory(nextHistory);
-    setDisplayAll(sortedCount <= 10);
-    if (sortedCount > 10) {
-      setTimeout(() => setDisplayAll(true), 0);
-    }
-  };
 
   useEffect(() => {
     const cachedHistory = getCachedMangaReadRecordsSnapshot();
     if (Object.keys(cachedHistory).length > 0) {
-      updateHistory(cachedHistory);
+      setHistory(cachedHistory);
       setLoading(false);
     }
 
     Promise.all([getAllMangaReadRecords(), getAllMangaShelf()])
       .then(([historyData, shelfData]) => {
-        updateHistory(historyData);
+        setHistory(historyData);
         setShelf(shelfData);
       })
       .catch(() => undefined)
       .finally(() => setLoading(false));
 
-    const unsubscribeHistory = subscribeToDataUpdates<Record<string, MangaReadRecord>>('mangaHistoryUpdated', updateHistory);
+    const unsubscribeHistory = subscribeToDataUpdates<Record<string, MangaReadRecord>>('mangaHistoryUpdated', setHistory);
     const unsubscribeShelf = subscribeToDataUpdates<Record<string, MangaShelfItem>>('mangaShelfUpdated', setShelf);
 
     return () => {
@@ -67,11 +57,6 @@ export default function MangaHistoryPage() {
     () => Object.entries(history).sort(([, a], [, b]) => b.saveTime - a.saveTime),
     [history]
   );
-  const visibleHistoryList = useMemo(
-    () => (displayAll ? historyList : historyList.slice(0, 10)),
-    [displayAll, historyList]
-  );
-
 
   const toggleShelf = async (item: MangaReadRecord) => {
     const key = `${item.sourceId}+${item.mangaId}`;
@@ -103,11 +88,11 @@ export default function MangaHistoryPage() {
   const deleteHistory = async (item: MangaReadRecord) => {
     const key = `${item.sourceId}+${item.mangaId}`;
     await deleteMangaReadRecord(item.sourceId, item.mangaId);
-    updateHistory((() => {
-      const next = { ...history };
+    setHistory((prev) => {
+      const next = { ...prev };
       delete next[key];
       return next;
-    })());
+    });
   };
 
   return (
@@ -123,7 +108,7 @@ export default function MangaHistoryPage() {
         </div>
       ) : (
         <div className='grid grid-cols-2 gap-4 md:grid-cols-4 xl:grid-cols-6'>
-          {visibleHistoryList.map(([key, item]) => (
+          {historyList.map(([key, item]) => (
             <MangaHistoryCard
               key={key}
               item={item}

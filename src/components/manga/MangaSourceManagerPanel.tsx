@@ -52,6 +52,17 @@ export function formatRelativeTime(at: number): string {
 }
 
 /**
+ * Suwayomi 的 GraphQL 錯誤通常帶 `Exception while fetching data (/fetchX) : ` 樣板前綴，
+ * 會把真正的原因（No search、憑證失敗…）擠出可視範圍；顯示時剝掉，沒有前綴就原樣。
+ */
+function shortProbeError(err: string): string {
+  return err
+    .split('\n')[0]
+    .replace(/^Exception while fetching data \([^)]*\)\s*:\s*/, '')
+    .trim();
+}
+
+/**
  * 單一能力的狀態燈。
  *
  * 熱門與搜尋分開顯示，因為它們會各自壞掉：實測有來源熱門正常卻搜不到
@@ -113,7 +124,7 @@ function SourceStatusBadge({ probe }: { probe: AdminMangaSourceProbe | null }) {
 
   return (
     <span
-      className='inline-flex shrink-0 flex-wrap items-center justify-end gap-1'
+      className='inline-flex shrink-0 flex-wrap items-center gap-1'
       title={`測試於 ${new Date(probe.testedAt).toLocaleString('zh-TW')}`}
     >
       <CapabilityBadge label='熱門' outcome={probe.popular} />
@@ -125,6 +136,8 @@ function SourceStatusBadge({ probe }: { probe: AdminMangaSourceProbe | null }) {
 interface MangaSourceManagerPanelProps {
   /** Suwayomi 未啟用時只顯示提示，不去打 API */
   suwayomiEnabled?: boolean;
+  /** 嵌在已有標題的 dialog 時關掉面板自己的標題，避免上下兩個「漫畫源管理」 */
+  showHeading?: boolean;
 }
 
 /**
@@ -135,6 +148,7 @@ interface MangaSourceManagerPanelProps {
  */
 export default function MangaSourceManagerPanel({
   suwayomiEnabled = true,
+  showHeading = true,
 }: MangaSourceManagerPanelProps) {
   const [sources, setSources] = useState<AdminMangaSource[]>([]);
   const [loaded, setLoaded] = useState(false);
@@ -375,9 +389,11 @@ export default function MangaSourceManagerPanel({
     <div className='space-y-4'>
       <div className='flex flex-wrap items-center justify-between gap-3'>
         <div>
-          <h4 className='text-sm font-semibold text-gray-900 dark:text-gray-100'>
-            漫畫源管理
-          </h4>
+          {showHeading && (
+            <h4 className='text-sm font-semibold text-gray-900 dark:text-gray-100'>
+              漫畫源管理
+            </h4>
+          )}
           <p className='mt-0.5 text-xs text-gray-500 dark:text-gray-400'>
             已啟用 {enabledCount} / {sources.length} 個；停用的來源對一般使用者
             完全不可見（含詳情、章節與圖片）
@@ -467,17 +483,18 @@ export default function MangaSourceManagerPanel({
         <span className='text-xs text-gray-500 dark:text-gray-400'>燈號</span>
         {(
           [
-            ['all', '全部'],
-            ['ok', '綠燈（熱門與搜尋皆正常）'],
-            ['failed', '紅燈（任一失敗）'],
-            ['untested', '未測試'],
+            ['all', '全部', '顯示所有來源'],
+            ['ok', '綠燈', '熱門與搜尋皆正常'],
+            ['failed', '紅燈', '熱門或搜尋任一失敗'],
+            ['untested', '未測試', '尚未測試過'],
           ] as const
-        ).map(([value, label]) => (
+        ).map(([value, label, hint]) => (
           <button
             key={value}
             type='button'
             onClick={() => setStatusFilter(value)}
             aria-pressed={statusFilter === value}
+            title={hint}
             className={`min-h-9 cursor-pointer rounded-full border px-3 text-xs font-medium transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-blue-500 ${
               statusFilter === value
                 ? 'border-blue-600 bg-blue-600 text-white'
@@ -519,14 +536,14 @@ export default function MangaSourceManagerPanel({
           沒有符合條件的漫畫源
         </div>
       ) : (
-        <ul className='max-h-[60vh] space-y-2 overflow-y-auto pr-1'>
+        <ul className='space-y-2'>
           {visible.map((source) => {
             const busy = busyIds.has(source.id);
             const isSelected = selected.has(source.id);
             return (
               <li
                 key={source.id}
-                className='flex flex-wrap items-center gap-3 rounded-lg border border-gray-200 px-3 py-2 dark:border-gray-700'
+                className='flex flex-wrap items-center gap-x-3 gap-y-2 rounded-lg border border-gray-200 px-3 py-2 dark:border-gray-700'
               >
                 <label className='inline-flex min-h-11 cursor-pointer items-center'>
                   <span className='sr-only'>選取 {source.name}</span>
@@ -587,34 +604,37 @@ export default function MangaSourceManagerPanel({
                         .map(([label, err]) => (
                           <span
                             key={label}
-                            className='truncate text-red-600 dark:text-red-400'
+                            className='line-clamp-2 basis-full text-red-600 dark:text-red-400'
                             title={err}
                           >
-                            {label}：{(err || '').split('\n')[0].slice(0, 60)}
+                            {label}：{shortProbeError(err || '')}
                           </span>
                         ))}
                   </div>
                 </div>
 
-                <SourceStatusBadge probe={source.probe} />
+                {/* 手機上 badge 會把名稱擠到剩兩個字；狀態與測試獨立成一列，桌面再併回同一列 */}
+                <div className='flex w-full items-center justify-between gap-2 sm:ml-auto sm:w-auto sm:justify-end'>
+                  <SourceStatusBadge probe={source.probe} />
 
-                <button
-                  type='button'
-                  onClick={() => runTest([source.id])}
-                  disabled={busy || !!bulkBusy}
-                  aria-label={`測試 ${source.name}`}
-                  className={`inline-flex min-h-11 items-center gap-1.5 rounded-lg border border-gray-300 px-3 text-xs font-medium text-gray-700 transition-colors duration-200 hover:border-blue-500 hover:text-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:text-gray-200 ${
-                    busy || bulkBusy
-                      ? 'cursor-not-allowed opacity-50'
-                      : 'cursor-pointer'
-                  }`}
-                >
-                  <RefreshCw
-                    aria-hidden='true'
-                    className={`h-3.5 w-3.5 ${busy ? 'animate-spin' : ''}`}
-                  />
-                  測試
-                </button>
+                  <button
+                    type='button'
+                    onClick={() => runTest([source.id])}
+                    disabled={busy || !!bulkBusy}
+                    aria-label={`測試 ${source.name}`}
+                    className={`inline-flex min-h-11 shrink-0 items-center gap-1.5 rounded-lg border border-gray-300 px-3 text-xs font-medium text-gray-700 transition-colors duration-200 hover:border-blue-500 hover:text-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:text-gray-200 ${
+                      busy || bulkBusy
+                        ? 'cursor-not-allowed opacity-50'
+                        : 'cursor-pointer'
+                    }`}
+                  >
+                    <RefreshCw
+                      aria-hidden='true'
+                      className={`h-3.5 w-3.5 ${busy ? 'animate-spin' : ''}`}
+                    />
+                    測試
+                  </button>
+                </div>
               </li>
             );
           })}

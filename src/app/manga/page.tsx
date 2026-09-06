@@ -890,7 +890,7 @@ export default function MangaRecommendPage() {
                   <div
                     key={key}
                     ref={(element) => observeChapterSummary(element, item)}
-                    className='space-y-2'
+                    className='flex h-full flex-col gap-2'
                   >
                     <div onClick={saveBrowseState}>
                       <MangaCard
@@ -919,7 +919,7 @@ export default function MangaRecommendPage() {
                     </div>
                     <button
                       onClick={() => toggleShelf(item)}
-                      className='w-full rounded-2xl border border-gray-200 px-3 py-2 text-xs font-medium text-gray-700 transition hover:border-sky-500 hover:text-sky-600 dark:border-gray-700 dark:text-gray-200'
+                      className='mt-auto w-full rounded-2xl border border-gray-200 px-3 py-2 text-xs font-medium text-gray-700 transition hover:border-sky-500 hover:text-sky-600 dark:border-gray-700 dark:text-gray-200'
                     >
                       {shelf[key] ? '移出书架' : '加入书架'}
                     </button>

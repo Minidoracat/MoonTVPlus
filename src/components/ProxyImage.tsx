@@ -5,6 +5,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   clearBangumiImageFallbackCacheIfFailed,
   ensureBangumiImagePrimaryProbed,
+  isBangumiImageUrl,
   processImageUrl,
   tryApplyBangumiImageFallback,
   tryApplyDoubanImageFallback,
@@ -39,9 +40,11 @@ const ProxyImage: React.FC<ProxyImageProps> = ({
     setCurrentSrc(initialSrc);
   }, [initialSrc]);
 
-  // 主源图片域主页探测：失败则 sticky 走备源（替代原 5s complete 误判）
+  // 主源图片域主页探测：失败则 sticky 走备源（替代原 5s complete 误判）。
+  // 只有 Bangumi 图片会因探测结果换源；其他来源（漫画封面、豆瓣…）跑探测
+  // 只是多打一个对 Bangumi origin 的无用请求并污染 console。
   useEffect(() => {
-    if (displaySrc) return;
+    if (displaySrc || !isBangumiImageUrl(originalSrc)) return;
 
     let cancelled = false;
     void (async () => {

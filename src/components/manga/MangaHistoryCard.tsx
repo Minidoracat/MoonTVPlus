@@ -110,7 +110,7 @@ export default function MangaHistoryCard({
       },
       {
         id: 'toggle-shelf',
-        label: inShelf ? '移除书架' : '加入书架',
+        label: inShelf ? '移出书架' : '加入书架',
         icon: inShelf ? <CircleMinus size={20} /> : <CirclePlus size={20} />,
         onClick: () => onToggleShelf(item),
         color: inShelf ? ('danger' as const) : ('default' as const),
@@ -138,7 +138,7 @@ export default function MangaHistoryCard({
   return (
     <>
       <div
-        className='group overflow-hidden rounded-2xl border border-gray-200/70 bg-white/90 shadow-sm transition hover:-translate-y-1 hover:shadow-xl dark:border-gray-700 dark:bg-gray-900/80 cursor-pointer'
+        className='group flex h-full cursor-pointer flex-col overflow-hidden rounded-2xl border border-gray-200/70 bg-white/90 shadow-sm transition hover:-translate-y-1 hover:shadow-xl dark:border-gray-700 dark:bg-gray-900/80'
         onClick={goRead}
         onContextMenu={(e) => {
           e.preventDefault();
@@ -157,12 +157,9 @@ export default function MangaHistoryCard({
           touchAction: 'manipulation',
         }}
       >
+        {/* 右鍵交給卡片層開操作選單；這裡不要攔 contextmenu，否則冒泡不到卡片層 */}
         <div
           className='relative aspect-[3/4] overflow-hidden bg-gray-100 dark:bg-gray-800'
-          onContextMenu={(e) => {
-            e.preventDefault();
-            e.stopPropagation();
-          }}
           style={{
             WebkitTouchCallout: 'none',
             WebkitUserSelect: 'none',
@@ -182,14 +179,17 @@ export default function MangaHistoryCard({
             </div>
           )}
         </div>
-        <div className='space-y-1 p-3'>
-          <div className='line-clamp-2 min-h-[2.75rem] text-sm font-semibold text-gray-900 dark:text-gray-100'>
+        <div className='flex flex-1 flex-col gap-1 p-3'>
+          <div
+            className='line-clamp-2 min-h-[2.75rem] text-sm font-semibold text-gray-900 dark:text-gray-100'
+            title={item.title}
+          >
             {item.title}
           </div>
           <div className='text-xs text-gray-500 dark:text-gray-400'>
             {item.sourceName}
           </div>
-          <div className='line-clamp-2 text-xs text-sky-600 dark:text-sky-400'>
+          <div className='line-clamp-2 text-xs text-sky-600 dark:text-sky-400' title={subtitle}>
             {subtitle}
           </div>
           <button
@@ -199,7 +199,7 @@ export default function MangaHistoryCard({
               event.stopPropagation();
               router.push(alternateSourceHref);
             }}
-            className='mt-2 inline-flex min-h-9 w-full items-center justify-center gap-1 rounded-xl border border-gray-200 px-2 text-[11px] font-medium text-sky-700 transition hover:border-sky-400 dark:border-gray-700 dark:text-sky-300'
+            className='mt-auto inline-flex min-h-9 w-full items-center justify-center gap-1 rounded-xl border border-gray-200 px-2 text-[11px] font-medium text-sky-700 transition hover:border-sky-400 dark:border-gray-700 dark:text-sky-300'
           >
             <RefreshCw className='h-3.5 w-3.5' />
             搜索／换源

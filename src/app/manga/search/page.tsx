@@ -997,7 +997,7 @@ export default function MangaSearchPage() {
       <div
         key={key}
         ref={(element) => observeChapterSummary(element, item)}
-        className='space-y-2'
+        className='flex h-full flex-col gap-2'
       >
         <MangaCard
           item={item}
@@ -1015,7 +1015,6 @@ export default function MangaSearchPage() {
             item.status || ''
           )}&returnTo=${encodeURIComponent(returnTo)}`}
           subtitle={[
-            item.sourceName,
             item.latestChapterName
               ? `最新 ${item.latestChapterName}`
               : item.latestChapterCount
@@ -1048,7 +1047,7 @@ export default function MangaSearchPage() {
         <button
           type='button'
           onClick={() => toggleShelf(item)}
-          className='w-full rounded-2xl border border-gray-200 px-3 py-2 text-xs font-medium text-gray-700 transition hover:border-sky-500 hover:text-sky-600 dark:border-gray-700 dark:text-gray-200'
+          className='mt-auto w-full rounded-2xl border border-gray-200 px-3 py-2 text-xs font-medium text-gray-700 transition hover:border-sky-500 hover:text-sky-600 dark:border-gray-700 dark:text-gray-200'
         >
           {shelf[key] ? '移出书架' : '加入书架'}
         </button>
@@ -1172,13 +1171,14 @@ export default function MangaSearchPage() {
         )}
 
         {/* 來源篩選：放寬上限後結果會來自數十顆來源，而 grid 是按到達順序排的，
-            最快的兩三顆會霸佔前排。沒有這排 chip 使用者滾不到其他來源。 */}
+            最快的兩三顆會霸佔前排。沒有這排 chip 使用者滾不到其他來源。
+            手機上 30 顆 chip 換行會疊出十幾列、把結果整個推出首屏，改成單列橫捲。 */}
         {sourceBuckets.length > 1 && (
-          <div className='mb-3 flex flex-wrap items-center gap-2'>
+          <div className='scrollbar-hide -mx-3 mb-3 flex items-center gap-2 overflow-x-auto px-3 sm:mx-0 sm:flex-wrap sm:px-0'>
             <button
               type='button'
               onClick={() => setSourceFilter([])}
-              className={`min-h-9 rounded-full border px-3 text-xs transition-colors ${
+              className={`min-h-9 shrink-0 rounded-full border px-3 text-xs transition-colors ${
                 sourceFilter.length === 0
                   ? 'border-sky-500 bg-sky-50 text-sky-700 dark:bg-sky-950/40 dark:text-sky-300'
                   : 'border-gray-200 text-gray-600 hover:border-sky-500 dark:border-gray-700 dark:text-gray-300'
@@ -1199,7 +1199,7 @@ export default function MangaSearchPage() {
                         : [...prev, bucket.sourceId]
                     )
                   }
-                  className={`min-h-9 rounded-full border px-3 text-xs transition-colors ${
+                  className={`min-h-9 shrink-0 rounded-full border px-3 text-xs transition-colors ${
                     active
                       ? 'border-sky-500 bg-sky-50 text-sky-700 dark:bg-sky-950/40 dark:text-sky-300'
                       : 'border-gray-200 text-gray-600 hover:border-sky-500 dark:border-gray-700 dark:text-gray-300'

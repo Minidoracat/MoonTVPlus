@@ -97,7 +97,13 @@ export default function MangaLayout({ children }: MangaLayoutProps) {
   const [showSourceManager, setShowSourceManager] = useState(false);
   const [readerImmersive, setReaderImmersive] = useState(false);
   const [readerControlsVisible, setReaderControlsVisible] = useState(true);
-  const managerTriggerRef = useRef<HTMLButtonElement>(null);
+  // 觸發按鈕桌面在 header、手機在底部 nav，各自一顆；記住實際開啟者，關閉時焦點才回得去。
+  // 要在點擊當下記，dialog 的 autoFocus 在 effect 跑之前就已把焦點移走。
+  const openerRef = useRef<HTMLElement | null>(null);
+  const openSourceManager = (event: React.MouseEvent<HTMLElement>) => {
+    openerRef.current = event.currentTarget;
+    setShowSourceManager(true);
+  };
 
   useEffect(() => {
     const auth = getAuthInfoFromBrowserCookie();
@@ -115,7 +121,7 @@ export default function MangaLayout({ children }: MangaLayoutProps) {
     return () => {
       document.body.style.overflow = previous;
       window.removeEventListener('keydown', onKeyDown);
-      managerTriggerRef.current?.focus();
+      openerRef.current?.focus({ preventScroll: true });
     };
   }, [showSourceManager]);
 
@@ -152,7 +158,7 @@ export default function MangaLayout({ children }: MangaLayoutProps) {
 
   return (
     <div
-      className={`min-h-screen ${
+      className={`min-h-dvh ${
         isReadingPage || readerImmersive ? '' : 'touch-manipulation'
       } ${
         readerImmersive
@@ -220,9 +226,8 @@ export default function MangaLayout({ children }: MangaLayoutProps) {
               })}
               {isAdmin && !isReadingPage && (
                 <button
-                  ref={managerTriggerRef}
                   type='button'
-                  onClick={() => setShowSourceManager(true)}
+                  onClick={openSourceManager}
                   aria-haspopup='dialog'
                   aria-expanded={showSourceManager}
                   className='inline-flex cursor-pointer items-center gap-2 rounded-full px-4 py-2 text-sm text-gray-600 transition hover:bg-gray-100 hover:text-sky-600 dark:text-gray-300 dark:hover:bg-gray-800'
@@ -233,13 +238,8 @@ export default function MangaLayout({ children }: MangaLayoutProps) {
               )}
             </nav>
 
-            <div
-              className={`${
-                isReadingPage
-                  ? 'ml-auto flex shrink-0'
-                  : 'ml-auto hidden md:flex'
-              } items-center gap-2`}
-            >
+            {/* 手機也留主題／使用者／更新入口，與影視區 MobileHeader 一致；語言切換只在 md+ */}
+            <div className='ml-auto flex shrink-0 items-center gap-2'>
               {isReadingPage ? (
                 readerActions.map((action) => {
                   const Icon = action.icon;
@@ -259,7 +259,9 @@ export default function MangaLayout({ children }: MangaLayoutProps) {
                 })
               ) : (
                 <>
-                  <LanguageToggle />
+                  <span className='hidden md:inline-flex'>
+                    <LanguageToggle />
+                  </span>
                   <ThemeToggle />
                   <UserMenu />
                   <UpdateNotification />
@@ -323,8 +325,9 @@ export default function MangaLayout({ children }: MangaLayoutProps) {
             {isAdmin && (
               <button
                 type='button'
-                onClick={() => setShowSourceManager(true)}
+                onClick={openSourceManager}
                 aria-haspopup='dialog'
+                aria-expanded={showSourceManager}
                 className='flex min-h-16 cursor-pointer flex-col items-center justify-center gap-1 py-2 text-xs'
               >
                 <SlidersHorizontal className='h-5 w-5 text-gray-500 dark:text-gray-400' />
@@ -361,6 +364,7 @@ export default function MangaLayout({ children }: MangaLayoutProps) {
                 </h2>
                 <button
                   type='button'
+                  autoFocus
                   onClick={() => setShowSourceManager(false)}
                   aria-label='关闭'
                   className='inline-flex min-h-11 min-w-11 cursor-pointer items-center justify-center rounded-2xl text-gray-500 transition-colors duration-200 hover:bg-gray-100 hover:text-gray-900 dark:hover:bg-gray-900 dark:hover:text-gray-100'
@@ -369,7 +373,7 @@ export default function MangaLayout({ children }: MangaLayoutProps) {
                 </button>
               </div>
               <div className='min-h-0 flex-1 overflow-y-auto px-4 py-4'>
-                <MangaSourceManagerPanel />
+                <MangaSourceManagerPanel showHeading={false} />
               </div>
             </div>
           </div>,

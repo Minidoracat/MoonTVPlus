@@ -98,11 +98,18 @@ export default function MangaCard({ item, href, className, subtitle, badge, upda
         )}
       </div>
       <div className='space-y-1 p-3'>
-        <div className='line-clamp-2 min-h-[2.75rem] text-sm font-semibold text-gray-900 dark:text-gray-100'>
+        <div
+          className='line-clamp-2 min-h-[2.75rem] text-sm font-semibold text-gray-900 dark:text-gray-100'
+          title={item.title}
+        >
           {item.title}
         </div>
         {sourceName && <div className='text-xs text-gray-500 dark:text-gray-400'>{sourceName}</div>}
-        {subtitle && <div className='line-clamp-2 text-xs text-sky-600 dark:text-sky-400'>{subtitle}</div>}
+        {subtitle && (
+          <div className='line-clamp-2 text-xs text-sky-600 dark:text-sky-400' title={subtitle}>
+            {subtitle}
+          </div>
+        )}
       </div>
     </Link>
   );

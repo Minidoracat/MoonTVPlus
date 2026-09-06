@@ -5,7 +5,13 @@ import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import { useEffect, useMemo, useRef, useState } from 'react';
 
-import { deleteMangaShelf, getAllMangaReadRecords, getAllMangaShelf, saveMangaShelf } from '@/lib/db.client';
+import {
+  deleteMangaShelf,
+  getAllMangaReadRecords,
+  getAllMangaShelf,
+  saveMangaShelf,
+  subscribeToDataUpdates,
+} from '@/lib/db.client';
 import {
   buildMangaReadHref,
   buildMangaShelfItem,
@@ -141,6 +147,17 @@ export default function MangaDetailPage() {
     getAllMangaShelf().then(setShelf).catch(() => undefined);
   }, [mangaId, searchParams, sourceId]);
 
+  // 訂閱 history 讓「继续阅读」第一次進頁就出現（快取先回舊快照、背景抓完才廣播）。
+  // 不訂閱 shelf：下方清零 effect 會廣播 unread=0，一訂閱就把本頁要保留的 NEW 抹掉。
+  useEffect(
+    () =>
+      subscribeToDataUpdates<Record<string, MangaReadRecord>>(
+        'mangaHistoryUpdated',
+        setHistory
+      ),
+    []
+  );
+
   const chronologicalChapters = useMemo(
     () => orderMangaChapters(detail?.chapters || []),
     [detail?.chapters]
@@ -151,6 +168,8 @@ export default function MangaDetailPage() {
     [chronologicalChapters, descOrder]
   );
 
+  // 「开始阅读」永遠指向第一話；不能拿 chapters[0]，倒序時那是最新一話
+  const firstChapter = chronologicalChapters[0];
   const latestChapter = chronologicalChapters[chronologicalChapters.length - 1];
   const unreadChapterCount = shelf[key]?.unreadChapterCount || 0;
   const newChapterIds = useMemo(() => {
@@ -243,52 +262,55 @@ export default function MangaDetailPage() {
 
   return (
     <div className='space-y-6'>
-      <div className='grid gap-6 rounded-[28px] border border-gray-200 bg-white p-6 shadow-sm dark:border-gray-800 dark:bg-gray-950 md:grid-cols-[260px_1fr]'>
-        <div className='overflow-hidden rounded-3xl bg-gray-100 dark:bg-gray-800'>
+      {/* 手機封面縮成左欄，讓標題與「开始阅读」進首屏；md 起封面撐滿兩列高度 */}
+      <div className='grid grid-cols-[112px_1fr] gap-4 rounded-[28px] border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-800 dark:bg-gray-950 sm:p-6 md:grid-cols-[260px_1fr] md:gap-6'>
+        <div className='aspect-[3/4] self-start overflow-hidden rounded-2xl bg-gray-100 dark:bg-gray-800 md:row-span-2 md:aspect-auto md:self-stretch md:rounded-3xl'>
           {detail.cover ? (
             <ProxyImage originalSrc={detail.cover} alt={detail.title} className='h-full w-full object-cover' />
           ) : (
-            <div className='flex aspect-[3/4] items-center justify-center text-sm text-gray-400'>暂无封面</div>
+            <div className='flex h-full items-center justify-center text-sm text-gray-400'>暂无封面</div>
           )}
         </div>
-        <div className='space-y-4'>
-          <div>
-            <h1 className='text-3xl font-bold'>{detail.title}</h1>
-            <div className='mt-3 flex flex-wrap gap-2 text-xs text-gray-500'>
-              <span className='rounded-full bg-sky-50 px-3 py-1 text-sky-700 dark:bg-sky-900/30 dark:text-sky-300'>
-                {detail.sourceName}
+        <div className='min-w-0'>
+          <h1 className='line-clamp-3 break-words text-2xl font-bold md:text-3xl' title={detail.title}>
+            {detail.title}
+          </h1>
+          <div className='mt-3 flex flex-wrap gap-2 text-xs text-gray-500'>
+            <span className='rounded-full bg-sky-50 px-3 py-1 text-sky-700 dark:bg-sky-900/30 dark:text-sky-300'>
+              {detail.sourceName}
+            </span>
+            {detail.status && (
+              <span className='rounded-full bg-gray-100 px-3 py-1 dark:bg-gray-800'>
+                {detail.status}
               </span>
-              {detail.status && (
-                <span className='rounded-full bg-gray-100 px-3 py-1 dark:bg-gray-800'>
-                  {detail.status}
-                </span>
-              )}
-            </div>
-            {creatorGroups.map((group) => (
-              <div
-                key={group.role}
-                className='mt-3 flex flex-wrap items-center gap-2 text-xs'
-              >
-                <span className='text-gray-500 dark:text-gray-400'>
-                  {group.label}
-                </span>
-                {group.creators.map((creator) => (
-                  <Link
-                    key={creator.toLowerCase()}
-                    href={creatorSearchHref(sourceId, creator, group.role)}
-                    title={`搜索 ${creator} 在 ${detail.sourceName} 的全部${group.label}作品`}
-                    className='inline-flex min-h-9 max-w-full items-center truncate rounded-full border border-gray-200 px-3 text-sky-700 transition-colors hover:border-sky-500 hover:bg-sky-50 dark:border-gray-700 dark:text-sky-300 dark:hover:border-sky-500 dark:hover:bg-sky-950/40'
-                  >
-                    {creator}
-                  </Link>
-                ))}
-              </div>
-            ))}
+            )}
           </div>
+          {creatorGroups.map((group) => (
+            <div
+              key={group.role}
+              className='mt-3 flex flex-wrap items-center gap-2 text-xs'
+            >
+              <span className='text-gray-500 dark:text-gray-400'>
+                {group.label}
+              </span>
+              {group.creators.map((creator) => (
+                <Link
+                  key={creator.toLowerCase()}
+                  href={creatorSearchHref(sourceId, creator, group.role)}
+                  title={`搜索 ${creator} 在 ${detail.sourceName} 的全部${group.label}作品`}
+                  className='inline-flex min-h-9 max-w-full items-center truncate rounded-full border border-gray-200 px-3 text-sky-700 transition-colors hover:border-sky-500 hover:bg-sky-50 dark:border-gray-700 dark:text-sky-300 dark:hover:border-sky-500 dark:hover:bg-sky-950/40'
+                >
+                  {creator}
+                </Link>
+              ))}
+            </div>
+          ))}
+        </div>
+        <div className='col-span-full space-y-4 md:col-span-1 md:col-start-2'>
           {detail.description && <p className='text-sm leading-7 text-gray-600 dark:text-gray-300'>{detail.description}</p>}
           <div className='flex flex-wrap gap-3'>
-            {chapters[0] && (
-              <Link href={chapterHref(chapters[0])} className='rounded-2xl bg-sky-600 px-5 py-3 text-sm font-medium text-white transition hover:bg-sky-700'>
+            {firstChapter && (
+              <Link href={chapterHref(firstChapter)} className='inline-flex grow items-center justify-center rounded-2xl bg-sky-600 px-5 py-3 text-sm font-medium text-white transition hover:bg-sky-700 sm:grow-0'>
                 <BookOpen className='mr-2 inline h-4 w-4' />开始阅读
               </Link>
             )}
@@ -305,12 +327,12 @@ export default function MangaDetailPage() {
                   returnTo,
                   startAtFirstPage: false,
                 })}
-                className='rounded-2xl border border-sky-300 px-5 py-3 text-sm font-medium text-sky-700 transition hover:bg-sky-50 dark:text-sky-300 dark:hover:bg-sky-950/30'
+                className='inline-flex grow items-center justify-center rounded-2xl border border-sky-300 px-5 py-3 text-sm font-medium text-sky-700 transition hover:bg-sky-50 dark:text-sky-300 dark:hover:bg-sky-950/30 sm:grow-0'
               >
                 <Clock3 className='mr-2 inline h-4 w-4' />继续阅读 第 {currentRecord.pageIndex + 1}/{currentRecord.pageCount} 页
               </Link>
             )}
-            <button onClick={toggleShelf} className='rounded-2xl border border-gray-200 px-5 py-3 text-sm font-medium text-gray-700 transition hover:border-sky-300 hover:text-sky-600 dark:border-gray-700 dark:text-gray-200'>
+            <button onClick={toggleShelf} className='inline-flex grow items-center justify-center rounded-2xl border border-gray-200 px-5 py-3 text-sm font-medium text-gray-700 transition hover:border-sky-300 hover:text-sky-600 dark:border-gray-700 dark:text-gray-200 sm:grow-0'>
               {shelf[key] ? '移出书架' : '加入书架'}
             </button>
           </div>
@@ -329,10 +351,16 @@ export default function MangaDetailPage() {
             已更新 {unreadChapterCount} 话，最新章节：{latestChapter.name}
           </div>
         )}
-        <div className='grid gap-3'>
+        <div className='grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4'>
           {chapters.map((chapter) => {
             const active = currentRecord?.chapterId === chapter.id;
             const isNewChapter = newChapterIds.has(chapter.id);
+            const metaText = [
+              formatChapterMeta(chapter),
+              active && currentRecord ? `上次看到第 ${currentRecord.pageIndex + 1} 页` : null,
+            ]
+              .filter(Boolean)
+              .join(' · ');
             return (
               <Link
                 key={chapter.id}
@@ -347,13 +375,7 @@ export default function MangaDetailPage() {
                     </span>
                   )}
                 </div>
-                <div className='mt-1 text-xs text-gray-500'>
-                  {(() => {
-                    const meta = formatChapterMeta(chapter);
-                    const progress = active && currentRecord ? `上次看到第 ${currentRecord.pageIndex + 1} 页` : null;
-                    return [meta, progress].filter(Boolean).join(' · ');
-                  })()}
-                </div>
+                {metaText && <div className='mt-1 text-xs text-gray-500'>{metaText}</div>}
               </Link>
             );
           })}

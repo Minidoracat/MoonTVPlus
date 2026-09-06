@@ -63,7 +63,7 @@ const PageLayout = ({ children, activePath = '/', hideNavigation = false }: Page
 
   return (
     <VersionCheckProvider>
-      <div className='relative w-full min-h-screen overflow-hidden'>
+      <div className='relative w-full min-h-dvh overflow-hidden'>
         {shouldShowSharedBackground && backgroundImage && (
           <>
             <div
@@ -80,7 +80,7 @@ const PageLayout = ({ children, activePath = '/', hideNavigation = false }: Page
         )}
 
         {/* 主要布局容器 */}
-        <div className='relative z-10 flex md:grid md:grid-cols-[auto_1fr] w-full min-h-screen md:min-h-auto'>
+        <div className='relative z-10 flex md:grid md:grid-cols-[auto_1fr] w-full min-h-dvh md:min-h-auto'>
           {/* 侧边栏 - 桌面端显示，移动端隐藏 */}
           {!hideNavigation && (
             <div className='hidden md:block'>

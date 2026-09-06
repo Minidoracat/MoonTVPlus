@@ -12,10 +12,12 @@ import {
   Minimize2,
   RefreshCw,
   Settings2,
+  X,
 } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import {
+  type CSSProperties,
   type MouseEvent,
   useCallback,
   useEffect,
@@ -232,6 +234,8 @@ export default function MangaReadPage() {
   const [pageReloadTokens, setPageReloadTokens] = useState<
     Record<number, number>
   >({});
+  /** 垂直模式載入失敗的頁；失敗頁改渲染重試 placeholder，不再佔滿一屏。 */
+  const [failedPages, setFailedPages] = useState<Set<number>>(new Set());
 
   const verticalPageRefs = useRef<Array<HTMLDivElement | null>>([]);
   const horizontalContainerRef = useRef<HTMLDivElement | null>(null);
@@ -275,7 +279,11 @@ export default function MangaReadPage() {
   const getCurrentVerticalPageIndex = () => {
     const pageNodes = verticalPageRefs.current;
     if (!pageNodes.length) return 0;
-    const topAnchor = 80;
+    // 沉浸或控制列隱藏時沒有 header → 0。要比 scrollToPage 的落點（header 底緣 + 8）
+    // 再寬一點，否則 seek 後會被判成前一頁
+    const headerBottom =
+      document.querySelector('header.fixed')?.getBoundingClientRect().bottom ?? 0;
+    const topAnchor = Math.max(80, headerBottom + 16);
     let low = 0;
     let high = pageNodes.length - 1;
     let currentIndex = 0;
@@ -298,10 +306,17 @@ export default function MangaReadPage() {
   const scrollToPage = useCallback(
     (page: number, behavior: ScrollBehavior) => {
       if (readMode === 'vertical') {
-        verticalPageRefs.current[page]?.scrollIntoView({
-          block: 'start',
-          behavior,
-        });
+        const node = verticalPageRefs.current[page];
+        if (!node) return;
+        // body 是捲動容器時 scroll-margin 實測對 scrollIntoView 無效，
+        // 自己量 fixed header 的實際底緣（含 safe-area）再留 8px 餘量。
+        const headerBottom =
+          document.querySelector('header.fixed')?.getBoundingClientRect().bottom ?? 0;
+        const headerOffset = headerBottom > 0 ? headerBottom + 8 : 0;
+        scrollReaderTo(
+          getReaderScrollTop() + node.getBoundingClientRect().top - headerOffset,
+          behavior
+        );
         return;
       }
       if (readMode === 'horizontal') {
@@ -383,6 +398,13 @@ export default function MangaReadPage() {
     if (loaded) {
       loadedVerticalPagesRef.current.add(index);
       verticalPageRefs.current[index]?.style.removeProperty('min-height');
+    } else {
+      setFailedPages((prev) => {
+        if (prev.has(index)) return prev;
+        const next = new Set(prev);
+        next.add(index);
+        return next;
+      });
     }
 
     const target = pendingVerticalRestorePageRef.current;
@@ -454,18 +476,28 @@ export default function MangaReadPage() {
       const height = node?.getBoundingClientRect().height ?? 0;
       if (node && height > 0) node.style.minHeight = `${height}px`;
     }
-    setPageReloadTokens((prev) => {
-      const next = { ...prev };
-      for (const pageIndex of reloadIndexes) {
-        next[pageIndex] = (next[pageIndex] ?? 0) + 1;
-      }
+    // 失敗 placeholder 取代了 <img>，要連 failedPages 一起清，token 換了才會重新掛圖
+    reloadIndexes.forEach(retryPage);
+  };
+
+  /** 失敗頁的重試：清掉失敗標記並換一個 token 重抓那一頁。 */
+  const retryPage = (index: number) => {
+    setFailedPages((prev) => {
+      if (!prev.has(index)) return prev;
+      const next = new Set(prev);
+      next.delete(index);
       return next;
     });
+    setPageReloadTokens((prev) => ({
+      ...prev,
+      [index]: (prev[index] ?? 0) + 1,
+    }));
   };
 
   /** 換話後舊 token 不再對應任何頁，直接清掉。 */
   useEffect(() => {
     setPageReloadTokens((prev) => (Object.keys(prev).length ? {} : prev));
+    setFailedPages((prev) => (prev.size ? new Set() : prev));
   }, [chapterId]);
 
   /** 沒有 token 時回傳 undefined，讓 ProxyImage 走它原本的 URL 解析。 */
@@ -615,7 +647,6 @@ export default function MangaReadPage() {
   useEffect(() => {
     const handleToggleSettings = () => {
       setSettingsOpen((prev) => !prev);
-      setControlsVisible(false);
       setChapterListOpen(false);
     };
 
@@ -631,7 +662,6 @@ export default function MangaReadPage() {
   useEffect(() => {
     const handleToggleChapters = () => {
       setChapterListOpen((prev) => !prev);
-      setControlsVisible(false);
       setSettingsOpen(false);
     };
 
@@ -697,6 +727,8 @@ export default function MangaReadPage() {
     historyRestoreVersionRef.current += 1;
     historyRestorePendingRef.current = hasReaderContext;
     setHistoryRestorePending(hasReaderContext);
+    // 章底完讀彈窗會收起控制列，換話後必須把 header／控制列還給使用者。
+    setControlsVisible(true);
     setActivePage(0);
     progressDraftRef.current = null;
     setProgressDraft(null);
@@ -1511,12 +1543,21 @@ export default function MangaReadPage() {
     return [];
   }, [activePage, pages, readMode]);
 
+  // 一屏要扣掉的框架高度，CSS 變數讓分頁／水平模式共用。
+  // 非沉浸 = main pt 6rem + reader py 1.5rem + 控制列 4.5rem；沉浸 = 頂部列＋控制列各 4.5rem（對應 my/py-[4.5rem]）
+  const readerChrome = immersiveMode
+    ? 'calc(9rem + env(safe-area-inset-top) + env(safe-area-inset-bottom))'
+    : 'calc(11.25rem + env(safe-area-inset-top) + env(safe-area-inset-bottom))';
+
   const imageClassName = useMemo(() => {
     if (scaleMode === 'original') {
       return 'block mx-auto h-auto w-auto max-w-none object-none';
     }
     if (readMode === 'single' || readMode === 'double') {
-      return 'block h-auto w-full object-contain sm:mx-auto sm:max-h-[calc(100vh-8rem)] sm:w-auto sm:max-w-full';
+      return 'block h-auto w-full object-contain sm:mx-auto sm:max-h-[calc(100dvh-var(--reader-chrome))] sm:w-auto sm:max-w-full';
+    }
+    if (readMode === 'horizontal') {
+      return 'block max-h-full w-auto max-w-full object-contain';
     }
     return 'block h-auto w-full object-contain';
   }, [readMode, scaleMode]);
@@ -1532,6 +1573,50 @@ export default function MangaReadPage() {
     // 畫布點擊只切換 controls；翻頁統一由明確的底部按鈕處理。
     setControlsVisible((prev) => !prev);
   };
+
+  // 讀最新 state 與非 memo 的 stepPage，故每次 render 重綁；面板開啟時只留 Escape
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.metaKey || event.ctrlKey || event.altKey) return;
+      // Escape 放最前面：焦點在進度條（input）或面板內按鈕上也要能關面板／退沉浸
+      if (event.key === 'Escape') {
+        if (settingsOpen) setSettingsOpen(false);
+        else if (chapterListOpen) setChapterListOpen(false);
+        else if (showChapterComplete) setShowChapterComplete(false);
+        else if (immersiveMode) applyImmersiveMode(false);
+        else return;
+        event.preventDefault();
+        return;
+      }
+      const target = event.target as HTMLElement | null;
+      if (target?.closest('input, textarea, select, [contenteditable="true"]')) {
+        return;
+      }
+      // 焦點在按鈕／連結上時 Space 是啟動元件，不能攔成翻頁
+      if (event.key === ' ' && target?.closest('button, a')) return;
+
+      if (settingsOpen || chapterListOpen || showChapterComplete || !readerReady)
+        return;
+
+      if (
+        event.key === 'ArrowRight' ||
+        event.key === 'PageDown' ||
+        event.key === ' '
+      ) {
+        // Space 不 preventDefault 會再吃一次瀏覽器原生捲動。
+        event.preventDefault();
+        if (!openChapterComplete()) stepPage(1);
+        return;
+      }
+      if (event.key === 'ArrowLeft' || event.key === 'PageUp') {
+        event.preventDefault();
+        stepPage(-1);
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  });
 
   return (
     <div
@@ -1651,30 +1736,43 @@ export default function MangaReadPage() {
           onClick={() => setChapterListOpen(false)}
         >
           <div
-            ref={chapterScrollerRef}
-            className='absolute right-0 top-[calc(3.5rem+env(safe-area-inset-top))] h-[calc(100dvh-3.5rem-env(safe-area-inset-top))] w-full max-w-sm overflow-y-auto border-l border-gray-200 bg-white shadow-xl dark:border-gray-700 dark:bg-gray-950 sm:top-[calc(4rem+env(safe-area-inset-top))] sm:h-[calc(100dvh-4rem-env(safe-area-inset-top))]'
+            className='absolute right-0 top-[calc(3.5rem+env(safe-area-inset-top))] flex h-[calc(100dvh-3.5rem-env(safe-area-inset-top))] w-full max-w-sm flex-col border-l border-gray-200 bg-white shadow-xl dark:border-gray-700 dark:bg-gray-950 sm:top-[calc(4rem+env(safe-area-inset-top))] sm:h-[calc(100dvh-4rem-env(safe-area-inset-top))]'
             onClick={(event) => event.stopPropagation()}
           >
+            {/* 標題列留在捲動容器外，長列表自動對齊目前章節後排序鈕仍按得到。 */}
+            <div className='flex shrink-0 items-center gap-2 border-b border-gray-200 px-4 py-3 dark:border-gray-800'>
+              <div className='min-w-0 flex-1 text-sm font-semibold text-gray-900 dark:text-gray-100'>
+                章节列表
+              </div>
+              <button
+                type='button'
+                className='inline-flex items-center gap-2 rounded-2xl border border-gray-200 px-3 py-2 text-sm text-gray-700 transition hover:bg-gray-100 dark:border-gray-700 dark:text-gray-200 dark:hover:bg-gray-900'
+                onClick={() => setChapterListDesc((prev) => !prev)}
+              >
+                {chapterListDesc ? (
+                  <ArrowDownWideNarrow className='h-4 w-4' />
+                ) : (
+                  <ArrowUpWideNarrow className='h-4 w-4' />
+                )}
+                {chapterListDesc ? '倒序' : '正序'}
+              </button>
+              <button
+                type='button'
+                onClick={() => setChapterListOpen(false)}
+                aria-label='关闭章节列表'
+                className='inline-flex min-h-11 min-w-11 cursor-pointer items-center justify-center rounded-2xl text-gray-500 transition-colors duration-200 hover:bg-gray-100 hover:text-gray-900 dark:hover:bg-gray-900 dark:hover:text-gray-100'
+              >
+                <X className='h-5 w-5' />
+              </button>
+            </div>
             <div
-              className='p-4'
+              ref={chapterScrollerRef}
+              className='min-h-0 flex-1 overflow-y-auto overscroll-contain p-4'
               style={{
-                paddingBottom: 'calc(1rem + env(safe-area-inset-bottom))',
+                // 底部控制列（4.5rem）與面板同層且在 DOM 之後，會蓋住面板底部；留白讓末章搆得到，控制列也保持可用
+                paddingBottom: 'calc(5.5rem + env(safe-area-inset-bottom))',
               }}
             >
-              <div className='mb-3 flex items-center justify-end'>
-                <button
-                  type='button'
-                  className='inline-flex items-center gap-2 rounded-2xl border border-gray-200 px-3 py-2 text-sm text-gray-700 transition hover:bg-gray-100 dark:border-gray-700 dark:text-gray-200 dark:hover:bg-gray-900'
-                  onClick={() => setChapterListDesc((prev) => !prev)}
-                >
-                  {chapterListDesc ? (
-                    <ArrowDownWideNarrow className='h-4 w-4' />
-                  ) : (
-                    <ArrowUpWideNarrow className='h-4 w-4' />
-                  )}
-                  {chapterListDesc ? '倒序' : '正序'}
-                </button>
-              </div>
               {ownedMangaDetailLoading && (
                 <div className='mb-3 rounded-2xl bg-gray-100 px-4 py-3 text-sm text-gray-600 dark:bg-gray-900 dark:text-gray-300'>
                   正在载入章节列表…
@@ -1743,10 +1841,7 @@ export default function MangaReadPage() {
             </div>
             <button
               type='button'
-              onClick={() => {
-                setChapterListOpen(true);
-                setControlsVisible(false);
-              }}
+              onClick={() => setChapterListOpen(true)}
               className='inline-flex h-10 w-10 items-center justify-center rounded-full hover:bg-white/10'
               aria-label='章节列表'
             >
@@ -1754,10 +1849,7 @@ export default function MangaReadPage() {
             </button>
             <button
               type='button'
-              onClick={() => {
-                setSettingsOpen(true);
-                setControlsVisible(false);
-              }}
+              onClick={() => setSettingsOpen(true)}
               className='inline-flex h-10 w-10 items-center justify-center rounded-full hover:bg-white/10'
               aria-label='阅读设置'
             >
@@ -1858,8 +1950,9 @@ export default function MangaReadPage() {
         className={`relative select-none ${
           immersiveMode
             ? 'min-h-[100dvh] bg-black px-0 py-0'
-            : 'min-h-[calc(100vh-5rem)] px-0 py-3 sm:px-3'
+            : 'min-h-[calc(100dvh-var(--reader-chrome))] px-0 py-3 sm:px-3'
         }`}
+        style={{ '--reader-chrome': readerChrome } as CSSProperties}
         onClick={handleReaderClick}
       >
         {showChapterComplete && (
@@ -1948,46 +2041,81 @@ export default function MangaReadPage() {
         {readerReady &&
           (readMode === 'vertical' ? (
             <div className='flex flex-col' style={{ gap: `${pageGap}px` }}>
-              {pages.map((page, index) => (
-                <div
-                  key={`${page}-${index}`}
-                  ref={(node) => {
-                    verticalPageRefs.current[index] = node;
-                  }}
-                  data-index={index}
-                  className='overflow-hidden bg-gray-100 shadow-sm dark:bg-gray-900'
-                  style={{
-                    minHeight: loadedVerticalPagesRef.current.has(index)
-                      ? undefined
-                      : '100dvh',
-                  }}
-                >
-                  {(!verticalRestoreActive ||
-                    loadedVerticalPagesRef.current.has(index) ||
-                    shouldEagerLoadVerticalRestorePage(
-                      index,
-                      pendingVerticalRestorePageRef.current ?? -1,
-                      PRELOAD_PAGE_COUNT
-                    )) && (
-                    <ProxyImage
-                      key={getPageRenderKey(index)}
-                      originalSrc={page}
-                      displaySrc={getPageDisplaySrc(page, index)}
-                      alt={`${chapterName}-${index + 1}`}
-                      className={imageClassName}
-                      loading={getImageLoadingStrategy(index)}
-                      onLoad={() => handleVerticalImageSettled(index, true)}
-                      onError={() => handleVerticalImageSettled(index, false)}
-                    />
-                  )}
-                </div>
-              ))}
+              {pages.map((page, index) => {
+                const failed = failedPages.has(index);
+                return (
+                  <div
+                    key={`${page}-${index}`}
+                    ref={(node) => {
+                      verticalPageRefs.current[index] = node;
+                    }}
+                    data-index={index}
+                    className={`bg-gray-100 shadow-sm dark:bg-gray-900 ${
+                      // 原始大小的寬圖靠每頁自己水平捲動；全站已鎖住文件的 overflow-x。
+                      scaleMode === 'original'
+                        ? 'overflow-x-auto'
+                        : 'overflow-hidden'
+                    }`}
+                    style={{
+                      minHeight:
+                        failed || loadedVerticalPagesRef.current.has(index)
+                          ? undefined
+                          : '100dvh',
+                    }}
+                  >
+                    {failed ? (
+                      <div className='flex min-h-40 flex-col items-center justify-center gap-3 px-4 text-center'>
+                        <div className='text-sm text-gray-600 dark:text-gray-300'>
+                          第 {index + 1} 页加载失败
+                        </div>
+                        <button
+                          type='button'
+                          onClick={() => retryPage(index)}
+                          className='inline-flex min-h-11 items-center rounded-2xl bg-sky-600 px-4 text-sm font-medium text-white transition hover:bg-sky-500'
+                        >
+                          重试
+                        </button>
+                      </div>
+                    ) : (
+                      (!verticalRestoreActive ||
+                        loadedVerticalPagesRef.current.has(index) ||
+                        shouldEagerLoadVerticalRestorePage(
+                          index,
+                          pendingVerticalRestorePageRef.current ?? -1,
+                          PRELOAD_PAGE_COUNT
+                        )) && (
+                        <ProxyImage
+                          key={getPageRenderKey(index)}
+                          originalSrc={page}
+                          displaySrc={getPageDisplaySrc(page, index)}
+                          alt={`${chapterName}-${index + 1}`}
+                          className={imageClassName}
+                          loading={getImageLoadingStrategy(index)}
+                          retryOnError={false}
+                          onLoad={() => handleVerticalImageSettled(index, true)}
+                          onError={() =>
+                            handleVerticalImageSettled(index, false)
+                          }
+                        />
+                      )
+                    )}
+                  </div>
+                );
+              })}
               {chapterEndAction}
             </div>
           ) : readMode === 'horizontal' ? (
             <div
               ref={horizontalContainerRef}
-              className='flex min-h-[calc(100vh-8rem)] snap-x snap-mandatory overflow-x-auto overflow-y-hidden scrollbar-hide'
+              className={`flex snap-x snap-mandatory overflow-x-auto scrollbar-hide ${
+                // 原始大小要讓高圖溢出、由 body 垂直捲；其他縮放才把一頁釘成一屏
+                scaleMode === 'original'
+                  ? 'min-h-[calc(100dvh-var(--reader-chrome))]'
+                  : 'h-[calc(100dvh-var(--reader-chrome))] overflow-y-hidden'
+              } ${
+                // 沉浸模式的頂部列與控制列是浮動的，靠 margin 把整屏讓出來。
+                immersiveMode ? 'my-[4.5rem]' : ''
+              }`}
               style={{ gap: `${pageGap}px` }}
             >
               {pages.map((page, index) => (
@@ -1995,7 +2123,8 @@ export default function MangaReadPage() {
                   key={`${page}-${index}`}
                   className='flex min-w-full snap-center items-center justify-center px-1'
                 >
-                  <div className='w-full overflow-hidden bg-gray-100 shadow-sm dark:bg-gray-900'>
+                  {/* 外層在原始大小已改 min-h，這裡 h-full 會退成自然高度，overflow-hidden 只裁相鄰頁的水平溢出 */}
+                  <div className='flex h-full w-full items-center justify-center overflow-hidden bg-gray-100 shadow-sm dark:bg-gray-900'>
                     <ProxyImage
                       key={getPageRenderKey(index)}
                       originalSrc={page}
@@ -2012,7 +2141,12 @@ export default function MangaReadPage() {
               </div>
             </div>
           ) : (
-            <div className='flex min-h-[calc(100vh-8rem)] flex-col items-center justify-center'>
+            <div
+              className={`flex min-h-[calc(100dvh-var(--reader-chrome))] flex-col items-center justify-center ${
+                // 沉浸模式的頂部列與控制列是浮動的，靠 padding 把頁面讓出來。
+                immersiveMode ? 'py-[4.5rem]' : ''
+              }`}
+            >
               <div
                 className={`grid w-full max-w-6xl ${
                   readMode === 'double' ? 'md:grid-cols-2' : 'grid-cols-1'

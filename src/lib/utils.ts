@@ -136,7 +136,7 @@ export function getDoubanImageFallbackUrl(originalUrl: string): string | null {
   return backupUrl;
 }
 
-function isBangumiImageUrl(url: string): boolean {
+export function isBangumiImageUrl(url: string): boolean {
   try {
     const hostname = new URL(url).hostname.toLowerCase();
     return (

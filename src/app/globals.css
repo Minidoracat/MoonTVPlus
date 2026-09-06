@@ -62,6 +62,13 @@ body {
   overscroll-behavior: none;
 }
 
+/* body 是实际的滚动容器；iOS Safari 的 100% 取工具栏收起后的大视口且不更新，
+   body 内滚动又不会收起工具栏，底部约 80–100px 永远被盖住（长章节列表滑不到底）。
+   用动态视口高度让可滚范围 = 可视范围。 */
+html {
+  height: 100dvh;
+}
+
 body {
   color: rgb(var(--foreground-rgb));
 }

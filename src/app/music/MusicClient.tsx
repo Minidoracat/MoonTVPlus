@@ -2067,7 +2067,7 @@ export default function MusicClient({ children: _children }: { children?: React.
   }, [playlist, playRecords, currentSong, quality, currentSource]);
 
   return (
-    <div className="music-theme min-h-screen bg-zinc-950 text-white">
+    <div className="music-theme min-h-dvh bg-zinc-950 text-white">
       <>
       <style jsx global>{`
         @keyframes vinyl-spin {

@@ -111,7 +111,7 @@ export default function MangaFilterGroupChips({
           <input
             value={query}
             onChange={(event) => setQuery(event.target.value)}
-            placeholder={`在 ${options.length} 個${name}中搜尋`}
+            placeholder={`在 ${options.length} 項中搜尋`}
             aria-label={`搜尋${name}`}
             className='h-10 w-full rounded-2xl border border-gray-200 bg-gray-50 pl-9 pr-3 text-sm text-gray-900 outline-none transition-colors duration-200 focus:border-sky-500 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-100'
           />

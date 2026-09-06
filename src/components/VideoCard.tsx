@@ -45,6 +45,7 @@ import {
   ensureBangumiImagePrimaryProbed,
   getBangumiImageFallbackUrl,
   getDoubanImageFallbackUrl,
+  isBangumiImageUrl,
   processImageUrl,
   tryApplyBangumiImageFallback,
   tryApplyDoubanImageFallback,
@@ -256,9 +257,10 @@ const VideoCard = forwardRef<VideoCardHandle, VideoCardProps>(
       setDisplayPoster(processedPoster);
     }, [processedPoster]);
 
-    // 主源图片域主页探测：失败写 sticky 后切备源海报（替代原 5s 强制降级）
+    // 主源图片域主页探测：失败写 sticky 后切备源海报（替代原 5s 强制降级）。
+    // 只有 Bangumi 海报有备源可切，其他海报跑探测只是白打一个外部请求。
     useEffect(() => {
-      if (!actualPoster) return;
+      if (!actualPoster || !isBangumiImageUrl(actualPoster)) return;
 
       let cancelled = false;
       void (async () => {

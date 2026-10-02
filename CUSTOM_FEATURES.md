@@ -24,6 +24,12 @@
 | `src/app/douban/page.tsx`、`src/components/DoubanSelector.tsx` | Netflix／TMDB 榜；同時留時刻表 |
 | `next.config.js` | **不要**把 server `opencc-js` alias 成 identity |
 | `docker-compose.yml` | 保留 `moontv-shared`（MoonTV 建立、Suwayomi 以 external 加入）與 core 的 `networks` |
+| `src/app/api/douban-comments/route.ts` | 整檔改寫：先讀 Kvrocks 落地，不足才爬；存儲不支援時 `passthrough` 直連 |
+| `src/lib/douban-anti-crawler.ts` | 頂部豆瓣請求閘門（`throughGate`／`localResponse`／`markRateLimited`／`isDoubanBlocked`）；`fetchDoubanWithVerification` 薄包裝 + `fetchDoubanOnce`；每個 fetch 的 `AbortSignal.timeout` |
+| `src/lib/redis-base.db.ts`、`src/lib/types.ts` | `dc:*` 短評落地方法與 `IStorage` 可選方法／`DoubanComment*` 型別 |
+| `src/app/api/cron/[password]/route.ts` | `refreshRecordAndFavorites` 末尾的 `prewarmDoubanComments` |
+| `src/app/api/douban-recommendations/route.ts` | `!response.ok` 時轉發 `Retry-After` |
+| `jest.config.js` | `moduleNameMapper` 的 `^cheerio/slim$`（jest 27 不認 exports 子路徑） |
 
 ## 1. 全站繁體中文介面
 
@@ -119,6 +125,29 @@
 - Cloudflare：不要在 `next.config.js` 的 `isEdgeBuild` 区块把 `opencc-js` alias 成 identity（该区块对 client 也生效，会弄坏繁中）。
   若真要压 Worker 体量，只准 `isEdgeBuild && isServer`，并接受 title-alias 跨字形在 CF 上退化。
   2026-08-27 `localstorage` CF build：`.open-next/server-functions/default/handler.mjs` gzip 3.40MB；字典不在 handler，而在 sibling server chunks（`㑯 㑔` 可命中，约 2×1.1MB）。来源是 title-alias 服务端动态 import，不是弹幕模块。本机部署是 Docker＋Kvrocks；若上 CF 需再验整包体积。
+
+## 8. 豆瓣短評本地落地
+
+- 新增：`src/lib/douban-comments.ts`（解析、`ensureDoubanComments`、`prewarmDoubanComments`）、`src/lib/douban-comments.test.ts`（閘門 3／存儲 3／狀態機與路由 13，共 19 案）、`jest.node-fetch-env.js`（jest 27 缺 fetch globals 的測試環境；`jest-environment-node@27.5.1` 已列 devDependency）
+- 目的：按需爬、本地翻頁；同一頁只向豆瓣要一次，之後翻頁不出網；累積去重、重抓時更新 votes；被擋時仍有資料可看。
+- Kvrocks key（僅 Redis 系後端，SQL／localstorage 走 `passthrough` 直連，語義同舊實作）：
+  - `dc:<doubanId>:items` hash，commentId → JSON，重抓 upsert（先寫 items 再 ZADD，任一步中斷重試不重加、不改序）
+  - `dc:<doubanId>:list` zset，score = 插入序號、member = commentId，前端 `start` 是這裡的 rank；`count` 一律取 ZCARD
+  - `dc:<doubanId>:meta` hash：`nextStart`（對豆瓣的 offset 游標）、`exhausted`、`retryAfter`、`fetchedAt`、`total`、`count`
+- 抓取規則：
+  - 距上次成功抓取超過 7 天、且開首頁時 → 回豆瓣 `start=0` 合併；抓到「後頁」則清掉舊的 `exhausted`
+  - 單次請求最多翻 2 頁；同一片的請求串行，後到者等前者結束後按自己的 `needCount` 再判斷
+  - 游標：滿頁 `nextStart += 20`；不滿的尾頁只 `+= 實際條數`，避免整段跳過新增評論。`sort=new_score` 會隨投票重排，offset 不是精確接續：重疊由 id 去重吸收；被重排跳過的中段評論不會自動補回，只有浮上首頁前 20 的會在 7 天刷新時補入
+  - 200 且有 `#comments` 容器但 0 則 = 合法空頁（成功、`exhausted`；首頁無「後頁」亦視為到底）；沒有 `#comments` 的 0 則（登入牆／改版）= 失敗（冷卻中不罰）
+  - 403／404／非短評頁 → 該片 `retryAfter` 12 小時；超時／網路／5xx → 1 小時；全域冷卻中或閘門飽和 → 不罰該片
+  - 從未成功抓過且被拒 → API 回 503／冷卻中 429，一律帶 `Retry-After`（冷卻剩餘秒數／該片罰期剩餘秒數／閘門飽和 30s）；已有本地資料則降級只回本地
+- 閘門（`douban-anti-crawler.ts`，短評與推薦共用）：請求含 PoW 整段串行，下一個從上一個結束起算 1.5s＋抖動；
+  任一豆瓣回應 429（含 cookie 分支、驗證流程）→ 全域冷卻 15 分鐘，期間回合成 429，排隊中的也不出網；
+  佇列超過 8 個 → 直接回合成 503；每次出網 15s 超時。合成回應帶 `Retry-After` 與 `X-Douban-Gate`（調用方據此不罰該片；兩個 API 都會轉發 `Retry-After`）。
+- 預熱：cron 收藏刷新結束後（獨立 try/catch），用已取得詳情的 `douban_id` 最多預熱 3 部（跳過已有資料或仍在 `retryAfter` 內的），遇拒即停；受 `EnableComments` 控制。
+- 已知天花板：閘門與同片串行都是單進程記憶體（多 instance 需搬進存儲）；每片不設保留上限；後台「資料遷移」匯出不含 `dc:*`，只有整庫備份涵蓋。
+- 實測（2026-09-07，肖申克 1292052）：首次 2.7–3.3s（含 PoW）→ 本地 10–20ms；豆瓣本體匿名 `start=200` 回 403（本 API 的 `start` 是本地 rank，不會 403）。
+- 實測（2026-09-07，`isCommentsPage` 依據）：有評論頁（1292052 `start=0`）`#comments`=1；合法空頁（畢業短片 35632994，「看过(39)」，`start=40`）→ 200、`#comments`=1、0 則、無 `a.next`、內文「还没有人写过短评」。豆瓣改版時先查這個選擇器。
 
 ## 設定鍵一覽（localStorage）
 

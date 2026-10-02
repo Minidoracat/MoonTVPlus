@@ -9,7 +9,16 @@ import {
   MusicV2PlaylistRecord,
 } from './music-v2';
 import { RedisAdapter } from './redis-adapter';
-import { Favorite, IStorage, Notification, PlayRecord, PushSubscriptionRecord, SkipConfig } from './types';
+import {
+  DoubanComment,
+  DoubanCommentCacheMeta,
+  Favorite,
+  IStorage,
+  Notification,
+  PlayRecord,
+  PushSubscriptionRecord,
+  SkipConfig,
+} from './types';
 import { userInfoCache } from './user-cache';
 import { dispatchNotificationChannels } from './notification-dispatch';
 
@@ -2523,5 +2532,99 @@ export abstract class BaseRedisStorage implements IStorage {
       this.adapter.get(`tvbox:token:${token}`)
     );
     return userName || null;
+  }
+
+  // ---------- 豆瓣短评落地 ----------
+  // dc:<id>:items hash(commentId → JSON)：内容，重复抓取时 upsert（votes 等随之更新）
+  // dc:<id>:list  zset(score=插入序号, member=commentId)：按首次见到的顺序稳定分页
+  // dc:<id>:meta  hash：抓取游标
+  private dcItemsKey(doubanId: string) {
+    return `dc:${doubanId}:items`;
+  }
+
+  private dcListKey(doubanId: string) {
+    return `dc:${doubanId}:list`;
+  }
+
+  private dcMetaKey(doubanId: string) {
+    return `dc:${doubanId}:meta`;
+  }
+
+  async getDoubanCommentPage(
+    doubanId: string,
+    start: number,
+    limit: number
+  ): Promise<{ comments: DoubanComment[]; meta: DoubanCommentCacheMeta | null }> {
+    const [raw, ids] = await Promise.all([
+      this.withRetry(() => this.adapter.hGetAll(this.dcMetaKey(doubanId))),
+      limit > 0
+        ? this.withRetry(() =>
+            this.adapter.zRange(this.dcListKey(doubanId), start, start + limit - 1)
+          )
+        : Promise.resolve([] as string[]),
+    ]);
+    // ponytail: 每页读整个 items hash（每片数百条、几十 KB）；上千条时改按 id 逐个 hGet
+    const items =
+      ids.length > 0
+        ? await this.withRetry(() => this.adapter.hGetAll(this.dcItemsKey(doubanId)))
+        : {};
+    const comments: DoubanComment[] = [];
+    for (const id of ids) {
+      if (items[id]) comments.push(JSON.parse(items[id]) as DoubanComment);
+    }
+    const meta: DoubanCommentCacheMeta | null =
+      Object.keys(raw).length > 0
+        ? {
+            count: Number(raw.count) || 0,
+            nextStart: Number(raw.nextStart) || 0,
+            total: Number(raw.total) || 0,
+            exhausted: raw.exhausted === '1',
+            retryAfter: Number(raw.retryAfter) || 0,
+            fetchedAt: Number(raw.fetchedAt) || 0,
+          }
+        : null;
+    return { comments, meta };
+  }
+
+  async appendDoubanComments(
+    doubanId: string,
+    comments: DoubanComment[],
+    meta: Omit<DoubanCommentCacheMeta, 'count'>
+  ): Promise<DoubanCommentCacheMeta> {
+    const itemsKey = this.dcItemsKey(doubanId);
+    const listKey = this.dcListKey(doubanId);
+    // 以 list 为成员真相、先写内容再公开成员：任一步中断后重试都不会重加、不改序、不留无内容的成员
+    const listed = await this.withRetry(() => this.adapter.zRange(listKey, 0, -1));
+    const listedIds: Record<string, true> = {};
+    for (const id of listed) listedIds[id] = true;
+    const upsert: Record<string, string> = {};
+    const newIds: string[] = [];
+    for (const comment of comments) {
+      if (upsert[comment.id]) continue;
+      upsert[comment.id] = JSON.stringify(comment);
+      if (!listedIds[comment.id]) newIds.push(comment.id);
+    }
+    if (Object.keys(upsert).length > 0) {
+      await this.withRetry(() => this.adapter.hSet(itemsKey, upsert));
+    }
+    let score = listed.length;
+    for (const id of newIds) {
+      await this.withRetry(() => this.adapter.zAdd(listKey, { score, value: id }));
+      score++;
+    }
+    // count 以 ZCARD 为准，不用本地累加
+    const count = await this.withRetry(() => this.adapter.zCard(listKey));
+    const next: DoubanCommentCacheMeta = { ...meta, count };
+    await this.withRetry(() =>
+      this.adapter.hSet(this.dcMetaKey(doubanId), {
+        count: String(next.count),
+        nextStart: String(next.nextStart),
+        total: String(next.total),
+        exhausted: next.exhausted ? '1' : '0',
+        retryAfter: String(next.retryAfter),
+        fetchedAt: String(next.fetchedAt),
+      })
+    );
+    return next;
   }
 }

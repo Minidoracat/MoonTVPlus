@@ -5,6 +5,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { checkAnimeSubscriptions } from '@/lib/anime-subscription';
 import { getConfig, refineConfig } from '@/lib/config';
 import { db, getStorage } from '@/lib/db';
+import { prewarmDoubanComments } from '@/lib/douban-comments';
 import { EmailService } from '@/lib/email.service';
 import {
   FavoriteUpdate,
@@ -795,6 +796,14 @@ async function refreshRecordAndFavorites() {
     }
 
     console.log('刷新播放记录/收藏任务完成');
+
+    // 豆瓣短评预热：复用本轮详情里的 douban_id，最多 3 部，遇拒即停；失败不影响上面的任务结果
+    try {
+      const details = await Promise.all(Array.from(detailCache.values()));
+      await prewarmDoubanComments(details.map((d) => d?.douban_id));
+    } catch (err) {
+      console.error('豆瓣短评预热失败', err);
+    }
   } catch (err) {
     console.error('刷新播放记录/收藏任务启动失败', err);
   }

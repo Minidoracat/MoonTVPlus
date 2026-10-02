@@ -277,6 +277,20 @@ export interface IStorage {
   getTvboxSubscribeToken?(userName: string): Promise<string | null>;
   setTvboxSubscribeToken?(userName: string, token: string): Promise<void>;
   getUsernameByTvboxToken?(token: string): Promise<string | null>;
+
+  // 豆瓣短评本地落地（可选：仅 Redis 系后端实现；未实现时 API 直连豆瓣）
+  // limit=0 只读 meta 不取评论；meta 为 null 表示从未写入过，失败记录也是一条 meta（count=0 且 fetchedAt=0）
+  getDoubanCommentPage?(
+    doubanId: string,
+    start: number,
+    limit: number
+  ): Promise<{ comments: DoubanComment[]; meta: DoubanCommentCacheMeta | null }>;
+  // 追加评论（按 id 去重、已有的更新内容）并更新抓取游标；count 由存储层以实际成员数决定
+  appendDoubanComments?(
+    doubanId: string,
+    comments: DoubanComment[],
+    meta: Omit<DoubanCommentCacheMeta, 'count'>
+  ): Promise<DoubanCommentCacheMeta>;
 }
 
 // 搜索结果数据结构
@@ -458,4 +472,26 @@ export interface MovieRequest {
   fulfilledAt?: number;
   fulfilledSource?: string;
   fulfilledId?: string;
+}
+
+// 豆瓣短评（爬取结果，也是本地落地的存储格式）
+export interface DoubanComment {
+  id: string;
+  userName: string;
+  userAvatar: string;
+  userUrl: string;
+  rating: number | null; // 1-5 星，null 表示未评分
+  content: string;
+  time: string;
+  votes: number;
+}
+
+// 豆瓣短评本地落地的抓取游标
+export interface DoubanCommentCacheMeta {
+  count: number; // 本地已落地条数（存储层维护）
+  nextStart: number; // 下次向豆瓣请求的 offset
+  total: number; // 豆瓣页面显示的总条数，0 = 未知
+  exhausted: boolean; // 最后一页没有"后页"；首页重抓看到"后页"会清掉
+  retryAfter: number; // 失败（403/404/空页 12h；超时/网络/5xx 1h）后的重试时间戳，0 = 可抓；闸门挡下的不计
+  fetchedAt: number; // 最近一次成功抓取的时间戳
 }

@@ -23,6 +23,8 @@ const customJestConfig = {
     '^@/(.*)$': '<rootDir>/src/$1',
     '^~/(.*)$': '<rootDir>/public/$1',
     '^.+\\.(svg)$': '<rootDir>/src/__mocks__/svg.tsx',
+    // jest 27 的 resolver 不认 package exports 子路径
+    '^cheerio/slim$': '<rootDir>/node_modules/cheerio/dist/commonjs/slim.js',
   },
 };
 

@@ -1,167 +1,105 @@
-import * as cheerio from 'cheerio/slim';
+/* eslint-disable no-console */
+
 import { NextRequest, NextResponse } from 'next/server';
 
-import { fetchDoubanWithVerification } from '@/lib/douban-anti-crawler';
+import {
+  doubanCooldownSeconds,
+  GATE_SATURATED_RETRY_SECONDS,
+  isDoubanBlocked,
+} from '@/lib/douban-anti-crawler';
+import {
+  ensureDoubanComments,
+  fetchDoubanCommentPage,
+  getDoubanCommentStore,
+} from '@/lib/douban-comments';
 
 export const runtime = 'nodejs';
-
-interface DoubanComment {
-  id: string;
-  userName: string;
-  userAvatar: string;
-  userUrl: string;
-  rating: number | null; // 1-5 星，null 表示未评分
-  content: string;
-  time: string;
-  votes: number;
-}
 
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
   const doubanId = searchParams.get('id');
-  const start = searchParams.get('start') || '0';
-  const limit = searchParams.get('limit') || '20';
+  const start = Math.max(0, parseInt(searchParams.get('start') || '0', 10) || 0);
+  const limit = Math.min(
+    50,
+    Math.max(1, parseInt(searchParams.get('limit') || '20', 10) || 20)
+  );
 
-  if (!doubanId) {
+  if (!doubanId || !/^\d+$/.test(doubanId)) {
     return NextResponse.json({ error: 'Missing douban ID' }, { status: 400 });
   }
 
+  const store = getDoubanCommentStore();
+  if (!store) {
+    return passthrough(doubanId, start, limit);
+  }
+
   try {
-    // 请求豆瓣短评页面（使用反爬验证）
-    const url = `https://movie.douban.com/subject/${doubanId}/comments?start=${start}&limit=${limit}&status=P&sort=new_score`;
-
-    const response = await fetchDoubanWithVerification(url);
-
-    if (!response.ok) {
+    // 前端 start 是本地列表的 offset；向豆瓣抓取的游标由 meta.nextStart 单独维护
+    const meta = await ensureDoubanComments(doubanId, start + limit, start === 0);
+    // 从未成功抓取过（本地为空且被拒/受阻）→ 明确报错让前端给重试入口；已有本地数据则降级只回本地
+    // Retry-After：全局冷却 → 剩余秒数（429）；该片罚期仍有效 → 剩余秒数；否则（无 meta 或罚期已过 = 本次被闸门饱和挡下）→ 30s
+    if (!meta || (meta.count === 0 && meta.fetchedAt === 0)) {
+      const cooldown = doubanCooldownSeconds();
+      const penalty = meta ? Math.ceil((meta.retryAfter - Date.now()) / 1000) : 0;
+      const retryAfter =
+        cooldown > 0 ? cooldown : penalty > 0 ? penalty : GATE_SATURATED_RETRY_SECONDS;
       return NextResponse.json(
         { error: 'Failed to fetch douban page' },
-        { status: response.status }
+        { status: cooldown > 0 ? 429 : 503, headers: { 'Retry-After': String(retryAfter) } }
       );
     }
-
-    const html = await response.text();
-    const $ = cheerio.load(html);
-
-    const comments: DoubanComment[] = [];
-
-    console.log('开始解析豆瓣评论，start:', start, 'limit:', limit);
-
-    // 解析每条短评
-    $('.comment-item').each((index, element) => {
-      const $comment = $(element);
-
-      // 提取评论 ID
-      const commentId = $comment.attr('data-cid') || '';
-
-      // 提取用户信息
-      const $avatar = $comment.find('.avatar');
-      const userUrl = $avatar.find('a').attr('href') || '';
-      const userAvatar = $avatar.find('img').attr('src') || '';
-      const userName = $avatar.find('a').attr('title') || '';
-
-      // 提取评分（星级）
-      const ratingClass = $comment.find('.rating').attr('class') || '';
-      let rating: number | null = null;
-      const ratingMatch = ratingClass.match(/allstar(\d)0/);
-      if (ratingMatch) {
-        rating = parseInt(ratingMatch[1]);
-      }
-
-      // 提取短评内容
-      const $content = $comment.find('.short');
-      const content = $content.text().trim();
-
-      // 提取时间
-      const $commentInfo = $comment.find('.comment-info');
-      const time = $commentInfo.find('.comment-time').attr('title') || '';
-
-      // 提取有用数
-      const votesText = $comment.find('.votes.vote-count').text().trim();
-      const votes = parseInt(votesText) || 0;
-
-      if (commentId && content) {
-        comments.push({
-          id: commentId,
-          userName,
-          userAvatar,
-          userUrl,
-          rating,
-          content,
-          time,
-          votes,
-        });
-      }
-    });
-
-    console.log('解析到评论数:', comments.length);
-
-    // 获取总评论数 - 尝试多种方式
-    let total = 0;
-
-    // 方式1: 从标题获取 "全部 XXX 条"
-    const titleText = $('.mod-hd h2, h2, .section-title').text();
-    const titleMatch = titleText.match(/全部\s*(\d+)\s*条/);
-    if (titleMatch) {
-      total = parseInt(titleMatch[1]);
-    }
-
-    // 方式2: 从导航标签获取 "看过(XXX)"
-    if (total === 0) {
-      const navText = $('.tabs, .nav-tabs, a').text();
-      const navMatch = navText.match(/看过\s*\((\d+)\)/);
-      if (navMatch) {
-        total = parseInt(navMatch[1]);
-      }
-    }
-
-    // 方式3: 从页面所有文本查找
-    if (total === 0) {
-      const bodyText = $('body').text();
-      const bodyMatch = bodyText.match(/全部\s*(\d+)\s*条|看过\s*\((\d+)\)/);
-      if (bodyMatch) {
-        total = parseInt(bodyMatch[1] || bodyMatch[2]);
-      }
-    }
-
-    // 方式4: 如果有评论但 total 为 0，至少设置为当前评论数，并假设有更多
-    if (total === 0 && comments.length > 0) {
-      total = parseInt(start) + comments.length;
-      // 如果本次获取了完整的 limit 数量，可能还有更多
-      if (comments.length >= parseInt(limit)) {
-        total += 1; // 暂定有更多
-      }
-    }
-
-    console.log('豆瓣评论统计:', {
-      total,
-      commentsCount: comments.length,
-      start,
-      limit,
-      hasMore: parseInt(start) + comments.length < total || (total === 0 && comments.length >= parseInt(limit)),
-    });
+    const { comments } = await store.getDoubanCommentPage(doubanId, start, limit);
+    const canFetchMore =
+      !meta.exhausted && meta.retryAfter <= Date.now() && !isDoubanBlocked();
 
     return NextResponse.json(
       {
         comments,
-        total,
-        start: parseInt(start),
-        limit: parseInt(limit),
-        // 如果知道总数，就用总数判断；否则如果获取了完整页，假设还有更多
-        hasMore: total > 0
-          ? parseInt(start) + comments.length < total
-          : comments.length >= parseInt(limit),
+        total: Math.max(meta.count, meta.total),
+        start,
+        limit,
+        hasMore: start + comments.length < meta.count || canFetchMore,
       },
-      {
-        headers: {
-          'Cache-Control': 'public, max-age=600, s-maxage=600',
-        },
-      }
+      { headers: { 'Cache-Control': 'no-store' } }
     );
   } catch (error) {
     console.error('Douban comments fetch error:', error);
     return NextResponse.json(
-      { error: 'Failed to parse douban comments' },
+      { error: 'Failed to load douban comments' },
       { status: 500 }
     );
   }
+}
+
+/**
+ * 存储后端不支持落地（SQL / localstorage）时的原始行为：每次直连豆瓣，语义与旧实现一致
+ */
+async function passthrough(doubanId: string, start: number, limit: number) {
+  const page = await fetchDoubanCommentPage(doubanId, start, limit);
+  if ('status' in page) {
+    return NextResponse.json(
+      { error: 'Failed to fetch douban page' },
+      {
+        status: page.status >= 400 && page.status < 600 ? page.status : 503,
+        headers: page.retryAfter ? { 'Retry-After': page.retryAfter } : undefined,
+      }
+    );
+  }
+  const { comments } = page;
+  // 旧实现：页面没给总数时，用 start+本页数估计；满页则 +1 表示"可能还有"
+  let total = page.total;
+  if (total === 0 && comments.length > 0) {
+    total = start + comments.length + (comments.length >= limit ? 1 : 0);
+  }
+  return NextResponse.json(
+    {
+      comments,
+      total,
+      start,
+      limit,
+      hasMore:
+        total > 0 ? start + comments.length < total : comments.length >= limit,
+    },
+    { headers: { 'Cache-Control': 'public, max-age=600, s-maxage=600' } }
+  );
 }

@@ -34,9 +34,13 @@ export async function GET(request: NextRequest) {
     const response = await fetchDoubanWithVerification(url);
 
     if (!response.ok) {
+      const retryAfter = response.headers.get('Retry-After');
       return NextResponse.json(
         { error: 'Failed to fetch douban page' },
-        { status: response.status }
+        {
+          status: response.status,
+          headers: retryAfter ? { 'Retry-After': retryAfter } : undefined,
+        }
       );
     }
 

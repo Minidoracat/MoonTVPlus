@@ -30,6 +30,11 @@
 | `src/app/api/cron/[password]/route.ts` | `refreshRecordAndFavorites` 末尾的 `prewarmDoubanComments` |
 | `src/app/api/douban-recommendations/route.ts` | `!response.ok` 時轉發 `Retry-After` |
 | `jest.config.js` | `moduleNameMapper` 的 `^cheerio/slim$`（jest 27 不認 exports 子路徑） |
+| `src/app/manga/page.tsx` | 捲動只讀寫 `document.body.scrollTop`；瀏覽狀態在 layout effect cleanup 存；`appendUniqueMangas`；`pickDefaultMangaSourceId`；卡片 href 用 `buildMangaDetailHref` |
+| `src/app/manga/detail/page.tsx`、`src/app/manga/read/page.tsx` | `orderMangaChapters`、章節分批與 `prefetch={false}`、`MangaChapterOrderToggle`、`useOverlayFocus`；同目錄 `loading.tsx` 不可刪 |
+| `src/app/manga/search/page.tsx`、`src/app/manga/shelf/page.tsx`、`src/components/manga/MangaHistoryCard.tsx`、`src/components/manga/MangaLayout.tsx` | 詳情連結一律 `buildMangaDetailHref`；MangaLayout 的 skip link 與源管理 `useOverlayFocus` |
+| `src/lib/suwayomi.client.ts` | `chapterPagesCache`；`uploadDate` 轉數字；詳情 `sourceName` 退回伺服器來源名 |
+| `src/components/MangaCard.tsx` | `block`、`showSource`／`meta`／`progress`；hover 只給 `(hover:hover)`、動畫 `motion-safe:` |
 
 ## 1. 全站繁體中文介面
 
@@ -149,6 +154,25 @@
 - 實測（2026-09-07，肖申克 1292052）：首次 2.7–3.3s（含 PoW）→ 本地 10–20ms；豆瓣本體匿名 `start=200` 回 403（本 API 的 `start` 是本地 rank，不會 403）。
 - 實測（2026-09-07，`isCommentsPage` 依據）：有評論頁（1292052 `start=0`）`#comments`=1；合法空頁（畢業短片 35632994，「看过(39)」，`start=40`）→ 200、`#comments`=1、0 則、無 `a.next`、內文「还没有人写过短评」。豆瓣改版時先查這個選擇器。
 
+## 9. 漫畫模組：iOS 返回、載入與資訊清晰度
+
+- 新增：`src/app/manga/loading.tsx`、`src/app/manga/detail/loading.tsx`（同時是詳情頁抓資料時的骨架）、`src/app/manga/read/loading.tsx`、`src/components/manga/MangaChapterOrderToggle.tsx`、`src/hooks/useOverlayFocus.ts`
+- 修改上游：`src/app/manga/{page,detail/page,read/page,search/page,shelf/page}.tsx`、`src/components/{MangaCard,CapsuleSwitch}.tsx`、`src/components/manga/{MangaLayout,MangaHistoryCard}.tsx`、`src/lib/suwayomi.client.ts`；
+  本 fork 檔案：`src/lib/{manga-reader,manga-browse-state,manga-source-groups}.ts`、`src/components/manga/{MangaSourcePicker,MangaSourceSheet,MangaSourceMultiPicker,MangaFilterGroupChips}.tsx`
+- 必守（合併上游或重寫時不可退回）：
+  - 捲動容器是 `body`，存／還原只讀寫 `document.body.scrollTop`。對根捲動寫非 0（`window.scrollTo(0, y)`、`documentElement.scrollTop = y`）在 iOS 27 PWA 會把到不了的位置交給原生捲動層，整頁能捲卻點不動
+  - 漫畫連結一律用 `URLSearchParams` 組（`buildMangaDetailHref`／`buildMangaReadHref`）。Next 14.2 預取時 `searchParams.delete('_rsc')` 會把查詢字串重新序列化（空白 → `+`、括號 → `%28`），`encodeURIComponent` 拼的網址與點擊時的快取 key 對不上：預取全部白做、點下去要等伺服器完整回應、loading 也出不來
+  - loading boundary 要放在被導覽到的那一段（`detail/`、`read/`）；只放 `app/manga/loading.tsx` 對 `/manga` → `/manga/detail` 不起作用
+  - 章節順序走 `orderMangaChapters`：Suwayomi 回的清單即來源順序（舊到新）。有話數的章節逆向不超過一成就照它，特別篇（`chapterNumber -1`）與名稱尾數被誤判的話數都留在原位；真的亂序才退回話數 → `uploadDate` → id
+  - 詳情章節每批 120 話、章節連結 `prefetch={false}`；閱讀器章節面板 `content-visibility:auto`
+  - `getChapterPages` 的 `chapterPagesCache`：30 分鐘、64 筆、併發合併、空清單不快取、命中仍跑 `assertSourceAllowed`
+  - 推荐：分頁用 `appendUniqueMangas` 去重（整頁重複就停止翻頁）；沒帶來源時 `pickDefaultMangaSourceId`（最近選過 → 熱門測試正常的一般源 → 混合源）；離開列表在 layout effect cleanup 存瀏覽狀態，還原捲動要等分類載入完成
+  - `useOverlayFocus(..., { modal: true })` 只給蓋住整個畫面、portal 到 body 的層（源管理、換源 sheet）；閱讀器面板不設 inert，header 開關要保持可按
+- 介面：章節預設最早在前（`moontv_manga_chapter_order`）；推荐卡片不重複來源與類型徽章，分行顯示「最新：… · 共 N 話」「看到：…」「作者：… · 狀態」；
+  觸控裝置不套 hover 位移，選取類 hover 只給 `(hover:hover)`；`prefers-reduced-motion` 時停用卡片位移／縮放與未讀徽章動畫
+- 實測（2026-10-02，production build、iPhone 13 模擬、CPU 4× 降速）：點卡片到出現骨架 ~975ms → 106–121ms（網路延遲 400ms）；開始閱讀 1606ms → 115ms；
+  武炼巅峰（3875 話）詳情 ready 1.9–2.6s → 0.40s、TBT 1.5–1.9s → 48–59ms、往下捲觸發的 RSC 預取 124 → 0
+
 ## 設定鍵一覽（localStorage）
 
 | Key | 功能 | 預設 |
@@ -156,6 +180,7 @@
 | `interfaceTraditionalChinese` | 繁體中文介面 | 無值時依系統語系自動判斷 |
 | `crossRegionTitleSearch` | 三地片名搜尋 | `true`（未設或非 `'false'` 即開） |
 | `searchTraditionalToSimplified` | 搜尋繁轉簡（上游既有，繁體介面啟用時連動開啟） | `false` |
+| `moontv_manga_chapter_order` | 漫畫章節排序（詳情頁與閱讀器共用） | 無值＝最早在前；`newest` 時最新在前 |
 
 ## 上游同步流程
 

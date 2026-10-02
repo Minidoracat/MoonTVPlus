@@ -249,7 +249,7 @@ export default function MangaSourceMultiPicker({
                 className={`flex min-h-11 cursor-pointer items-center gap-2 rounded-2xl border px-3 py-2 text-left transition-colors duration-200 ${
                   active
                     ? 'border-sky-500 bg-sky-50 text-sky-700 dark:bg-sky-950/40 dark:text-sky-300'
-                    : 'border-gray-200 text-gray-700 hover:border-sky-400 dark:border-gray-800 dark:text-gray-200'
+                    : 'border-gray-200 text-gray-700 dark:border-gray-800 dark:text-gray-200 [@media(hover:hover)]:hover:border-sky-400'
                 }`}
               >
                 <span

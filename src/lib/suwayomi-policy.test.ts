@@ -298,7 +298,8 @@ describe('getMangaDetail 的詳情快取', () => {
     expect(withFallback.sourceName).toBe('呼叫端来源名');
     // 上游沒給 description，第二位呼叫端就該是 undefined 而不是別人的值
     expect(withoutFallback.description).toBeUndefined();
-    expect(withoutFallback.sourceName).toBe(SOURCE_ID);
+    // 沒帶來源名稱時用伺服器上的來源名（mock 的 '来源'），不是 ID，也不是別的呼叫端給的
+    expect(withoutFallback.sourceName).toBe('来源');
     // 伺服器事實兩邊一致
     expect(withoutFallback.title).toBe('上游标题');
     expect(withFallback.title).toBe('上游标题');
@@ -509,5 +510,69 @@ describe('getChapterSummaries 的摘要補抓', () => {
     expect(requestBodies.some((body) => body.includes('fetchChapters'))).toBe(
       false
     );
+  });
+});
+
+/**
+ * 章節內頁快取（30 分鐘）的回歸鎖：開同一話不再讓 Suwayomi 回來源站重抓，
+ * 但快取不能變成授權旁路，也不能把上游偶發的空清單記住。
+ */
+describe('getChapterPages 的內頁快取', () => {
+  const SOURCE_ID = 'pages-source';
+  const PAGES_QUERY = 'GET_CHAPTER_PAGES_FETCH';
+
+  let client: SuwayomiClient;
+  let requestBodies: string[];
+  let pages: string[];
+  const originalFetch = global.fetch;
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    setConfigState(false, []);
+    client = new SuwayomiClient();
+    requestBodies = [];
+    pages = ['/api/v1/manga/1307/chapter/1/page/0'];
+    global.fetch = jest.fn(async (_url: string, init?: RequestInit) => {
+      const body = String(init?.body ?? '');
+      requestBodies.push(body);
+      let payload: unknown = { data: {} };
+      if (body.includes('ChapterSource')) {
+        payload = { data: { chapter: { id: 1, manga: { id: 1307, sourceId: SOURCE_ID } } } };
+      } else if (body.includes(PAGES_QUERY)) {
+        payload = { data: { fetchChapterPages: { pages } } };
+      } else if (body.includes('sources')) {
+        payload = { data: { sources: { nodes: [{ id: SOURCE_ID, name: '来源', lang: 'zh' }] } } };
+      }
+      return { ok: true, status: 200, text: async () => JSON.stringify(payload) } as unknown as Response;
+    }) as unknown as typeof global.fetch;
+  });
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+  });
+
+  const pageFetches = () => requestBodies.filter((b) => b.includes(PAGES_QUERY)).length;
+
+  it('同一話在 TTL 內不再打上游，併發請求也只發一次', async () => {
+    const [first] = await Promise.all([client.getChapterPages('1'), client.getChapterPages('1')]);
+    const again = await client.getChapterPages('1');
+    expect(again).toEqual(first);
+    expect(first[0]).toContain('/api/manga/image');
+    expect(pageFetches()).toBe(1);
+  });
+
+  it('命中快取仍要驗權：來源被移出白名單後必須拒絕', async () => {
+    await client.getChapterPages('1');
+    setConfigState(false, ['999']);
+    await expect(client.getChapterPages('1')).rejects.toThrow();
+    expect(pageFetches()).toBe(1);
+  });
+
+  it('上游回空清單不快取，下次重新抓', async () => {
+    pages = [];
+    await expect(client.getChapterPages('1')).resolves.toEqual([]);
+    pages = ['/api/v1/manga/1307/chapter/1/page/0'];
+    await expect(client.getChapterPages('1')).resolves.toHaveLength(1);
+    expect(pageFetches()).toBe(2);
   });
 });

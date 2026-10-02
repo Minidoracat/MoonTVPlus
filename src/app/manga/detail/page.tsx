@@ -1,6 +1,6 @@
 'use client';
 
-import { ArrowDownWideNarrow, ArrowUpWideNarrow, BookOpen, Clock3 } from 'lucide-react';
+import { BookOpen, Clock3 } from 'lucide-react';
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -16,6 +16,7 @@ import {
   buildMangaReadHref,
   buildMangaShelfItem,
   orderMangaChapters,
+  readMangaChapterNewestFirst,
 } from '@/lib/manga-reader';
 import {
   getMangaCreatorGroups,
@@ -23,51 +24,20 @@ import {
 } from '@/lib/manga-search-view';
 import { MangaChapter, MangaDetail, MangaReadRecord, MangaShelfItem } from '@/lib/manga.types';
 
+import MangaChapterOrderToggle from '@/components/manga/MangaChapterOrderToggle';
 import ProxyImage from '@/components/ProxyImage';
 
-function MangaDetailSkeleton() {
-  return (
-    <div className='space-y-6'>
-      <div className='grid gap-6 rounded-[28px] border border-gray-200 bg-white p-6 shadow-sm dark:border-gray-800 dark:bg-gray-950 md:grid-cols-[260px_1fr]'>
-        <div className='aspect-[3/4] animate-pulse rounded-3xl bg-gray-200 dark:bg-gray-800' />
-        <div className='space-y-4'>
-          <div className='h-8 w-2/3 animate-pulse rounded bg-gray-200 dark:bg-gray-800' />
-          <div className='flex gap-2'>
-            <div className='h-7 w-24 animate-pulse rounded-full bg-gray-200 dark:bg-gray-800' />
-            <div className='h-7 w-20 animate-pulse rounded-full bg-gray-200 dark:bg-gray-800' />
-          </div>
-          <div className='space-y-3'>
-            <div className='h-4 w-full animate-pulse rounded bg-gray-200 dark:bg-gray-800' />
-            <div className='h-4 w-11/12 animate-pulse rounded bg-gray-200 dark:bg-gray-800' />
-            <div className='h-4 w-4/5 animate-pulse rounded bg-gray-200 dark:bg-gray-800' />
-          </div>
-          <div className='flex flex-wrap gap-3'>
-            <div className='h-12 w-32 animate-pulse rounded-2xl bg-gray-200 dark:bg-gray-800' />
-            <div className='h-12 w-40 animate-pulse rounded-2xl bg-gray-200 dark:bg-gray-800' />
-            <div className='h-12 w-32 animate-pulse rounded-2xl bg-gray-200 dark:bg-gray-800' />
-          </div>
-        </div>
-      </div>
-      <div className='rounded-[28px] border border-gray-200 bg-white p-6 shadow-sm dark:border-gray-800 dark:bg-gray-950'>
-        <div className='mb-4 h-6 w-32 animate-pulse rounded bg-gray-200 dark:bg-gray-800' />
-        <div className='space-y-3'>
-          {Array.from({ length: 8 }).map((_, index) => (
-            <div key={index} className='rounded-2xl border border-gray-200 px-4 py-3 dark:border-gray-700'>
-              <div className='h-4 w-1/3 animate-pulse rounded bg-gray-200 dark:bg-gray-800' />
-              <div className='mt-2 h-3 w-1/4 animate-pulse rounded bg-gray-200 dark:bg-gray-800' />
-            </div>
-          ))}
-        </div>
-      </div>
-    </div>
-  );
-}
+import MangaDetailSkeleton from './loading';
 
-function formatChapterMeta(chapter: MangaChapter): string | null {
+/** 章節一次畫這麼多：GoDa 有作品 3875 話，全畫在手機上會卡住一秒以上 */
+const CHAPTER_BATCH = 120;
+
+/** 頁數與更新日期各自有值就都顯示，不因有頁數就把日期丟掉 */
+function formatChapterMeta(chapter: MangaChapter): string {
+  const parts: string[] = [];
   if (typeof chapter.pageCount === 'number' && chapter.pageCount > 0) {
-    return `${chapter.pageCount} 页`;
+    parts.push(`${chapter.pageCount} 页`);
   }
-
   if (typeof chapter.uploadDate === 'number' && chapter.uploadDate > 0) {
     const timestamp =
       chapter.uploadDate > 1_000_000_000_000
@@ -75,11 +45,10 @@ function formatChapterMeta(chapter: MangaChapter): string | null {
         : chapter.uploadDate * 1000;
     const date = new Date(timestamp);
     if (!Number.isNaN(date.getTime())) {
-      return date.toLocaleDateString('zh-CN');
+      parts.push(`更新于 ${date.toLocaleDateString('zh-CN')}`);
     }
   }
-
-  return null;
+  return parts.join(' · ');
 }
 
 function creatorSearchHref(
@@ -105,7 +74,9 @@ export default function MangaDetailPage() {
   const [detailError, setDetailError] = useState('');
   const [history, setHistory] = useState<Record<string, MangaReadRecord>>({});
   const [shelf, setShelf] = useState<Record<string, MangaShelfItem>>({});
-  const [descOrder, setDescOrder] = useState(true);
+  // 預設最早在前（從第一話往下看）；使用者改過就記住，閱讀器的章節面板也沿用
+  const [descOrder, setDescOrder] = useState(false);
+  const [chapterLimit, setChapterLimit] = useState(CHAPTER_BATCH);
   const clearedOnOpenRef = useRef<string | null>(null);
 
   const key = `${sourceId}+${mangaId}`;
@@ -157,6 +128,15 @@ export default function MangaDetailPage() {
       ),
     []
   );
+
+  useEffect(() => {
+    setDescOrder(readMangaChapterNewestFirst());
+  }, []);
+
+  // 換作品就從頭只畫一批
+  useEffect(() => {
+    setChapterLimit(CHAPTER_BATCH);
+  }, [key]);
 
   const chronologicalChapters = useMemo(
     () => orderMangaChapters(detail?.chapters || []),
@@ -266,13 +246,14 @@ export default function MangaDetailPage() {
       <div className='grid grid-cols-[112px_1fr] gap-4 rounded-[28px] border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-800 dark:bg-gray-950 sm:p-6 md:grid-cols-[260px_1fr] md:gap-6'>
         <div className='aspect-[3/4] self-start overflow-hidden rounded-2xl bg-gray-100 dark:bg-gray-800 md:row-span-2 md:aspect-auto md:self-stretch md:rounded-3xl'>
           {detail.cover ? (
-            <ProxyImage originalSrc={detail.cover} alt={detail.title} className='h-full w-full object-cover' />
+            // 標題就在旁邊的 h1，封面不再重唸一次
+            <ProxyImage originalSrc={detail.cover} alt='' className='h-full w-full object-cover' />
           ) : (
             <div className='flex h-full items-center justify-center text-sm text-gray-400'>暂无封面</div>
           )}
         </div>
         <div className='min-w-0'>
-          <h1 className='line-clamp-3 break-words text-2xl font-bold md:text-3xl' title={detail.title}>
+          <h1 className='break-words text-2xl font-bold md:text-3xl'>
             {detail.title}
           </h1>
           <div className='mt-3 flex flex-wrap gap-2 text-xs text-gray-500'>
@@ -310,8 +291,8 @@ export default function MangaDetailPage() {
           {detail.description && <p className='text-sm leading-7 text-gray-600 dark:text-gray-300'>{detail.description}</p>}
           <div className='flex flex-wrap gap-3'>
             {firstChapter && (
-              <Link href={chapterHref(firstChapter)} className='inline-flex grow items-center justify-center rounded-2xl bg-sky-600 px-5 py-3 text-sm font-medium text-white transition hover:bg-sky-700 sm:grow-0'>
-                <BookOpen className='mr-2 inline h-4 w-4' />开始阅读
+              <Link href={chapterHref(firstChapter)} className='inline-flex min-h-11 grow items-center justify-center rounded-2xl bg-sky-600 px-5 py-3 text-sm font-medium text-white transition hover:bg-sky-700 sm:grow-0'>
+                <BookOpen aria-hidden='true' className='mr-2 inline h-4 w-4' />开始阅读
               </Link>
             )}
             {currentRecord && (
@@ -327,12 +308,18 @@ export default function MangaDetailPage() {
                   returnTo,
                   startAtFirstPage: false,
                 })}
-                className='inline-flex grow items-center justify-center rounded-2xl border border-sky-300 px-5 py-3 text-sm font-medium text-sky-700 transition hover:bg-sky-50 dark:text-sky-300 dark:hover:bg-sky-950/30 sm:grow-0'
+                className='inline-flex min-h-11 grow items-center justify-center rounded-2xl border border-sky-300 px-5 py-2 text-sm font-medium text-sky-700 transition hover:bg-sky-50 dark:text-sky-300 dark:hover:bg-sky-950/30 sm:grow-0'
               >
-                <Clock3 className='mr-2 inline h-4 w-4' />继续阅读 第 {currentRecord.pageIndex + 1}/{currentRecord.pageCount} 页
+                <Clock3 aria-hidden='true' className='mr-2 h-4 w-4 shrink-0' />
+                <span className='min-w-0 text-left'>
+                  <span className='block'>继续阅读</span>
+                  <span className='block break-words text-xs font-normal opacity-80'>
+                    {currentRecord.chapterName} · 第 {currentRecord.pageIndex + 1}/{currentRecord.pageCount} 页
+                  </span>
+                </span>
               </Link>
             )}
-            <button onClick={toggleShelf} className='inline-flex grow items-center justify-center rounded-2xl border border-gray-200 px-5 py-3 text-sm font-medium text-gray-700 transition hover:border-sky-300 hover:text-sky-600 dark:border-gray-700 dark:text-gray-200 sm:grow-0'>
+            <button type='button' onClick={toggleShelf} className='inline-flex min-h-11 grow items-center justify-center rounded-2xl border border-gray-200 px-5 py-3 text-sm font-medium text-gray-700 transition hover:border-sky-300 hover:text-sky-600 dark:border-gray-700 dark:text-gray-200 sm:grow-0'>
               {shelf[key] ? '移出书架' : '加入书架'}
             </button>
           </div>
@@ -340,19 +327,29 @@ export default function MangaDetailPage() {
       </div>
 
       <div className='rounded-[28px] border border-gray-200 bg-white p-6 shadow-sm dark:border-gray-800 dark:bg-gray-950'>
-        <div className='mb-4 flex items-center justify-between'>
-          <h2 className='text-lg font-semibold'>章节列表</h2>
-          <button onClick={() => setDescOrder((prev) => !prev)} className='rounded-2xl border border-gray-200 px-4 py-2 text-sm dark:border-gray-700'>
-            {descOrder ? <ArrowDownWideNarrow className='inline h-4 w-4' /> : <ArrowUpWideNarrow className='inline h-4 w-4' />} {descOrder ? '倒序' : '正序'}
-          </button>
+        <div className='mb-4 flex flex-wrap items-center justify-between gap-3'>
+          <h2 className='text-lg font-semibold'>
+            章节列表
+            <span className='ml-2 text-sm font-normal text-gray-500 dark:text-gray-400'>
+              共 {chronologicalChapters.length} 话
+            </span>
+          </h2>
+          {chronologicalChapters.length > 1 && (
+            <MangaChapterOrderToggle newestFirst={descOrder} onChange={setDescOrder} />
+          )}
         </div>
         {unreadChapterCount > 0 && latestChapter && (
           <div className='mb-4 rounded-2xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-700 dark:border-sky-900/50 dark:bg-sky-950/30 dark:text-sky-300'>
-            已更新 {unreadChapterCount} 话，最新章节：{latestChapter.name}
+            新增 {unreadChapterCount} 话，最新章节：{latestChapter.name}
           </div>
         )}
+        {chronologicalChapters.length === 0 && (
+          <p className='rounded-2xl bg-gray-50 px-4 py-8 text-center text-sm text-gray-500 dark:bg-gray-900/50 dark:text-gray-400'>
+            暂无章节
+          </p>
+        )}
         <div className='grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4'>
-          {chapters.map((chapter) => {
+          {chapters.slice(0, chapterLimit).map((chapter) => {
             const active = currentRecord?.chapterId === chapter.id;
             const isNewChapter = newChapterIds.has(chapter.id);
             const metaText = [
@@ -365,13 +362,16 @@ export default function MangaDetailPage() {
               <Link
                 key={chapter.id}
                 href={chapterHref(chapter)}
-                className={`rounded-2xl border px-4 py-3 text-sm transition ${active ? 'border-sky-400 bg-sky-50 dark:bg-sky-950/30' : isNewChapter ? 'border-emerald-300 bg-emerald-50/80 dark:border-emerald-800 dark:bg-emerald-950/20' : 'border-gray-200 hover:border-sky-300 dark:border-gray-700'}`}
+                prefetch={false}
+                aria-current={active ? 'true' : undefined}
+                // 觸控點過後 :hover 會殘留，藍框容易被看成「目前章節」，hover 只給真的能 hover 的裝置
+                className={`rounded-2xl border px-4 py-3 text-sm transition ${active ? 'border-sky-400 bg-sky-50 dark:bg-sky-950/30' : isNewChapter ? 'border-emerald-300 bg-emerald-50/80 dark:border-emerald-800 dark:bg-emerald-950/20' : 'border-gray-200 dark:border-gray-700 [@media(hover:hover)]:hover:border-sky-300'}`}
               >
                 <div className='flex items-center justify-between gap-3'>
-                  <div className='font-medium text-gray-900 dark:text-gray-100'>{chapter.name}</div>
+                  <div className='break-words font-medium text-gray-900 dark:text-gray-100'>{chapter.name}</div>
                   {isNewChapter && (
                     <span className='rounded-full bg-emerald-500/10 px-2 py-0.5 text-[11px] font-medium text-emerald-600 dark:text-emerald-300'>
-                      NEW
+                      新增
                     </span>
                   )}
                 </div>
@@ -380,6 +380,15 @@ export default function MangaDetailPage() {
             );
           })}
         </div>
+        {chapters.length > chapterLimit && (
+          <button
+            type='button'
+            onClick={() => setChapterLimit((limit) => limit + CHAPTER_BATCH * 2)}
+            className='mt-4 inline-flex min-h-11 w-full cursor-pointer items-center justify-center rounded-2xl border border-gray-200 px-4 text-sm font-medium text-gray-700 transition-colors hover:border-sky-300 hover:text-sky-600 dark:border-gray-700 dark:text-gray-200'
+          >
+            再显示 {Math.min(CHAPTER_BATCH * 2, chapters.length - chapterLimit)} 话（还有 {chapters.length - chapterLimit} 话）
+          </button>
+        )}
       </div>
     </div>
   );

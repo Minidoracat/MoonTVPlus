@@ -14,6 +14,7 @@ import { useMemo, useState } from 'react';
 import { useLongPress } from '@/hooks/useLongPress';
 import {
   buildMangaAlternateSearchHref,
+  buildMangaDetailHref,
   buildMangaReadHref,
 } from '@/lib/manga-reader';
 import { MangaReadRecord } from '@/lib/manga.types';
@@ -58,13 +59,14 @@ export default function MangaHistoryCard({
 
   const detailHref = useMemo(
     () =>
-      `/manga/detail?mangaId=${item.mangaId}&sourceId=${
-        item.sourceId
-      }&title=${encodeURIComponent(item.title)}&cover=${encodeURIComponent(
-        item.cover
-      )}&sourceName=${encodeURIComponent(
-        item.sourceName
-      )}&returnTo=${encodeURIComponent('/manga/history')}`,
+      buildMangaDetailHref({
+        mangaId: item.mangaId,
+        sourceId: item.sourceId,
+        title: item.title,
+        cover: item.cover,
+        sourceName: item.sourceName,
+        returnTo: '/manga/history',
+      }),
     [item]
   );
 

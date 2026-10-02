@@ -5,8 +5,29 @@ import type {
   MangaShelfItem,
 } from '@/lib/manga.types';
 
-/** 章節的唯一排序規則，章節列表與「下一話」必須共用，否則兩邊會漂移。 */
+/**
+ * 章節的唯一排序規則，章節列表與「下一話」必須共用，否則兩邊會漂移。
+ *
+ * Suwayomi 回的清單本來就是來源順序（舊到新），比話數可靠：沒話數的特別篇、請假條
+ * （chapterNumber -1）照話數排會全擠到第 1 話之前（武炼巅峰有 195 話），名稱尾端的數字
+ * 還會被誤判成話數（「大决战篇-混沌灵王 2」被當成第 2 話）。所以清單大致有序就照它，
+ * 只依有話數的章節判斷是舊到新還是新到舊；真的亂序才退回話數 → uploadDate → id。
+ */
 export function orderMangaChapters(chapters: MangaChapter[]): MangaChapter[] {
+  let rises = 0;
+  let falls = 0;
+  let previous: number | null = null;
+  for (const chapter of chapters) {
+    const chapterNo = chapter.chapterNumber;
+    if (typeof chapterNo !== 'number' || chapterNo < 0) continue;
+    if (previous !== null && chapterNo > previous) rises++;
+    if (previous !== null && chapterNo < previous) falls++;
+    previous = chapterNo;
+  }
+  // ponytail: 逆向不超過一成就當作有序；來源亂序又剛好接近一成時才會選錯
+  if (Math.min(rises, falls) * 10 <= rises + falls) {
+    return falls > rises ? [...chapters].reverse() : [...chapters];
+  }
   return [...chapters].sort((a, b) => {
     const numberDiff = (a.chapterNumber ?? 0) - (b.chapterNumber ?? 0);
     if (numberDiff !== 0) return numberDiff;
@@ -24,6 +45,28 @@ export function getNextMangaChapter(
   const index = ordered.findIndex((chapter) => chapter.id === chapterId);
   if (index < 0 || index >= ordered.length - 1) return null;
   return ordered[index + 1];
+}
+
+const CHAPTER_ORDER_STORAGE_KEY = 'moontv_manga_chapter_order';
+
+/** 章節列表要不要最新在前（詳情頁與閱讀器共用）；預設最早在前，從第一話往下看 */
+export function readMangaChapterNewestFirst(): boolean {
+  try {
+    return window.localStorage.getItem(CHAPTER_ORDER_STORAGE_KEY) === 'newest';
+  } catch {
+    return false;
+  }
+}
+
+export function saveMangaChapterNewestFirst(newestFirst: boolean): void {
+  try {
+    window.localStorage.setItem(
+      CHAPTER_ORDER_STORAGE_KEY,
+      newestFirst ? 'newest' : 'oldest'
+    );
+  } catch {
+    // private mode / quota：只在這次頁面生效
+  }
 }
 
 /**
@@ -115,6 +158,29 @@ export function buildMangaReadHref(input: {
   });
   if (startAtFirstPage) params.set('startPage', '1');
   return `/manga/read?${params.toString()}`;
+}
+
+/**
+ * 詳情頁網址一律走這裡（和 buildMangaReadHref 一樣用 URLSearchParams）。Next 14 的預取快取
+ * key 會把查詢字串重新序列化（空白 → +、括號 → %28），用 encodeURIComponent 拼的網址永遠
+ * 對不上：預取全部白做，點下去要等伺服器完整回應才換頁，loading.tsx 也出不來。
+ */
+export function buildMangaDetailHref(input: {
+  mangaId: string;
+  sourceId: string;
+  title?: string;
+  cover?: string;
+  sourceName?: string;
+  description?: string;
+  author?: string;
+  status?: string;
+  returnTo?: string;
+}): string {
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(input)) {
+    if (value) params.set(key, value);
+  }
+  return `/manga/detail?${params.toString()}`;
 }
 
 export function buildMangaAlternateSearchHref(title: string): string {

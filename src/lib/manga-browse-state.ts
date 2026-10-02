@@ -55,3 +55,22 @@ export function parseMangaBrowseState(raw: string): MangaBrowseState | null {
     return null;
   }
 }
+
+/**
+ * 把下一頁接到清單後面並丟掉已出現過的作品 —— 上游分頁常互相重疊（GoDa 實測
+ * 第 2、3 頁會重送第 1 頁的作品），直接 concat 會出現重複卡片與重複的 React key。
+ * `added` 是真正新增的數量：一整頁都重複代表來源在重送同一批，呼叫端據此停止翻頁。
+ */
+export function appendUniqueMangas(
+  existing: MangaSearchItem[],
+  incoming: MangaSearchItem[]
+): { mangas: MangaSearchItem[]; added: number } {
+  const seen = new Set(existing.map((item) => `${item.sourceId}+${item.id}`));
+  const fresh = incoming.filter((item) => {
+    const key = `${item.sourceId}+${item.id}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+  return { mangas: [...existing, ...fresh], added: fresh.length };
+}

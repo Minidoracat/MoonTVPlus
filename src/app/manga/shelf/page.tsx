@@ -11,7 +11,10 @@ import {
   subscribeToDataUpdates,
 } from '@/lib/db.client';
 import { MangaShelfItem } from '@/lib/manga.types';
-import { buildMangaAlternateSearchHref } from '@/lib/manga-reader';
+import {
+  buildMangaAlternateSearchHref,
+  buildMangaDetailHref,
+} from '@/lib/manga-reader';
 import {
   selectShelfEntries,
   SHELF_TABS,
@@ -130,13 +133,13 @@ export default function MangaShelfPage() {
               <MangaCard
                 className='flex-1'
                 item={item}
-                href={`/manga/detail?mangaId=${item.mangaId}&sourceId=${
-                  item.sourceId
-                }&title=${encodeURIComponent(
-                  item.title
-                )}&cover=${encodeURIComponent(
-                  item.cover
-                )}&sourceName=${encodeURIComponent(item.sourceName)}`}
+                href={buildMangaDetailHref({
+                  mangaId: item.mangaId,
+                  sourceId: item.sourceId,
+                  title: item.title,
+                  cover: item.cover,
+                  sourceName: item.sourceName,
+                })}
                 subtitle={shelfSubtitle(item)}
                 updateCount={item.unreadChapterCount}
               />

@@ -1,6 +1,6 @@
 'use client';
 
-import { Building2, ChevronDown, Clock3, Layers, ShieldAlert } from 'lucide-react';
+import { Building2, Check, ChevronDown, Clock3, Layers, ShieldAlert } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 
 import {
@@ -112,7 +112,7 @@ export default function MangaSourcePicker({
             {sources.length} 个源 · 点按搜索或分类
           </span>
         </span>
-        <ChevronDown className='h-4 w-4 shrink-0 text-gray-400' />
+        <ChevronDown aria-hidden='true' className='h-4 w-4 shrink-0 text-gray-400' />
       </button>
 
       <MangaSourceSheet
@@ -136,7 +136,7 @@ export default function MangaSourcePicker({
               className={`min-h-11 cursor-pointer rounded-2xl border px-3 py-2 text-left text-sm transition-colors duration-200 ${
                 value === ''
                   ? 'border-sky-500 bg-sky-50 text-sky-700 dark:bg-sky-950/40 dark:text-sky-300'
-                  : 'border-gray-200 text-gray-700 hover:border-sky-400 dark:border-gray-800 dark:text-gray-200'
+                  : 'border-gray-200 text-gray-700 dark:border-gray-800 dark:text-gray-200 [@media(hover:hover)]:hover:border-sky-400'
               }`}
             >
               {allLabel}
@@ -153,14 +153,15 @@ export default function MangaSourcePicker({
               <button
                 key={source.id}
                 type='button'
+                aria-pressed={active}
                 onClick={() => selectSource(source.id)}
                 className={`flex min-h-11 cursor-pointer items-center gap-2 rounded-2xl border px-3 py-2 text-left transition-colors duration-200 ${
                   active
                     ? 'border-sky-500 bg-sky-50 text-sky-700 dark:bg-sky-950/40 dark:text-sky-300'
-                    : 'border-gray-200 text-gray-700 hover:border-sky-400 dark:border-gray-800 dark:text-gray-200'
+                    : 'border-gray-200 text-gray-700 dark:border-gray-800 dark:text-gray-200 [@media(hover:hover)]:hover:border-sky-400'
                 }`}
               >
-                <Icon className='h-4 w-4 shrink-0 opacity-70' />
+                <Icon aria-hidden='true' className='h-4 w-4 shrink-0 opacity-70' />
                 <span className='min-w-0 flex-1 truncate text-sm font-medium'>
                   {getMangaSourceLabel(source)}
                 </span>
@@ -175,13 +176,18 @@ export default function MangaSourcePicker({
                     }`}
                     title='管理員最近一次測試的熱門結果'
                   >
-                    {status.label}
+                    {status.tone === 'slow' ? `慢 ${status.label}` : status.label}
                   </span>
                 )}
+                {active && <Check aria-hidden='true' className='h-4 w-4 shrink-0' />}
               </button>
             );
           })}
         </div>
+        {/* 打字篩選時焦點留在搜尋框，固定的播報區讓輔助科技知道剩幾個 */}
+        <p role='status' className='sr-only'>
+          找到 {visibleSources.length} 个漫画源
+        </p>
         {visibleSources.length === 0 && (
           <div className='rounded-2xl bg-gray-50 px-4 py-8 text-center text-sm text-gray-500 dark:bg-gray-900/60 dark:text-gray-400'>
             没有匹配的漫画源，试试其他关键词或分类

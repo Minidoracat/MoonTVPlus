@@ -24,6 +24,7 @@ import {
   MangaShelfItem,
   MangaSource,
 } from '@/lib/manga.types';
+import { buildMangaDetailHref } from '@/lib/manga-reader';
 import {
   type MangaCreatorFilter,
   type MangaCreatorRole,
@@ -1001,19 +1002,17 @@ export default function MangaSearchPage() {
       >
         <MangaCard
           item={item}
-          href={`/manga/detail?mangaId=${item.id}&sourceId=${
-            item.sourceId
-          }&title=${encodeURIComponent(item.title)}&cover=${encodeURIComponent(
-            item.cover
-          )}&sourceName=${encodeURIComponent(
-            item.sourceName
-          )}&description=${encodeURIComponent(
-            item.description || ''
-          )}&author=${encodeURIComponent(
-            item.author || ''
-          )}&status=${encodeURIComponent(
-            item.status || ''
-          )}&returnTo=${encodeURIComponent(returnTo)}`}
+          href={buildMangaDetailHref({
+            mangaId: item.id,
+            sourceId: item.sourceId,
+            title: item.title,
+            cover: item.cover,
+            sourceName: item.sourceName,
+            description: item.description,
+            author: item.author,
+            status: item.status,
+            returnTo,
+          })}
           subtitle={[
             item.latestChapterName
               ? `最新 ${item.latestChapterName}`

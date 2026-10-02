@@ -1,10 +1,11 @@
 import {
   getMangaSourceCategories,
   getMangaSourceCategory,
+  pickDefaultMangaSourceId,
   rememberMangaSourceId,
   sourcesInCategory,
 } from '@/lib/manga-source-groups';
-import type { MangaSource } from '@/lib/manga.types';
+import type { MangaSource, MangaSourceProbeSummary } from '@/lib/manga.types';
 import { isSuwayomiUnknownFieldError } from '@/lib/suwayomi-errors';
 
 function source(
@@ -72,6 +73,33 @@ describe('sourcesInCategory', () => {
     expect(
       sourcesInCategory(sources, 'recent', ['b', 'a']).map((item) => item.id)
     ).toEqual(['b', 'a']);
+  });
+});
+
+describe('pickDefaultMangaSourceId', () => {
+  const sources = [
+    source('包子漫画', { contentWarning: 'SAFE' }),
+    source('GoDa', { contentWarning: 'SAFE' }),
+    source('崩坏3'),
+    source('禁漫天堂', { contentWarning: 'NSFW' }),
+  ];
+  const failing = (ok: boolean): MangaSourceProbeSummary =>
+    ({ popularOk: ok, popularMs: 1, searchOk: ok, searchMs: 1 } as MangaSourceProbeSummary);
+
+  it('最近選過且仍存在的來源優先，即使是成人源', () => {
+    expect(pickDefaultMangaSourceId(sources, {}, ['已移除', '禁漫天堂', 'GoDa'])).toBe('禁漫天堂');
+  });
+
+  it('跳過上次測試熱門失敗的一般源', () => {
+    expect(pickDefaultMangaSourceId(sources, { 包子漫画: failing(false) }, [])).toBe('GoDa');
+  });
+
+  it('一般源全壞時改用健康的混合源，全部都壞才退回第一個一般源', () => {
+    const allSafeBad = { 包子漫画: failing(false), GoDa: failing(false) };
+    expect(pickDefaultMangaSourceId(sources, allSafeBad, [])).toBe('崩坏3');
+    expect(
+      pickDefaultMangaSourceId(sources, { ...allSafeBad, 崩坏3: failing(false) }, [])
+    ).toBe('包子漫画');
   });
 });
 

@@ -1,5 +1,6 @@
 import {
   buildMangaAlternateSearchHref,
+  buildMangaDetailHref,
   buildMangaReadHref,
   buildMangaShelfItem,
   getHorizontalPageIndex,
@@ -42,7 +43,7 @@ function record(chapterId: string, pageIndex: number): MangaReadRecord {
 }
 
 describe('reader chapter navigation', () => {
-  it('章節列表與下一話共用 chapterNumber → uploadDate → id 排序', () => {
+  it('清單亂序時退回 chapterNumber → uploadDate → id 排序', () => {
     const input = [
       chapter('a-late', 2, 20),
       chapter('c1', 1, 30),
@@ -70,6 +71,52 @@ describe('reader chapter navigation', () => {
     expect(getNextMangaChapter(chapters, 'c2')?.id).toBe('c3');
     expect(getNextMangaChapter(chapters, 'c3')).toBeNull();
     expect(getNextMangaChapter(chapters, 'missing')).toBeNull();
+  });
+
+  it('清單大致有序時照來源順序：特別篇與誤判話數的章節留在原位', () => {
+    const special = (id: string, chapterNumber = -1): MangaChapter => ({
+      id,
+      mangaId: 'manga',
+      name: id,
+      chapterNumber,
+    });
+    const sourceList = [
+      special('prologue'),
+      ...Array.from({ length: 10 }, (_, i) => chapter(`c${i + 1}`, i + 1)),
+      special('leave'),
+      // 名稱尾端的數字被來源當成話數
+      special('misparsed 2', 2),
+      chapter('c11', 11),
+    ];
+    const expected = sourceList.map((item) => item.id);
+    expect(orderMangaChapters(sourceList).map((item) => item.id)).toEqual(expected);
+    // 來源清單新到舊時結果相同
+    expect(
+      orderMangaChapters([...sourceList].reverse()).map((item) => item.id)
+    ).toEqual(expected);
+    expect(getNextMangaChapter(sourceList, 'c10')?.id).toBe('leave');
+    expect(getNextMangaChapter(sourceList, 'misparsed 2')?.id).toBe('c11');
+  });
+});
+
+describe('buildMangaDetailHref', () => {
+  it('網址經過 Next 預取快取的重新序列化後不變，預取才會命中', () => {
+    const href = buildMangaDetailHref({
+      mangaId: '37',
+      sourceId: '774030471139699415',
+      title: "It's 武炼巅峰 (2) ~",
+      sourceName: 'GoDa漫画 (ZH)',
+      description: '',
+      returnTo: '/manga?sourceId=1&type=POPULAR',
+    });
+    const navigated = new URL(href, 'http://localhost');
+    // Next 14 prefetch reducer：url.searchParams.delete('_rsc') 會重新序列化查詢字串
+    const prefetched = new URL(href, 'http://localhost');
+    prefetched.searchParams.delete('_rsc');
+    expect(prefetched.search).toBe(navigated.search);
+    expect(navigated.searchParams.get('sourceName')).toBe('GoDa漫画 (ZH)');
+    expect(navigated.searchParams.get('returnTo')).toBe('/manga?sourceId=1&type=POPULAR');
+    expect(navigated.searchParams.has('description')).toBe(false);
   });
 });
 

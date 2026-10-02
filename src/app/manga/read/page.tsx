@@ -1,8 +1,6 @@
 'use client';
 
 import {
-  ArrowDownWideNarrow,
-  ArrowUpWideNarrow,
   Bookmark,
   BookmarkCheck,
   ChevronLeft,
@@ -42,6 +40,7 @@ import type {
   MangaShelfItem,
 } from '@/lib/manga.types';
 import {
+  buildMangaDetailHref,
   buildMangaReadHref,
   buildMangaShelfItem,
   getHorizontalPageIndex,
@@ -51,10 +50,13 @@ import {
   getReaderStartPage,
   isVerticalRestoreWindowSettled,
   orderMangaChapters,
+  readMangaChapterNewestFirst,
   shouldEagerLoadVerticalRestorePage,
 } from '@/lib/manga-reader';
 import { processImageUrl } from '@/lib/utils';
+import { useOverlayFocus } from '@/hooks/useOverlayFocus';
 
+import MangaChapterOrderToggle from '@/components/manga/MangaChapterOrderToggle';
 import ProxyImage from '@/components/ProxyImage';
 
 type ReadMode = 'single' | 'double' | 'vertical' | 'horizontal';
@@ -614,6 +616,7 @@ export default function MangaReadPage() {
     if (!Number.isNaN(savedGap)) {
       setPageGap(Math.min(Math.max(savedGap, 0), 48));
     }
+    setChapterListDesc(readMangaChapterNewestFirst());
   }, []);
 
   useEffect(() => {
@@ -1446,14 +1449,14 @@ export default function MangaReadPage() {
       startAtFirstPage: true,
     });
 
-  const detailHref = `/manga/detail?${new URLSearchParams({
+  const detailHref = buildMangaDetailHref({
     mangaId,
     sourceId,
     title,
     cover,
     sourceName,
     returnTo,
-  }).toString()}`;
+  });
 
   const chapterEndAction = (
     <div className='flex min-h-[40vh] w-full items-center justify-center bg-black px-5 py-12 text-center text-white'>
@@ -1565,6 +1568,26 @@ export default function MangaReadPage() {
   const readerReady = pages.length > 0 && !historyRestorePending;
   const topControlsVisible = controlsVisible || !readerReady;
 
+  // 面板開啟時焦點移進去、關閉時回到開啟它的按鈕；不 inert，header 的開關鈕仍要按得到
+  const settingsPanelRef = useRef<HTMLDivElement>(null);
+  const chapterPanelRef = useRef<HTMLDivElement>(null);
+  const completePanelRef = useRef<HTMLDivElement>(null);
+  useOverlayFocus(settingsOpen, settingsPanelRef);
+  useOverlayFocus(chapterListOpen, chapterPanelRef);
+  useOverlayFocus(showChapterComplete, completePanelRef);
+
+  // 本話載好後在背景預熱下一話的內頁清單（伺服器端快取），讀完按下一話不必再等來源站
+  const nextChapterId = nextChapter?.id;
+  useEffect(() => {
+    if (!readerReady || !nextChapterId) return undefined;
+    const timer = window.setTimeout(() => {
+      fetch(`/api/manga/pages?chapterId=${encodeURIComponent(nextChapterId)}`).catch(
+        () => undefined
+      );
+    }, 1500);
+    return () => window.clearTimeout(timer);
+  }, [nextChapterId, readerReady]);
+
   const handleReaderClick = (event: MouseEvent<HTMLDivElement>) => {
     const target = event.target as HTMLElement;
     if (target.closest('a, button, input, select, label')) return;
@@ -1640,17 +1663,18 @@ export default function MangaReadPage() {
           onClick={() => setSettingsOpen(false)}
         >
           <div
+            ref={settingsPanelRef}
+            role='dialog'
+            aria-labelledby='manga-reader-settings-title'
             className='w-full max-w-sm rounded-3xl border border-gray-200 bg-white p-5 shadow-xl dark:border-gray-700 dark:bg-gray-950'
             onClick={(e) => e.stopPropagation()}
           >
-            <div className='mb-4'>
-              <div className='text-base font-semibold text-gray-900 dark:text-gray-100'>
-                阅读设置
-              </div>
-              <div className='mt-1 text-xs text-gray-500'>
-                可继续扩展更多阅读参数
-              </div>
-            </div>
+            <h2
+              id='manga-reader-settings-title'
+              className='mb-4 text-base font-semibold text-gray-900 dark:text-gray-100'
+            >
+              阅读设置
+            </h2>
 
             <div className='space-y-5'>
               <div>
@@ -1662,7 +1686,8 @@ export default function MangaReadPage() {
                     <button
                       key={option.value}
                       type='button'
-                      className={`rounded-2xl px-3 py-2 text-sm transition ${
+                      aria-pressed={readMode === option.value}
+                      className={`min-h-11 rounded-2xl px-3 py-2 text-sm transition ${
                         readMode === option.value
                           ? 'bg-sky-600 text-white'
                           : 'bg-gray-100 text-gray-700 hover:bg-gray-200 dark:bg-gray-900 dark:text-gray-200 dark:hover:bg-gray-800'
@@ -1684,7 +1709,8 @@ export default function MangaReadPage() {
                     <button
                       key={option.value}
                       type='button'
-                      className={`rounded-2xl px-3 py-2 text-sm transition ${
+                      aria-pressed={scaleMode === option.value}
+                      className={`min-h-11 rounded-2xl px-3 py-2 text-sm transition ${
                         scaleMode === option.value
                           ? 'bg-sky-600 text-white'
                           : 'bg-gray-100 text-gray-700 hover:bg-gray-200 dark:bg-gray-900 dark:text-gray-200 dark:hover:bg-gray-800'
@@ -1699,19 +1725,22 @@ export default function MangaReadPage() {
 
               <div>
                 <div className='mb-2 flex items-center justify-between text-sm font-medium text-gray-700 dark:text-gray-200'>
-                  <span>图片间隔</span>
-                  <span>{pageGap}px</span>
+                  <label htmlFor='manga-page-gap'>图片间隔</label>
+                  <span aria-hidden='true'>{pageGap}px</span>
                 </div>
                 <input
+                  id='manga-page-gap'
                   type='range'
                   min={0}
                   max={48}
                   step={4}
                   value={pageGap}
                   onChange={(event) => setPageGap(Number(event.target.value))}
-                  className='w-full accent-sky-600'
+                  aria-describedby='manga-page-gap-help'
+                  aria-valuetext={`${pageGap} 像素`}
+                  className='h-8 w-full cursor-pointer accent-sky-600'
                 />
-                <div className='mt-1 text-xs text-gray-500'>
+                <div id='manga-page-gap-help' className='mt-1 text-xs text-gray-500'>
                   滚动阅读时，两张图片之间的间隔
                 </div>
               </div>
@@ -1736,33 +1765,32 @@ export default function MangaReadPage() {
           onClick={() => setChapterListOpen(false)}
         >
           <div
+            ref={chapterPanelRef}
+            role='dialog'
+            aria-labelledby='manga-reader-chapters-title'
             className='absolute right-0 top-[calc(3.5rem+env(safe-area-inset-top))] flex h-[calc(100dvh-3.5rem-env(safe-area-inset-top))] w-full max-w-sm flex-col border-l border-gray-200 bg-white shadow-xl dark:border-gray-700 dark:bg-gray-950 sm:top-[calc(4rem+env(safe-area-inset-top))] sm:h-[calc(100dvh-4rem-env(safe-area-inset-top))]'
             onClick={(event) => event.stopPropagation()}
           >
             {/* 標題列留在捲動容器外，長列表自動對齊目前章節後排序鈕仍按得到。 */}
             <div className='flex shrink-0 items-center gap-2 border-b border-gray-200 px-4 py-3 dark:border-gray-800'>
-              <div className='min-w-0 flex-1 text-sm font-semibold text-gray-900 dark:text-gray-100'>
-                章节列表
-              </div>
-              <button
-                type='button'
-                className='inline-flex items-center gap-2 rounded-2xl border border-gray-200 px-3 py-2 text-sm text-gray-700 transition hover:bg-gray-100 dark:border-gray-700 dark:text-gray-200 dark:hover:bg-gray-900'
-                onClick={() => setChapterListDesc((prev) => !prev)}
+              <h2
+                id='manga-reader-chapters-title'
+                className='min-w-0 flex-1 text-sm font-semibold text-gray-900 dark:text-gray-100'
               >
-                {chapterListDesc ? (
-                  <ArrowDownWideNarrow className='h-4 w-4' />
-                ) : (
-                  <ArrowUpWideNarrow className='h-4 w-4' />
-                )}
-                {chapterListDesc ? '倒序' : '正序'}
-              </button>
+                章节列表
+              </h2>
+              <MangaChapterOrderToggle
+                newestFirst={chapterListDesc}
+                onChange={setChapterListDesc}
+                compact
+              />
               <button
                 type='button'
                 onClick={() => setChapterListOpen(false)}
                 aria-label='关闭章节列表'
                 className='inline-flex min-h-11 min-w-11 cursor-pointer items-center justify-center rounded-2xl text-gray-500 transition-colors duration-200 hover:bg-gray-100 hover:text-gray-900 dark:hover:bg-gray-900 dark:hover:text-gray-100'
               >
-                <X className='h-5 w-5' />
+                <X aria-hidden='true' className='h-5 w-5' />
               </button>
             </div>
             <div
@@ -1791,8 +1819,9 @@ export default function MangaReadPage() {
                       key={chapter.id}
                       ref={active ? activeChapterRef : null}
                       href={chapterReadHref(chapter)}
+                      prefetch={false}
                       aria-current={active ? 'page' : undefined}
-                      className={`group relative block rounded-2xl px-4 py-3 text-sm transition ${
+                      className={`block rounded-2xl px-4 py-3 text-sm transition [contain-intrinsic-size:auto_44px] [content-visibility:auto] ${
                         active
                           ? 'bg-sky-600 text-white'
                           : 'text-gray-700 hover:bg-gray-100 dark:text-gray-200 dark:hover:bg-gray-900'
@@ -1806,10 +1835,8 @@ export default function MangaReadPage() {
                         seekToPage(0, 'auto');
                       }}
                     >
-                      <span className='block truncate'>{chapter.name}</span>
-                      <div className='absolute bottom-full left-1/2 transform -translate-x-1/2 mb-2 px-3 py-2 bg-gray-800 dark:bg-gray-900 text-white text-sm rounded-lg shadow-xl opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 ease-out whitespace-nowrap z-[100] pointer-events-none'>
-                        <div className='text-sm'>{chapter.name}</div>
-                      </div>
+                      <span className='break-words'>{chapter.name}</span>
+                      {active && <span className='ml-2 text-xs font-medium'>· 当前</span>}
                     </Link>
                   );
                 })}
@@ -1918,7 +1945,7 @@ export default function MangaReadPage() {
                 onPointerCancel={cancelProgressDraft}
                 onKeyUp={commitProgressDraft}
                 onBlur={commitProgressDraft}
-                className='h-2 w-full cursor-pointer accent-sky-500'
+                className='h-8 w-full cursor-pointer accent-sky-500'
                 aria-label='阅读进度'
                 aria-valuetext={`第 ${Math.min(
                   displayedPage + 1,
@@ -1961,12 +1988,18 @@ export default function MangaReadPage() {
             onClick={() => setShowChapterComplete(false)}
           >
             <div
+              ref={completePanelRef}
+              role='dialog'
+              aria-labelledby='manga-reader-complete-title'
               className='w-full max-w-sm rounded-3xl border border-gray-200 bg-white p-6 text-center shadow-xl dark:border-gray-700 dark:bg-gray-950'
               onClick={(event) => event.stopPropagation()}
             >
-              <div className='text-lg font-semibold text-gray-900 dark:text-gray-100'>
+              <h2
+                id='manga-reader-complete-title'
+                className='text-lg font-semibold text-gray-900 dark:text-gray-100'
+              >
                 {chapterName} 阅读完毕
-              </div>
+              </h2>
               <div className='mt-2 text-sm text-gray-500 dark:text-gray-400'>
                 {ownedMangaDetailError
                   ? `无法确认下一话：${ownedMangaDetailError}`

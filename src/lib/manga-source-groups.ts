@@ -1,4 +1,4 @@
-import type { MangaSource } from '@/lib/manga.types';
+import type { MangaSource, MangaSourceProbeSummary } from '@/lib/manga.types';
 
 export type MangaSourceCategoryId =
   | 'all'
@@ -95,6 +95,28 @@ export function rememberMangaSourceId(sourceId: string): string[] {
     // private mode / quota: keep in-memory order only
   }
   return next;
+}
+
+/**
+ * 沒指定來源時開哪一個：最近選過的優先；否則挑管理員上次測試「熱門」沒失敗的
+ * 一般源、再來混合源；都失敗才退回第一個一般／混合源。成人源不當預設。
+ * 不能一律給第一個一般源 —— 它可能正壞著（包子漫画熱門回 500），使用者一進來就看到錯誤。
+ */
+export function pickDefaultMangaSourceId(
+  sources: MangaSource[],
+  probe: Record<string, MangaSourceProbeSummary>,
+  recentIds: string[]
+): string {
+  const recent = recentIds.find((id) => sources.some((source) => source.id === id));
+  if (recent) return recent;
+  const healthy = sources.filter((source) => probe[source.id]?.popularOk !== false);
+  for (const pool of [healthy, sources]) {
+    const pick =
+      pool.find((source) => getMangaSourceCategory(source) === 'safe') ||
+      pool.find((source) => getMangaSourceCategory(source) === 'mixed');
+    if (pick) return pick.id;
+  }
+  return '';
 }
 
 export function getMangaSourceCategories(

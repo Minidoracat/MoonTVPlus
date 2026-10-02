@@ -670,6 +670,23 @@ export class SuwayomiClient {
       value?: MangaDetailFacts;
     }
   >();
+  /**
+   * 章節內頁清單快取。fetchChapterPages 每次都要 Suwayomi 回來源站重抓：禁漫天堂
+   * 實測每次約 3 秒、巴卡漫画 5～16 秒，重開同一話、從詳情再點進來都要重等。
+   * 內頁是 Suwayomi 的 /api/v1/manga/<id>/chapter/<index>/page/<n>，同一話不會變。
+   * key 不含政策與使用者（理由同 recommendCache）；值帶來源 id，命中時照跑
+   * assertSourceAllowed，管理員停用來源仍在 SOURCES_TTL_MS 內生效。空清單不快取。
+   */
+  private static readonly CHAPTER_PAGES_TTL_MS = 30 * 60_000;
+  private static readonly CHAPTER_PAGES_CACHE_MAX = 64;
+  private chapterPagesCache = new Map<
+    string,
+    {
+      at: number;
+      inflight?: Promise<{ sourceId: string; pages: string[] }>;
+      value?: { sourceId: string; pages: string[] };
+    }
+  >();
 
   /** Map 以插入序疊代，重設 key 前先 delete 即可把它移到尾端 */
   private static capMap(map: Map<string, unknown>, max: number): void {
@@ -1940,7 +1957,8 @@ ${fields}
           isRead?: boolean;
           isDownloaded?: boolean;
           pageCount?: number;
-          uploadDate?: number;
+          /** GraphQL LongString，實際收到的是字串 */
+          uploadDate?: string | number;
           realUrl?: string;
         }>;
       };
@@ -1971,7 +1989,7 @@ ${fields}
         isRead: chapter.isRead,
         isDownloaded: chapter.isDownloaded,
         pageCount: chapter.pageCount,
-        uploadDate: chapter.uploadDate,
+        uploadDate: Number(chapter.uploadDate) || undefined,
         realUrl: sanitizeSourceRealUrl(chapter.realUrl),
       }));
     });
@@ -2316,13 +2334,15 @@ ${fields}
     // 授權永遠最後、永遠用最新政策：重試之後才驗，保證真正回傳的
     // trueSourceId 過的是當下白名單。管理員停用來源後會在 SOURCES_TTL_MS
     // 內生效，不受 5 分鐘詳情內容 TTL 影響。
-    await this.assertSourceAllowed(facts.trueSourceId);
+    const source = await this.assertSourceAllowed(facts.trueSourceId);
 
     const manga = facts.manga;
     return {
       id: String(manga.id),
       sourceId: facts.trueSourceId,
-      sourceName: input.sourceName || facts.trueSourceId,
+      // 直接開的網址常沒帶 sourceName；拿剛驗過權的來源名稱，別把 ID 當名字秀出來
+      sourceName:
+        input.sourceName || source?.displayName || source?.name || facts.trueSourceId,
       title: manga.title || input.title || '漫画详情',
       cover: buildSuwayomiImageProxyUrl(
         manga.thumbnailUrl || input.cover || ''
@@ -2342,51 +2362,100 @@ ${fields}
   async getChapterPages(chapterId: string): Promise<string[]> {
     // 政策未知要在送出任何上游請求之前擋掉（含下面的 ChapterSource 反查）
     await this.assertPolicyKnown();
-    // chapterId 不帶來源資訊，先反查 chapter -> manga -> sourceId 再驗權，
-    // 否則被停用來源的內容仍可用 chapterId 直接讀出。
-    const { data: chapterData } = await this.graphqlNodeQuery<{
-      chapter?: { manga?: { sourceId?: string | number } };
-    }>(
-      (idType) => `
-      query ChapterSource($id: ${idType}) {
-        chapter(id: $id) {
-          id
-          manga {
+    const resolved = await resolveSuwayomiConfig(this.options);
+    const cacheKey = JSON.stringify([resolved.serverBaseUrl, chapterId]);
+    const hit = this.chapterPagesCache.get(cacheKey);
+    const cached =
+      hit?.value && Date.now() - hit.at < SuwayomiClient.CHAPTER_PAGES_TTL_MS
+        ? hit.value
+        : hit?.inflight
+        ? await hit.inflight
+        : null;
+    if (cached) {
+      await this.assertSourceAllowed(cached.sourceId);
+      return cached.pages;
+    }
+
+    const inflight = (async () => {
+      // chapterId 不帶來源資訊，先反查 chapter -> manga -> sourceId 再驗權，
+      // 否則被停用來源的內容仍可用 chapterId 直接讀出。
+      const { data: chapterData } = await this.graphqlNodeQuery<{
+        chapter?: { manga?: { sourceId?: string | number } };
+      }>(
+        (idType) => `
+        query ChapterSource($id: ${idType}) {
+          chapter(id: $id) {
             id
-            sourceId
+            manga {
+              id
+              sourceId
+            }
           }
         }
+      `,
+        chapterId,
+        'ChapterSource'
+      );
+
+      const chapterSourceId = chapterData.chapter?.manga?.sourceId;
+      if (!chapterSourceId) {
+        throw new MangaSourceForbiddenError('无法确认该章节的来源，已拒绝访问');
       }
-    `,
-      chapterId,
-      'ChapterSource'
-    );
+      const sourceId = String(chapterSourceId);
+      await this.assertSourceAllowed(sourceId);
 
-    const chapterSourceId = chapterData.chapter?.manga?.sourceId;
-    if (!chapterSourceId) {
-      throw new MangaSourceForbiddenError('无法确认该章节的来源，已拒绝访问');
-    }
-    await this.assertSourceAllowed(String(chapterSourceId));
-
-    const mutation = `
-      mutation GET_CHAPTER_PAGES_FETCH($input: FetchChapterPagesInput!) {
-        fetchChapterPages(input: $input) {
-          pages
+      const mutation = `
+        mutation GET_CHAPTER_PAGES_FETCH($input: FetchChapterPagesInput!) {
+          fetchChapterPages(input: $input) {
+            pages
+          }
         }
-      }
-    `;
+      `;
 
-    const data = await this.graphqlRequest<{
-      fetchChapterPages?: { pages?: string[] };
-    }>(
-      mutation,
-      { input: { chapterId: Number(chapterId) || chapterId } },
-      'GET_CHAPTER_PAGES_FETCH'
-    );
+      const data = await this.graphqlRequest<{
+        fetchChapterPages?: { pages?: string[] };
+      }>(
+        mutation,
+        { input: { chapterId: Number(chapterId) || chapterId } },
+        'GET_CHAPTER_PAGES_FETCH'
+      );
 
-    return (data.fetchChapterPages?.pages || []).map((item) =>
-      buildSuwayomiImageProxyUrl(item)
+      return {
+        sourceId,
+        pages: (data.fetchChapterPages?.pages || []).map((item) =>
+          buildSuwayomiImageProxyUrl(item)
+        ),
+      };
+    })();
+
+    const published = inflight
+      .then((value) => {
+        // compare-and-set：容量汰除或後續呼叫可能已讓 key 指向別的 inflight
+        if (this.chapterPagesCache.get(cacheKey)?.inflight === published) {
+          this.chapterPagesCache.delete(cacheKey);
+          if (value.pages.length > 0) {
+            this.chapterPagesCache.set(cacheKey, { at: Date.now(), value });
+            SuwayomiClient.capMap(
+              this.chapterPagesCache,
+              SuwayomiClient.CHAPTER_PAGES_CACHE_MAX
+            );
+          }
+        }
+        return value;
+      })
+      .catch((error) => {
+        if (this.chapterPagesCache.get(cacheKey)?.inflight === published) {
+          this.chapterPagesCache.delete(cacheKey);
+        }
+        throw error;
+      });
+
+    this.chapterPagesCache.set(cacheKey, { at: Date.now(), inflight: published });
+    SuwayomiClient.capMap(
+      this.chapterPagesCache,
+      SuwayomiClient.CHAPTER_PAGES_CACHE_MAX
     );
+    return (await published).pages;
   }
 }
 

@@ -5,6 +5,7 @@ import { useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 
 import type { MangaSourceCategory, MangaSourceCategoryId } from '@/lib/manga-source-groups';
+import { useOverlayFocus } from '@/hooks/useOverlayFocus';
 
 interface MangaSourceSheetProps {
   open: boolean;
@@ -103,10 +104,11 @@ export default function MangaSourceSheet({
     return () => {
       document.body.style.overflow = previous;
       window.removeEventListener('keydown', onKeyDown);
-      // trigger 在頁面頂端；不加 preventScroll 會把已捲到下方的頁面拉回頂端
-      triggerRef.current?.focus({ preventScroll: true });
     };
-  }, [open, triggerRef]);
+  }, [open]);
+
+  // 背景 inert＋關閉後焦點回 trigger（preventScroll：trigger 在頁面頂端，不能把已捲到下方的頁面拉回去）
+  useOverlayFocus(open, dialogRef, { modal: true, returnFocusRef: triggerRef });
 
   if (!open) return null;
 

@@ -67,7 +67,9 @@ const CapsuleSwitch: React.FC<CapsuleSwitchProps> = ({
               buttonWidth / 2;
             scrollContainer.scrollTo({
               left: scrollToPosition,
-              behavior: 'smooth',
+              behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches
+                ? 'auto'
+                : 'smooth',
             });
           }
         }
@@ -194,7 +196,7 @@ const CapsuleSwitch: React.FC<CapsuleSwitchProps> = ({
         {/* 滑动的白色背景指示器 */}
         {indicatorStyle.width > 0 && (
           <div
-            className='absolute top-0 bottom-0 bg-white dark:bg-gray-500 rounded-full shadow-sm transition-all duration-300 ease-out pointer-events-none'
+            className='absolute top-0 bottom-0 bg-white dark:bg-gray-500 rounded-full shadow-sm motion-safe:transition-all motion-safe:duration-300 motion-safe:ease-out pointer-events-none'
             style={{
               left: `${indicatorStyle.left}px`,
               width: `${indicatorStyle.width}px`,
@@ -207,6 +209,8 @@ const CapsuleSwitch: React.FC<CapsuleSwitchProps> = ({
           return (
             <button
               key={opt.value}
+              type='button'
+              aria-pressed={isActive}
               ref={(el) => {
                 buttonRefs.current[index] = el;
               }}

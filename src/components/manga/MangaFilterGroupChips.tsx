@@ -79,7 +79,8 @@ export default function MangaFilterGroupChips({
 
   return (
     <div className='space-y-2'>
-      <div className='flex flex-wrap items-center justify-between gap-2'>
+      {/* 列高固定 24px：「清除」出現時不把下方 chip 往下推，點到一半位移會點錯 */}
+      <div className='flex min-h-6 flex-wrap items-center justify-between gap-2'>
         <div
           id={labelId}
           className='text-xs text-gray-500 dark:text-gray-400'
@@ -94,7 +95,7 @@ export default function MangaFilterGroupChips({
             <button
               type='button'
               onClick={onClear}
-              className='cursor-pointer text-gray-500 transition-colors duration-200 hover:text-sky-600 dark:text-gray-400'
+              className='inline-flex min-h-6 cursor-pointer items-center px-2 text-gray-500 transition-colors duration-200 hover:text-sky-600 dark:text-gray-400'
             >
               清除
             </button>
@@ -135,7 +136,7 @@ export default function MangaFilterGroupChips({
               className={`inline-flex min-h-11 cursor-pointer items-center gap-1.5 rounded-full border px-3 text-sm transition-colors duration-200 ${
                 active
                   ? 'border-sky-500 bg-sky-50 text-sky-700 dark:bg-sky-950/40 dark:text-sky-300'
-                  : 'border-gray-200 text-gray-700 hover:border-sky-400 dark:border-gray-700 dark:text-gray-200'
+                  : 'border-gray-200 text-gray-700 dark:border-gray-700 dark:text-gray-200 [@media(hover:hover)]:hover:border-sky-400'
               }`}
             >
               {/* 勾號不只靠顏色表達選中狀態，色盲可辨 */}
@@ -155,7 +156,7 @@ export default function MangaFilterGroupChips({
         <button
           type='button'
           onClick={() => setExpanded((prev) => !prev)}
-          className='inline-flex min-h-9 cursor-pointer items-center gap-1 text-xs text-gray-500 transition-colors duration-200 hover:text-sky-600 dark:text-gray-400'
+          className='inline-flex min-h-11 cursor-pointer items-center gap-1 text-xs text-gray-500 transition-colors duration-200 hover:text-sky-600 dark:text-gray-400'
         >
           {expanded ? (
             <>

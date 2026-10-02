@@ -2,10 +2,18 @@
 
 import { Flame, Search, Sparkles } from 'lucide-react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 
 import {
   deleteMangaShelf,
+  getAllMangaReadRecords,
   getAllMangaShelf,
   saveMangaShelf,
 } from '@/lib/db.client';
@@ -15,6 +23,7 @@ import type {
   MangaSourceProbeSummary,
 } from '@/lib/manga.types';
 import {
+  MangaReadRecord,
   MangaRecommendResult,
   MangaRecommendType,
   MangaSearchItem,
@@ -23,10 +32,15 @@ import {
   upsertFilterSelection,
 } from '@/lib/manga.types';
 import {
+  appendUniqueMangas,
   MANGA_BROWSE_STATE_KEY,
   parseMangaBrowseState,
 } from '@/lib/manga-browse-state';
-import { getMangaSourceCategory } from '@/lib/manga-source-groups';
+import { buildMangaDetailHref } from '@/lib/manga-reader';
+import {
+  pickDefaultMangaSourceId,
+  readRecentMangaSourceIds,
+} from '@/lib/manga-source-groups';
 import { useMangaChapterSummaryQueue } from '@/hooks/useMangaChapterSummaryQueue';
 
 import CapsuleSwitch from '@/components/CapsuleSwitch';
@@ -103,6 +117,8 @@ export default function MangaRecommendPage() {
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState('');
   const [shelf, setShelf] = useState<Record<string, MangaShelfItem>>({});
+  /** 閱讀紀錄：卡片直接標出看到哪一話 */
+  const [history, setHistory] = useState<Record<string, MangaReadRecord>>({});
   const loadMoreRef = useRef<HTMLDivElement | null>(null);
   const recommendRequestRef = useRef(0);
   const pendingRestoreRef = useRef<{
@@ -115,6 +131,10 @@ export default function MangaRecommendPage() {
   const [keyword, setKeyword] = useState('');
   const [filterSelections, setFilterSelections] = useState<MangaFilterSelection[]>([]);
   const [filtersError, setFiltersError] = useState('');
+  /** 哪個來源的分類已經回來（成功或失敗）—— 分類列高度到齊後才能還原捲動位置 */
+  const [filtersLoadedFor, setFiltersLoadedFor] = useState('');
+  const filtersReadyRef = useRef(false);
+  filtersReadyRef.current = filtersLoadedFor === sourceId;
   const {
     observe: observeChapterSummary,
     reset: resetChapterSummaryQueue,
@@ -199,11 +219,13 @@ export default function MangaRecommendPage() {
             ? (data.filters as MangaSourceFilterOption[])
             : []
         );
+        setFiltersLoadedFor(sourceId);
       })
       .catch((err) => {
         if (cancelled) return;
         // 讀取失敗不能偽裝成「這個源沒有分類」
         setFiltersError((err as Error).message);
+        setFiltersLoadedFor(sourceId);
       });
 
     return () => {
@@ -230,27 +252,37 @@ export default function MangaRecommendPage() {
       .then((res) => res.json())
       .then((data) => {
         const nextSources = (data.sources || []) as MangaSource[];
+        const probe = (data.probe || {}) as Record<string, MangaSourceProbeSummary>;
         setSources(nextSources);
         // 管理員最近一次測試的燈號／延遲，供 picker 顯示
-        setSourceProbe(data.probe || {});
-        setSourceId((prev) => {
-          const fromUrl = searchParams.get('sourceId') || '';
-          if (fromUrl && nextSources.some((source) => source.id === fromUrl)) {
-            return fromUrl;
-          }
-          if (prev && nextSources.some((source) => source.id === prev)) {
-            return prev;
-          }
-          return (
-            nextSources.find(
-              (source) => getMangaSourceCategory(source) === 'safe'
-            )?.id ||
-            nextSources.find(
-              (source) => getMangaSourceCategory(source) === 'mixed'
-            )?.id ||
-            ''
+        setSourceProbe(probe);
+        const fromUrl = searchParams.get('sourceId') || '';
+        if (nextSources.some((source) => source.id === fromUrl)) return;
+        /*
+         * 沒帶來源（底部「推荐」、首頁入口）先回到上次離開的列表：這裡只決定來源與
+         * 類型，關鍵字／分類／清單／捲動位置由下面的還原 effect 依同一份狀態接回。
+         * 沒有可還原的才用最近選過的來源，最後才是避開失敗源的預設。
+         */
+        let last: URLSearchParams | null = null;
+        try {
+          const cached = parseMangaBrowseState(
+            sessionStorage.getItem(MANGA_BROWSE_STATE_KEY) || ''
           );
-        });
+          if (cached) {
+            last = new URL(cached.listHref, window.location.origin).searchParams;
+          }
+        } catch {
+          // sessionStorage 不可用：當成沒有上次的列表
+        }
+        const lastSourceId = last?.get('sourceId') || '';
+        if (nextSources.some((source) => source.id === lastSourceId)) {
+          setSourceId(lastSourceId);
+          setRecommendType(last?.get('type') === 'LATEST' ? 'LATEST' : 'POPULAR');
+          return;
+        }
+        setSourceId(
+          pickDefaultMangaSourceId(nextSources, probe, readRecentMangaSourceIds())
+        );
       })
       .catch(() => {
         // 失敗也要結束「載入中」，否則畫面永遠停在骨架。對使用者的意義
@@ -259,6 +291,7 @@ export default function MangaRecommendPage() {
       });
 
     getAllMangaShelf().then(setShelf).catch(() => undefined);
+    getAllMangaReadRecords().then(setHistory).catch(() => undefined);
   }, []);
 
   const fetchRecommend = useCallback(async (nextPage: number, append: boolean) => {
@@ -294,10 +327,15 @@ export default function MangaRecommendPage() {
       if (!res.ok) throw new Error(data.error || '获取推荐失败');
 
       setPage(nextPage);
-      setResult((prev) => ({
-        mangas: append ? [...prev.mangas, ...data.mangas] : data.mangas,
-        hasNextPage: data.hasNextPage,
-      }));
+      setResult((prev) => {
+        const { mangas, added } = appendUniqueMangas(
+          append ? prev.mangas : [],
+          data.mangas
+        );
+        // ponytail: 一整頁都是重複就當成到底 —— 否則哨兵留在視窗內會一路往上游打；
+        // 若哪個來源真的整頁重疊又還有後續，再改成連續 N 頁無新項才停。
+        return { mangas, hasNextPage: data.hasNextPage && added > 0 };
+      });
       /*
        * 成功了就把 error 清掉。append 路徑沒有在開頭清（開頭只清 !append），
        * 留著會讓哨兵在之後真的到底時（hasNextPage 變 false）檢查到殘留的
@@ -337,7 +375,8 @@ export default function MangaRecommendPage() {
   );
 
   const saveBrowseState = () => {
-    if (result.mangas.length > 300) return;
+    // 載入中、空清單或太大就不存；先前離開時存的狀態留著，下次照樣能還原
+    if (loading || result.mangas.length === 0 || result.mangas.length > 300) return;
     try {
       sessionStorage.setItem(
         MANGA_BROWSE_STATE_KEY,
@@ -348,11 +387,7 @@ export default function MangaRecommendPage() {
           page,
           mangas: result.mangas,
           hasNextPage: result.hasNextPage,
-          scrollY: Math.max(
-            window.scrollY,
-            document.documentElement.scrollTop,
-            document.body.scrollTop
-          ),
+          scrollY: document.body.scrollTop,
           savedAt: Date.now(),
         })
       );
@@ -360,6 +395,15 @@ export default function MangaRecommendPage() {
       // ignore unavailable or full session storage
     }
   };
+
+  /*
+   * 離開列表（點卡片、底部分頁、任何連結）都記下瀏覽狀態，回來時——包括沒帶來源的
+   * 「推荐」——才能接著看。用 layout effect 的 cleanup：卸載當下舊 DOM 還在，
+   * body.scrollTop 仍是列表的位置；passive cleanup 跑的時候新頁面已經換上了。
+   */
+  const saveBrowseStateRef = useRef(saveBrowseState);
+  saveBrowseStateRef.current = saveBrowseState;
+  useLayoutEffect(() => () => saveBrowseStateRef.current(), []);
 
   useEffect(() => {
     if (searchParams.get('q')?.trim()) return;
@@ -412,21 +456,26 @@ export default function MangaRecommendPage() {
     setLoadingMore(false);
     setError('');
 
+    /*
+     * 只寫 body.scrollTop：html 固定 100dvh、body 才是捲動容器，root 本來就捲不動。
+     * 對 root 寫非 0 的 window.scrollTo／documentElement.scrollTop，iOS 會把這個不可達
+     * 的位置原封送給原生捲動層；iOS 27 上從詳情返回後就整頁點不動（仍能捲、仍會載入
+     * 更多），只能重開 App。
+     *
+     * 存下的位置包含列表上方的分類列；從底部「推荐」回來時來源是載入後才決定的，
+     * 分類比清單晚到，先捲會整頁偏上一個分類列的高度。等分類回來（或約 1 秒）再捲。
+     */
     let attempts = 0;
     let rafId = 0;
     const restoreScroll = () => {
       attempts += 1;
+      const body = document.body;
       if (
-        Math.max(
-          document.documentElement.scrollHeight,
-          document.body.scrollHeight
-        ) >=
-          cached.scrollY + window.innerHeight ||
+        (filtersReadyRef.current &&
+          body.scrollHeight - body.clientHeight >= cached.scrollY) ||
         attempts > 60
       ) {
-        window.scrollTo(0, cached.scrollY);
-        document.documentElement.scrollTop = cached.scrollY;
-        document.body.scrollTop = cached.scrollY;
+        body.scrollTop = cached.scrollY;
         sessionStorage.removeItem(MANGA_BROWSE_STATE_KEY);
         return;
       }
@@ -515,6 +564,7 @@ export default function MangaRecommendPage() {
 
   return (
     <div className='mx-auto max-w-6xl space-y-6'>
+      <h1 className='sr-only'>漫画推荐</h1>
       <section className='space-y-4 rounded-3xl border border-gray-200/70 bg-white/80 p-4 shadow-sm dark:border-gray-800 dark:bg-gray-950/70 sm:p-5'>
         <div className='space-y-2'>
           <div className='text-sm font-medium text-gray-700 dark:text-gray-200'>漫画源</div>
@@ -611,7 +661,8 @@ export default function MangaRecommendPage() {
 
         {sourceFilters.length > 0 && (
           <div className='space-y-2'>
-            <div className='flex items-center justify-between'>
+            {/* 列高固定：「清除」出現時不推動下方分類格 */}
+            <div className='flex min-h-6 items-center justify-between'>
               <div className='text-sm font-medium text-gray-700 dark:text-gray-200'>
                 本源分类 / 排序
               </div>
@@ -619,7 +670,7 @@ export default function MangaRecommendPage() {
                 <button
                   type='button'
                   onClick={() => setFilterSelections([])}
-                  className='cursor-pointer text-xs text-gray-500 transition-colors duration-200 hover:text-sky-600 dark:text-gray-400'
+                  className='inline-flex min-h-6 cursor-pointer items-center px-2 text-xs text-gray-500 transition-colors duration-200 hover:text-sky-600 dark:text-gray-400'
                 >
                   清除
                 </button>
@@ -864,10 +915,20 @@ export default function MangaRecommendPage() {
         )}
       </section>
 
-      <section>
+      <section aria-busy={loading || loadingMore}>
         <div className='mb-4 flex items-center justify-between'>
           <h2 className='text-lg font-semibold'>推荐内容</h2>
         </div>
+        {/* 換來源／分類／搜尋與載入下一頁後焦點不動，靠這個穩定的區域讓輔助科技知道結果變了 */}
+        <p role='status' className='sr-only'>
+          {loading
+            ? '正在载入漫画'
+            : loadingMore
+              ? '正在载入更多漫画'
+              : result.mangas.length > 0
+                ? `已显示 ${result.mangas.length} 部漫画`
+                : ''}
+        </p>
 
         {error && <div className='mb-4 text-sm text-red-500'>{error}</div>}
 
@@ -892,36 +953,45 @@ export default function MangaRecommendPage() {
                     ref={(element) => observeChapterSummary(element, item)}
                     className='flex h-full flex-col gap-2'
                   >
-                    <div onClick={saveBrowseState}>
+                    <div className='flex-1'>
                       <MangaCard
                         item={item}
-                        href={`/manga/detail?mangaId=${item.id}&sourceId=${item.sourceId}&title=${encodeURIComponent(item.title)}&cover=${encodeURIComponent(item.cover)}&sourceName=${encodeURIComponent(item.sourceName)}&description=${encodeURIComponent(item.description || '')}&author=${encodeURIComponent(item.author || '')}&status=${encodeURIComponent(item.status || '')}&returnTo=${encodeURIComponent(listHref)}`}
-                        subtitle={[
+                        className='h-full'
+                        href={buildMangaDetailHref({
+                          mangaId: item.id,
+                          sourceId: item.sourceId,
+                          title: item.title,
+                          cover: item.cover,
+                          sourceName: item.sourceName,
+                          description: item.description,
+                          author: item.author,
+                          status: item.status,
+                          returnTo: listHref,
+                        })}
+                        // 整頁同一來源、類型已寫在上方，卡片不再重複來源名與「热门／最新」徽章
+                        showSource={false}
+                        subtitle={
                           item.latestChapterName
-                            ? `最新 ${item.latestChapterName}`
+                            ? `最新：${item.latestChapterName}${
+                                item.latestChapterCount ? ` · 共 ${item.latestChapterCount} 话` : ''
+                              }`
                             : item.latestChapterCount
                               ? `共 ${item.latestChapterCount} 话`
-                              : undefined,
-                          item.author || item.status || item.description,
-                        ]
+                              : undefined
+                        }
+                        progress={history[key] ? `看到：${history[key].chapterName}` : undefined}
+                        meta={[item.author ? `作者：${item.author}` : '', item.status]
                           .filter(Boolean)
                           .join(' · ')}
-                        badge={
-                          keyword
-                            ? '搜尋'
-                            : filterSelections.length > 0
-                              ? '筛选'
-                              : recommendType === 'POPULAR'
-                                ? '热门'
-                                : '最新'
-                        }
                       />
                     </div>
                     <button
+                      type='button'
                       onClick={() => toggleShelf(item)}
-                      className='mt-auto w-full rounded-2xl border border-gray-200 px-3 py-2 text-xs font-medium text-gray-700 transition hover:border-sky-500 hover:text-sky-600 dark:border-gray-700 dark:text-gray-200'
+                      className='mt-auto min-h-11 w-full rounded-2xl border border-gray-200 px-3 py-2 text-xs font-medium text-gray-700 transition hover:border-sky-500 hover:text-sky-600 dark:border-gray-700 dark:text-gray-200'
                     >
                       {shelf[key] ? '移出书架' : '加入书架'}
+                      <span className='sr-only'>：{item.title}</span>
                     </button>
                   </div>
                 );

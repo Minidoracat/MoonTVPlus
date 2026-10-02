@@ -19,11 +19,13 @@ import { createPortal } from 'react-dom';
 
 import { LanguageToggle } from '@/components/LanguageToggle';
 import MangaSourceManagerPanel from '@/components/manga/MangaSourceManagerPanel';
+import { useOverlayFocus } from '@/hooks/useOverlayFocus';
 import { useSite } from '@/components/SiteProvider';
 import { ThemeToggle } from '@/components/ThemeToggle';
 import { UpdateNotification } from '@/components/UpdateNotification';
 import { UserMenu } from '@/components/UserMenu';
 import { getAuthInfoFromBrowserCookie } from '@/lib/auth';
+import { buildMangaDetailHref } from '@/lib/manga-reader';
 
 interface MangaLayoutProps {
   children: React.ReactNode;
@@ -73,13 +75,7 @@ function getMeta(
     return {
       title,
       subtitle: searchParams.get('chapterName') || '章节',
-      backHref: `/manga/detail?mangaId=${encodeURIComponent(
-        mangaId
-      )}&sourceId=${encodeURIComponent(sourceId)}&title=${encodeURIComponent(
-        title
-      )}&cover=${encodeURIComponent(cover)}&sourceName=${encodeURIComponent(
-        sourceName
-      )}&returnTo=${encodeURIComponent(returnTo)}`,
+      backHref: buildMangaDetailHref({ mangaId, sourceId, title, cover, sourceName, returnTo }),
     };
   }
   return { title: '漫画推荐', subtitle: '按来源查看热门与最新漫画' };
@@ -121,9 +117,15 @@ export default function MangaLayout({ children }: MangaLayoutProps) {
     return () => {
       document.body.style.overflow = previous;
       window.removeEventListener('keydown', onKeyDown);
-      openerRef.current?.focus({ preventScroll: true });
     };
   }, [showSourceManager]);
+
+  // 背景 inert，關閉後焦點回實際開啟者
+  const managerDialogRef = useRef<HTMLDivElement>(null);
+  useOverlayFocus(showSourceManager, managerDialogRef, {
+    modal: true,
+    returnFocusRef: openerRef,
+  });
 
   useEffect(() => {
     if (!isReadingPage) {
@@ -166,6 +168,12 @@ export default function MangaLayout({ children }: MangaLayoutProps) {
           : 'bg-gray-50 text-gray-900 dark:bg-black dark:text-gray-100'
       }`}
     >
+      <a
+        href='#manga-main'
+        className='sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-[1001] focus:rounded-xl focus:bg-white focus:px-4 focus:py-3 focus:text-sm focus:font-medium focus:text-gray-900 focus:shadow-lg'
+      >
+        跳至主要内容
+      </a>
       {!readerImmersive && (!isReadingPage || readerControlsVisible) && (
         <header
           className='fixed inset-x-0 top-0 z-[999] border-b border-gray-200/70 bg-white/85 shadow-sm backdrop-blur-xl dark:border-gray-800/80 dark:bg-gray-950/85'
@@ -176,14 +184,15 @@ export default function MangaLayout({ children }: MangaLayoutProps) {
               {meta.backHref ? (
                 <Link
                   href={meta.backHref}
-                  className='flex h-10 w-10 items-center justify-center rounded-full text-gray-600 transition hover:bg-gray-100 hover:text-sky-600 dark:text-gray-300 dark:hover:bg-gray-800'
+                  aria-label={isReadingPage ? '返回作品详情' : '返回上一层列表'}
+                  className='flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-gray-600 transition hover:bg-gray-100 hover:text-sky-600 dark:text-gray-300 dark:hover:bg-gray-800'
                 >
-                  <ChevronLeft className='h-5 w-5' />
+                  <ChevronLeft aria-hidden='true' className='h-5 w-5' />
                 </Link>
               ) : (
                 <Link
                   href='/'
-                  className='flex h-10 items-center rounded-full px-3 text-sm font-semibold text-sky-600 transition hover:bg-sky-50 dark:hover:bg-sky-950/40'
+                  className='flex min-h-11 items-center rounded-full px-3 text-sm font-semibold text-sky-600 transition hover:bg-sky-50 dark:hover:bg-sky-950/40'
                 >
                   {siteName}
                 </Link>
@@ -205,7 +214,7 @@ export default function MangaLayout({ children }: MangaLayoutProps) {
               </div>
             </div>
 
-            <nav className='ml-auto hidden items-center gap-2 lg:flex'>
+            <nav aria-label='漫画导航' className='ml-auto hidden items-center gap-2 lg:flex'>
               {sectionTabs.map((tab) => {
                 const Icon = tab.icon;
                 const active = isActive(tab.href);
@@ -213,13 +222,14 @@ export default function MangaLayout({ children }: MangaLayoutProps) {
                   <Link
                     key={tab.href}
                     href={tab.href}
+                    aria-current={active ? 'page' : undefined}
                     className={`inline-flex items-center gap-2 rounded-full px-4 py-2 text-sm transition ${
                       active
                         ? 'bg-sky-600 text-white shadow-sm'
                         : 'text-gray-600 hover:bg-gray-100 hover:text-sky-600 dark:text-gray-300 dark:hover:bg-gray-800'
                     }`}
                   >
-                    <Icon className='h-4 w-4' />
+                    <Icon aria-hidden='true' className='h-4 w-4' />
                     {tab.label}
                   </Link>
                 );
@@ -232,7 +242,7 @@ export default function MangaLayout({ children }: MangaLayoutProps) {
                   aria-expanded={showSourceManager}
                   className='inline-flex cursor-pointer items-center gap-2 rounded-full px-4 py-2 text-sm text-gray-600 transition hover:bg-gray-100 hover:text-sky-600 dark:text-gray-300 dark:hover:bg-gray-800'
                 >
-                  <SlidersHorizontal className='h-4 w-4' />
+                  <SlidersHorizontal aria-hidden='true' className='h-4 w-4' />
                   源管理
                 </button>
               )}
@@ -247,13 +257,13 @@ export default function MangaLayout({ children }: MangaLayoutProps) {
                     <button
                       key={action.event}
                       type='button'
-                      className='inline-flex h-10 w-10 items-center justify-center rounded-full text-gray-600 transition hover:bg-gray-100 hover:text-sky-600 dark:text-gray-300 dark:hover:bg-gray-800'
+                      className='inline-flex h-11 w-11 items-center justify-center rounded-full text-gray-600 transition hover:bg-gray-100 hover:text-sky-600 dark:text-gray-300 dark:hover:bg-gray-800'
                       onClick={() => {
                         window.dispatchEvent(new CustomEvent(action.event));
                       }}
                       aria-label={action.label}
                     >
-                      <Icon className='h-5 w-5' />
+                      <Icon aria-hidden='true' className='h-5 w-5' />
                     </button>
                   );
                 })
@@ -273,6 +283,8 @@ export default function MangaLayout({ children }: MangaLayoutProps) {
       )}
 
       <main
+        id='manga-main'
+        tabIndex={-1}
         className={
           readerImmersive
             ? 'min-h-[100dvh] max-w-none p-0'
@@ -286,6 +298,7 @@ export default function MangaLayout({ children }: MangaLayoutProps) {
 
       {!isReadingPage && (
         <nav
+          aria-label='漫画导航'
           className='fixed inset-x-0 bottom-0 z-[998] border-t border-gray-200/70 bg-white/92 backdrop-blur-xl dark:border-gray-800/80 dark:bg-gray-950/92 lg:hidden'
           style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}
         >
@@ -301,9 +314,11 @@ export default function MangaLayout({ children }: MangaLayoutProps) {
                 <Link
                   key={tab.href}
                   href={tab.href}
+                  aria-current={active ? 'page' : undefined}
                   className='flex min-h-16 flex-col items-center justify-center gap-1 py-2 text-xs'
                 >
                   <Icon
+                    aria-hidden='true'
                     className={`h-5 w-5 ${
                       active
                         ? 'text-sky-600 dark:text-sky-400'
@@ -330,7 +345,7 @@ export default function MangaLayout({ children }: MangaLayoutProps) {
                 aria-expanded={showSourceManager}
                 className='flex min-h-16 cursor-pointer flex-col items-center justify-center gap-1 py-2 text-xs'
               >
-                <SlidersHorizontal className='h-5 w-5 text-gray-500 dark:text-gray-400' />
+                <SlidersHorizontal aria-hidden='true' className='h-5 w-5 text-gray-500 dark:text-gray-400' />
                 <span className='text-gray-600 dark:text-gray-300'>源管理</span>
               </button>
             )}
@@ -350,6 +365,7 @@ export default function MangaLayout({ children }: MangaLayoutProps) {
               className='absolute inset-0 bg-black/50'
             />
             <div
+              ref={managerDialogRef}
               role='dialog'
               aria-modal='true'
               aria-labelledby='manga-source-manager-title'
@@ -369,7 +385,7 @@ export default function MangaLayout({ children }: MangaLayoutProps) {
                   aria-label='关闭'
                   className='inline-flex min-h-11 min-w-11 cursor-pointer items-center justify-center rounded-2xl text-gray-500 transition-colors duration-200 hover:bg-gray-100 hover:text-gray-900 dark:hover:bg-gray-900 dark:hover:text-gray-100'
                 >
-                  <X className='h-5 w-5' />
+                  <X aria-hidden='true' className='h-5 w-5' />
                 </button>
               </div>
               <div className='min-h-0 flex-1 overflow-y-auto px-4 py-4'>

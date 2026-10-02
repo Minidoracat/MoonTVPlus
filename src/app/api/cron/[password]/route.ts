@@ -166,8 +166,6 @@ export async function GET(
   request: NextRequest,
   { params }: { params: { password: string } }
 ) {
-  console.log(request.url);
-
   const cronPassword = process.env.CRON_PASSWORD || 'mtvpls';
   if (params.password !== cronPassword) {
     return NextResponse.json(

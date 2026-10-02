@@ -62,7 +62,7 @@ function executeCronJob() {
   const cronUrl = `http://${process.env.HOSTNAME || 'localhost'}:${process.env.PORT || 3000
     }/api/cron/${cronPassword}`;
 
-  console.log(`Executing cron job: ${cronUrl}`);
+  console.log('Executing cron job');
 
   const req = http.get(cronUrl, (res) => {
     let data = '';

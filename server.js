@@ -810,9 +810,15 @@ app.prepare().then(async () => {
   const httpServer = createServer(async (req, res) => {
     try {
       const parsedUrl = parse(req.url, true);
+      if (parsedUrl.pathname?.startsWith('/api/cron/')) {
+        // ponytail: Next 14 logs req.url on close; recheck redaction after framework upgrades.
+        res.prependOnceListener('close', () => {
+          req.url = '/api/cron/[redacted]';
+        });
+      }
       await handle(req, res, parsedUrl);
     } catch (err) {
-      console.error('Error occurred handling', req.url, err);
+      console.error('Error occurred handling request', err);
       res.statusCode = 500;
       res.end('Internal server error');
     }

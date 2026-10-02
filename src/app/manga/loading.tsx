@@ -3,12 +3,12 @@
  * 上一頁、只剩頂端一條細進度條，直到伺服器回應，看起來像點了沒反應。
  * 只管進入 manga 這一段；detail、read 各有自己的 loading.tsx（原因見 detail/loading.tsx）。
  */
+import MangaLoadingStatus from '@/components/manga/MangaLoadingStatus';
+
 export default function MangaLoading() {
   return (
     <div className='mx-auto max-w-6xl space-y-4' aria-busy='true'>
-      <p role='status' className='sr-only'>
-        载入中
-      </p>
+      <MangaLoadingStatus label='正在载入' />
       <div className='h-28 rounded-3xl bg-gray-200/70 motion-safe:animate-pulse dark:bg-gray-800/70' />
       <div className='h-6 w-40 rounded-full bg-gray-200/70 motion-safe:animate-pulse dark:bg-gray-800/70' />
       <div className='h-64 rounded-3xl bg-gray-200/70 motion-safe:animate-pulse dark:bg-gray-800/70' />

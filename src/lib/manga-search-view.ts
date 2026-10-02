@@ -200,6 +200,25 @@ export function getMangaCreators(item: MangaSearchItem): string[] {
   return creators;
 }
 
+/**
+ * 卡片的章節資訊行。單本（只有一話）顯示頁數，讓人判斷值不值得點；連載顯示最新話與總話數。
+ * 單本頁數還沒抓到時先只寫「单本」，抓到後列表會補上。
+ */
+export function formatMangaChapterLine(
+  item: Pick<MangaSearchItem, 'latestChapterName' | 'latestChapterCount' | 'singleChapter'>
+): string | undefined {
+  if (item.singleChapter || item.latestChapterCount === 1) {
+    const pageCount = item.singleChapter?.pageCount;
+    return pageCount ? `单本 · ${pageCount} 页` : '单本';
+  }
+  if (item.latestChapterName) {
+    return `最新：${item.latestChapterName}${
+      item.latestChapterCount ? ` · 共 ${item.latestChapterCount} 话` : ''
+    }`;
+  }
+  return item.latestChapterCount ? `共 ${item.latestChapterCount} 话` : undefined;
+}
+
 /** creator filter 用 exact、case-insensitive 比對；來源與角色都必須一致 */
 export function matchesMangaCreator(
   item: MangaSearchItem,

@@ -31,6 +31,7 @@ import {
   type MangaResultSort,
   type MangaSearchBatch,
   buildSourceBuckets,
+  formatMangaChapterLine,
   getMangaCreatorGroups,
   groupResultsBySource,
   MANGA_RESULT_RENDER_PAGE_SIZE,
@@ -225,9 +226,19 @@ export default function MangaSearchPage() {
                 ...item,
                 latestChapterCount: summary.count,
                 latestChapterName: summary.latestName,
+                singleChapter: summary.single,
               }
             : item;
         })
+      );
+    },
+    onPageCount: (key, pageCount) => {
+      setResults((prev) =>
+        prev.map((item) =>
+          `${item.sourceId}+${item.id}` === key && item.singleChapter
+            ? { ...item, singleChapter: { ...item.singleChapter, pageCount } }
+            : item
+        )
       );
     },
   });
@@ -1014,11 +1025,7 @@ export default function MangaSearchPage() {
             returnTo,
           })}
           subtitle={[
-            item.latestChapterName
-              ? `最新 ${item.latestChapterName}`
-              : item.latestChapterCount
-                ? `共 ${item.latestChapterCount} 话`
-                : undefined,
+            formatMangaChapterLine(item),
             sourceStatus?.label,
             item.author || item.status || item.description,
           ]

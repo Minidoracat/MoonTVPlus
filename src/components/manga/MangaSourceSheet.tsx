@@ -59,8 +59,8 @@ export default function MangaSourceSheet({
   const dialogRef = useRef<HTMLDivElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
   // onClose 是父層每次 render 新建的箭頭函式。若讓 effect 依賴它，
-  // 每次 re-render 都會 cleanup（focus 回 trigger）再重跑（focus 搜尋框），
-  // 導致勾選項目或切分類後焦點被搶回搜尋框，鍵盤使用者無法連續操作。
+  // 每次 re-render 都會 cleanup（focus 回 trigger）再重跑（重設初始焦點），
+  // 導致勾選項目或切分類後焦點被搶回去，鍵盤使用者無法連續操作。
   const onCloseRef = useRef(onClose);
   useEffect(() => {
     onCloseRef.current = onClose;
@@ -78,7 +78,13 @@ export default function MangaSourceSheet({
           'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
         ) || []
       ).filter((el) => !el.hasAttribute('disabled'));
-    searchInputRef.current?.focus();
+    // 觸控裝置不自動聚焦搜尋框：一聚焦就跳出鍵盤擋住來源清單，要搜尋時再點。
+    // 焦點改放對話框本身（輔助科技照樣念出標題）；有滑鼠鍵盤的桌面維持直接打字篩選。
+    if (window.matchMedia('(hover: hover) and (pointer: fine)').matches) {
+      searchInputRef.current?.focus();
+    } else {
+      dialog?.focus({ preventScroll: true });
+    }
 
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
@@ -126,7 +132,8 @@ export default function MangaSourceSheet({
         role='dialog'
         aria-modal='true'
         aria-labelledby={`${searchInputId}-title`}
-        className='relative flex max-h-[88dvh] min-h-0 w-full max-w-lg flex-col overflow-hidden rounded-t-3xl border border-gray-200 bg-white pb-[env(safe-area-inset-bottom)] shadow-xl dark:border-gray-800 dark:bg-gray-950 sm:max-h-[80vh] sm:rounded-3xl sm:pb-0'
+        tabIndex={-1}
+        className='relative flex max-h-[88dvh] min-h-0 w-full max-w-lg flex-col overflow-hidden rounded-t-3xl border border-gray-200 bg-white pb-[env(safe-area-inset-bottom)] shadow-xl outline-none dark:border-gray-800 dark:bg-gray-950 sm:max-h-[80vh] sm:rounded-3xl sm:pb-0'
       >
         <div className='flex items-center justify-between border-b border-gray-200 px-4 py-3 dark:border-gray-800'>
           <div>

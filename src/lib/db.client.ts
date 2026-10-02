@@ -16,7 +16,7 @@
 
 import { clearAuthCookie,getAuthInfoFromBrowserCookie } from './auth';
 import { normalizeEpisodeFilterConfig } from './episode-filter';
-import { MangaReadRecord, MangaShelfItem } from './manga.types';
+import { MangaChapterSummary, MangaReadRecord, MangaShelfItem } from './manga.types';
 import { isLoginPathname, resolveLoginPath } from './tv-mode';
 import { DanmakuFilterConfig, EpisodeFilterConfig, SkipConfig } from './types';
 
@@ -766,7 +766,7 @@ async function fetchFromApi<T>(path: string): Promise<T> {
 export async function fetchMangaChapterSummaries(
   items: Array<{ sourceId: string; mangaId: string }>,
   signal?: AbortSignal
-): Promise<Record<string, { count: number; latestName?: string }>> {
+): Promise<Record<string, MangaChapterSummary>> {
   const res = await fetchWithAuth('/api/manga/chapter-summary', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -774,7 +774,7 @@ export async function fetchMangaChapterSummaries(
     signal,
   });
   const data = (await res.json()) as {
-    summaries?: Record<string, { count: number; latestName?: string }>;
+    summaries?: Record<string, MangaChapterSummary>;
   };
   return data.summaries || {};
 }

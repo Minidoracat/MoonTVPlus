@@ -33,7 +33,7 @@
 | `src/app/manga/page.tsx` | 捲動只讀寫 `document.body.scrollTop`；瀏覽狀態在 layout effect cleanup 存；`appendUniqueMangas`；`pickDefaultMangaSourceId`；卡片 href 用 `buildMangaDetailHref` |
 | `src/app/manga/detail/page.tsx`、`src/app/manga/read/page.tsx` | `orderMangaChapters`、章節分批與 `prefetch={false}`、`MangaChapterOrderToggle`、`useOverlayFocus`；同目錄 `loading.tsx` 不可刪 |
 | `src/app/manga/search/page.tsx`、`src/app/manga/shelf/page.tsx`、`src/components/manga/MangaHistoryCard.tsx`、`src/components/manga/MangaLayout.tsx` | 詳情連結一律 `buildMangaDetailHref`；MangaLayout 的 skip link 與源管理 `useOverlayFocus` |
-| `src/lib/suwayomi.client.ts` | `chapterPagesCache`；`uploadDate` 轉數字；詳情 `sourceName` 退回伺服器來源名 |
+| `src/lib/suwayomi.client.ts` | `chapterPagesCache`；`uploadDate` 轉數字；詳情 `sourceName` 退回伺服器來源名；列表與摘要查 `latestUploadedChapter { id pageCount }` 產生 `singleChapter` |
 | `src/components/MangaCard.tsx` | `block`、`showSource`／`meta`／`progress`；hover 只給 `(hover:hover)`、動畫 `motion-safe:` |
 
 ## 1. 全站繁體中文介面
@@ -170,6 +170,11 @@
   - `useOverlayFocus(..., { modal: true })` 只給蓋住整個畫面、portal 到 body 的層（源管理、換源 sheet）；閱讀器面板不設 inert，header 開關要保持可按
 - 介面：章節預設最早在前（`moontv_manga_chapter_order`）；推荐卡片不重複來源與類型徽章，分行顯示「最新：… · 共 N 話」「看到：…」「作者：… · 狀態」；
   觸控裝置不套 hover 位移，選取類 hover 只給 `(hover:hover)`；`prefers-reduced-motion` 時停用卡片位移／縮放與未讀徽章動畫
+- 載入進度：`MangaLoadingStatus`（跑動進度條＋已等待秒數，8 秒後註明來源慢）用在 `app/manga/{loading,detail/loading,read/loading}.tsx` 與閱讀器取頁面時；
+  同一標籤在路由 loading 與頁面骨架交接時沿用起點，秒數不歸零。閱讀器每頁用 `MangaPageImage`，圖片載好前顯示「第 N 頁載入中」（只在目前頁附近轉圈）
+- 換源 sheet：觸控裝置開啟時焦點放對話框本身、不聚焦搜尋框（會跳鍵盤擋住清單）；`(hover: hover) and (pointer: fine)` 的桌面維持直接聚焦搜尋框
+- 單本頁數：只有一話的作品標「單本 · N 頁」。頁數要 Suwayomi 抓過一次頁面清單才有，
+  卡片進到畫面附近時由 `useMangaChapterSummaryQueue` 打 `/api/manga/pages`（同時 2 本、後進先出、排隊上限 12）；抓過後 Suwayomi 記住，之後列表直接帶出
 - 實測（2026-10-02，production build、iPhone 13 模擬、CPU 4× 降速）：點卡片到出現骨架 ~975ms → 106–121ms（網路延遲 400ms）；開始閱讀 1606ms → 115ms；
   武炼巅峰（3875 話）詳情 ready 1.9–2.6s → 0.40s、TBT 1.5–1.9s → 48–59ms、往下捲觸發的 RSC 預取 124 → 0
 

@@ -69,6 +69,11 @@ const config: Config = {
           '0%': { transform: 'translateX(100%)', opacity: '0' },
           '100%': { transform: 'translateX(0)', opacity: '1' },
         },
+        // 不確定進度的跑條：w-1/3 的條從左外跑到右外，與軌道寬度無關
+        progressIndeterminate: {
+          '0%': { transform: 'translateX(-100%)' },
+          '100%': { transform: 'translateX(300%)' },
+        },
       },
       animation: {
         flicker: 'flicker 3s linear infinite',
@@ -77,6 +82,7 @@ const config: Config = {
         'slide-up': 'slideUp 0.3s ease-in-out',
         'slide-down': 'slideDown 0.3s ease-in-out',
         'slide-in-from-right': 'slideInFromRight 0.3s ease-out',
+        'progress-indeterminate': 'progressIndeterminate 1.2s ease-in-out infinite',
       },
       backgroundImage: {
         'gradient-radial': 'radial-gradient(var(--tw-gradient-stops))',

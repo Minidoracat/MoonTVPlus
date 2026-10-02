@@ -37,6 +37,7 @@ import {
   parseMangaBrowseState,
 } from '@/lib/manga-browse-state';
 import { buildMangaDetailHref } from '@/lib/manga-reader';
+import { formatMangaChapterLine } from '@/lib/manga-search-view';
 import {
   pickDefaultMangaSourceId,
   readRecentMangaSourceIds,
@@ -149,9 +150,20 @@ export default function MangaRecommendPage() {
                 ...item,
                 latestChapterCount: summary.count,
                 latestChapterName: summary.latestName,
+                singleChapter: summary.single,
               }
             : item;
         }),
+      }));
+    },
+    onPageCount: (key, pageCount) => {
+      setResult((prev) => ({
+        ...prev,
+        mangas: prev.mangas.map((item) =>
+          `${item.sourceId}+${item.id}` === key && item.singleChapter
+            ? { ...item, singleChapter: { ...item.singleChapter, pageCount } }
+            : item
+        ),
       }));
     },
   });
@@ -970,17 +982,16 @@ export default function MangaRecommendPage() {
                         })}
                         // 整頁同一來源、類型已寫在上方，卡片不再重複來源名與「热门／最新」徽章
                         showSource={false}
-                        subtitle={
-                          item.latestChapterName
-                            ? `最新：${item.latestChapterName}${
-                                item.latestChapterCount ? ` · 共 ${item.latestChapterCount} 话` : ''
-                              }`
-                            : item.latestChapterCount
-                              ? `共 ${item.latestChapterCount} 话`
-                              : undefined
+                        subtitle={formatMangaChapterLine(item)}
+                        progress={
+                          history[key]
+                            ? item.singleChapter
+                              ? `看到第 ${history[key].pageIndex + 1}/${history[key].pageCount} 页`
+                              : `看到：${history[key].chapterName}`
+                            : undefined
                         }
-                        progress={history[key] ? `看到：${history[key].chapterName}` : undefined}
-                        meta={[item.author ? `作者：${item.author}` : '', item.status]
+                        // 禁漫用「-」表示作者不明，照印只會多一行沒資訊的「作者：-」
+                        meta={[item.author && item.author.trim() !== '-' ? `作者：${item.author}` : '', item.status]
                           .filter(Boolean)
                           .join(' · ')}
                       />

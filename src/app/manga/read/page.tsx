@@ -57,7 +57,8 @@ import { processImageUrl } from '@/lib/utils';
 import { useOverlayFocus } from '@/hooks/useOverlayFocus';
 
 import MangaChapterOrderToggle from '@/components/manga/MangaChapterOrderToggle';
-import ProxyImage from '@/components/ProxyImage';
+import MangaLoadingStatus from '@/components/manga/MangaLoadingStatus';
+import MangaPageImage from '@/components/manga/MangaPageImage';
 
 type ReadMode = 'single' | 'double' | 'vertical' | 'horizontal';
 type ScaleMode = 'fit' | 'original';
@@ -2068,7 +2069,14 @@ export default function MangaReadPage() {
             </Link>
           </div>
         ) : pagesLoading || historyRestorePending ? (
-          <MangaReadSkeleton readMode={readMode} pageGap={pageGap} />
+          <>
+            {/* 標籤換了也是同一個元件，已等待秒數一路累計 */}
+            <MangaLoadingStatus
+              label={pagesLoading ? '正在取得本话页面' : '正在回到上次读到的位置'}
+              inverted={immersiveMode}
+            />
+            <MangaReadSkeleton readMode={readMode} pageGap={pageGap} />
+          </>
         ) : null}
 
         {readerReady &&
@@ -2117,8 +2125,10 @@ export default function MangaReadPage() {
                           pendingVerticalRestorePageRef.current ?? -1,
                           PRELOAD_PAGE_COUNT
                         )) && (
-                        <ProxyImage
+                        <MangaPageImage
                           key={getPageRenderKey(index)}
+                          pageNumber={index + 1}
+                          showLoading={Math.abs(index - activePage) <= PRELOAD_PAGE_COUNT + 1}
                           originalSrc={page}
                           displaySrc={getPageDisplaySrc(page, index)}
                           alt={`${chapterName}-${index + 1}`}
@@ -2158,8 +2168,10 @@ export default function MangaReadPage() {
                 >
                   {/* 外層在原始大小已改 min-h，這裡 h-full 會退成自然高度，overflow-hidden 只裁相鄰頁的水平溢出 */}
                   <div className='flex h-full w-full items-center justify-center overflow-hidden bg-gray-100 shadow-sm dark:bg-gray-900'>
-                    <ProxyImage
+                    <MangaPageImage
                       key={getPageRenderKey(index)}
+                      pageNumber={index + 1}
+                      showLoading={Math.abs(index - activePage) <= PRELOAD_PAGE_COUNT + 1}
                       originalSrc={page}
                       displaySrc={getPageDisplaySrc(page, index)}
                       alt={`${chapterName}-${index + 1}`}
@@ -2193,8 +2205,10 @@ export default function MangaReadPage() {
                       key={`${page}-${index}`}
                       className='overflow-hidden bg-gray-100 shadow-sm dark:bg-gray-900'
                     >
-                      <ProxyImage
+                      <MangaPageImage
                         key={getPageRenderKey(pageIndex)}
+                        pageNumber={pageIndex + 1}
+                        showLoading
                         originalSrc={page}
                         displaySrc={getPageDisplaySrc(page, pageIndex)}
                         alt={`${chapterName}-${pageIndex + 1}`}

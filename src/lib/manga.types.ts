@@ -316,6 +316,19 @@ export function buildFilterChangeInputs(
   });
 }
 
+/** 只有一話（單本）時的那一話；頁數要 Suwayomi 抓過一次頁面清單才知道 */
+export interface MangaSingleChapter {
+  id: string;
+  pageCount?: number;
+}
+
+/** 列表卡片用的章節摘要（/api/manga/chapter-summary 的每一筆） */
+export interface MangaChapterSummary {
+  count: number;
+  latestName?: string;
+  single?: MangaSingleChapter;
+}
+
 export interface MangaSearchItem {
   id: string;
   sourceId: string;
@@ -329,6 +342,7 @@ export interface MangaSearchItem {
   genre?: string;
   latestChapterCount?: number;
   latestChapterName?: string;
+  singleChapter?: MangaSingleChapter;
 }
 
 export interface MangaSearchFailure {

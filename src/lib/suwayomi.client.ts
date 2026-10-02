@@ -8,6 +8,7 @@ import {
   isMangaSourceAllowed,
   MANGA_DISABLE_ALL_SENTINEL,
   MangaChapter,
+  MangaChapterSummary,
   MangaDetail,
   MangaFilterSelection,
   MangaRecommendResult,
@@ -140,9 +141,24 @@ interface SearchDeadlineSentinel {
 
 const SEARCH_DEADLINE: SearchDeadlineSentinel = { deadlineReached: true };
 
-interface ChapterSummary {
-  count: number;
-  latestName?: string;
+type ChapterSummary = MangaChapterSummary;
+
+/**
+ * 只有一話（單本）時回傳那一話，讓列表標出頁數。pageCount 要 Suwayomi 抓過一次頁面清單才有
+ * （之前是 -1）；抓過後存在它的資料庫，之後列表查詢就直接帶出來。
+ */
+function toSingleChapter(
+  count: number | undefined,
+  chapter: { id?: string | number; pageCount?: number } | null | undefined
+): MangaSearchItem['singleChapter'] {
+  if (count !== 1 || chapter?.id === undefined || chapter.id === null) return undefined;
+  return {
+    id: String(chapter.id),
+    pageCount:
+      typeof chapter.pageCount === 'number' && chapter.pageCount > 0
+        ? chapter.pageCount
+        : undefined,
+  };
 }
 
 interface ChapterSummaryCacheEntry {
@@ -1020,7 +1036,7 @@ ${fields}
             status
             chaptersLastFetchedAt
             chapters { totalCount }
-            latestUploadedChapter { name chapterNumber }
+            latestUploadedChapter { id name chapterNumber pageCount }
           }
         }
       }
@@ -1041,8 +1057,10 @@ ${fields}
           chaptersLastFetchedAt?: number;
           chapters?: { totalCount?: number };
           latestUploadedChapter?: {
+            id?: string | number;
             name?: string;
             chapterNumber?: number;
+            pageCount?: number;
           } | null;
         }>;
       };
@@ -1070,26 +1088,30 @@ ${fields}
         seen.add(key);
         return true;
       })
-      .map((manga) => ({
-        id: String(manga.id),
-        sourceId: String(manga.sourceId || source.id),
-        sourceName,
-        title: manga.title || '未命名漫画',
-        cover: buildSuwayomiImageProxyUrl(manga.thumbnailUrl || ''),
-        description: manga.description,
-        author: manga.author,
-        artist: manga.artist,
-        genre: manga.genre,
-        status: normalizeMangaStatus(manga.status),
-        latestChapterCount:
+      .map((manga) => {
+        const latestChapterCount =
           typeof manga.chapters?.totalCount === 'number' &&
           manga.chapters.totalCount > 0 &&
           Date.now() - (manga.chaptersLastFetchedAt || 0) * 1000 <
             CHAPTER_SUMMARY_FRESH_MS
             ? manga.chapters.totalCount
-            : undefined,
-        latestChapterName: manga.latestUploadedChapter?.name || undefined,
-      }));
+            : undefined;
+        return {
+          id: String(manga.id),
+          sourceId: String(manga.sourceId || source.id),
+          sourceName,
+          title: manga.title || '未命名漫画',
+          cover: buildSuwayomiImageProxyUrl(manga.thumbnailUrl || ''),
+          description: manga.description,
+          author: manga.author,
+          artist: manga.artist,
+          genre: manga.genre,
+          status: normalizeMangaStatus(manga.status),
+          latestChapterCount,
+          latestChapterName: manga.latestUploadedChapter?.name || undefined,
+          singleChapter: toSingleChapter(latestChapterCount, manga.latestUploadedChapter),
+        };
+      });
 
     return { source, results };
   }
@@ -1556,7 +1578,7 @@ ${fields}
         status
         chaptersLastFetchedAt
         chapters { totalCount }
-        latestUploadedChapter { name chapterNumber }
+        latestUploadedChapter { id name chapterNumber pageCount }
       }
 
       mutation GET_SOURCE_MANGAS_FETCH($input: FetchSourceMangaInput!) {
@@ -1623,8 +1645,10 @@ ${fields}
             chaptersLastFetchedAt?: number;
             chapters?: { totalCount?: number };
             latestUploadedChapter?: {
+              id?: string | number;
               name?: string;
               chapterNumber?: number;
+              pageCount?: number;
             } | null;
           }>;
         };
@@ -1651,27 +1675,31 @@ ${fields}
         'GET_SOURCE_MANGAS_FETCH'
       );
 
-      const mangas = (data.fetchSourceManga?.mangas || []).map((manga) => ({
-        id: String(manga.id),
-        sourceId: String(manga.sourceId || sourceId),
-        sourceName:
-          matchedSource?.displayName || matchedSource?.name || sourceId,
-        title: manga.title || '未命名漫画',
-        cover: buildSuwayomiImageProxyUrl(manga.thumbnailUrl || ''),
-        description: manga.description,
-        author: manga.author,
-        artist: manga.artist,
-        genre: manga.genre,
-        status: normalizeMangaStatus(manga.status),
-        latestChapterCount:
+      const mangas = (data.fetchSourceManga?.mangas || []).map((manga) => {
+        const latestChapterCount =
           typeof manga.chapters?.totalCount === 'number' &&
           manga.chapters.totalCount > 0 &&
           Date.now() - (manga.chaptersLastFetchedAt || 0) * 1000 <
             CHAPTER_SUMMARY_FRESH_MS
             ? manga.chapters.totalCount
-            : undefined,
-        latestChapterName: manga.latestUploadedChapter?.name || undefined,
-      }));
+            : undefined;
+        return {
+          id: String(manga.id),
+          sourceId: String(manga.sourceId || sourceId),
+          sourceName:
+            matchedSource?.displayName || matchedSource?.name || sourceId,
+          title: manga.title || '未命名漫画',
+          cover: buildSuwayomiImageProxyUrl(manga.thumbnailUrl || ''),
+          description: manga.description,
+          author: manga.author,
+          artist: manga.artist,
+          genre: manga.genre,
+          status: normalizeMangaStatus(manga.status),
+          latestChapterCount,
+          latestChapterName: manga.latestUploadedChapter?.name || undefined,
+          singleChapter: toSingleChapter(latestChapterCount, manga.latestUploadedChapter),
+        };
+      });
 
       // 順手把 mangaId→sourceId 填進快取：這裡已經知道每本的來源，
       // 不填的話圖片代理對每張封面都要再打一次 manga(id:) 反查。
@@ -1782,7 +1810,7 @@ ${fields}
             sourceId?: string | number;
             chaptersLastFetchedAt?: number;
             chapters?: { totalCount?: number };
-            latestUploadedChapter?: { name?: string } | null;
+            latestUploadedChapter?: { id?: string | number; name?: string; pageCount?: number } | null;
           };
         }>(
           (idType) => `
@@ -1791,7 +1819,7 @@ ${fields}
                 sourceId
                 chaptersLastFetchedAt
                 chapters { totalCount }
-                latestUploadedChapter { name }
+                latestUploadedChapter { id name pageCount }
               }
             }
           `,
@@ -1821,6 +1849,7 @@ ${fields}
             return {
               count: totalCount,
               latestName: manga.latestUploadedChapter?.name || undefined,
+              single: toSingleChapter(totalCount, manga.latestUploadedChapter),
             };
           }
 
@@ -1830,6 +1859,7 @@ ${fields}
           return {
             count: chapters.length,
             latestName: ordered[ordered.length - 1]?.name,
+            single: toSingleChapter(chapters.length, chapters[0]),
           };
         })();
         const published = inflight

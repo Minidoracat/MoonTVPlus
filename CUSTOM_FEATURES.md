@@ -19,7 +19,7 @@
 | `src/components/PwaSafariPrompt.tsx` | 整檔本地 |
 | `src/app/search/page.tsx`、`src/app/api/search/route.ts`、`src/app/api/search/ws/route.ts` | alias／人物模式；`privateOnly` 不送 alias |
 | `src/components/UserMenu.tsx` | 繁中開關、三地片名（恢復預設 = 開） |
-| `src/app/layout.tsx` | `<TraditionalChineseProvider />` |
+| `src/app/layout.tsx` | `<TraditionalChineseProvider />`、`<ActivityLogger />` |
 | `src/components/VideoCard.tsx` | 點擊先開詳情 |
 | `src/app/douban/page.tsx`、`src/components/DoubanSelector.tsx` | Netflix／TMDB 榜；同時留時刻表 |
 | `next.config.js` | **不要**把 server `opencc-js` alias 成 identity |
@@ -172,6 +172,23 @@
   觸控裝置不套 hover 位移，選取類 hover 只給 `(hover:hover)`；`prefers-reduced-motion` 時停用卡片位移／縮放與未讀徽章動畫
 - 實測（2026-10-02，production build、iPhone 13 模擬、CPU 4× 降速）：點卡片到出現骨架 ~975ms → 106–121ms（網路延遲 400ms）；開始閱讀 1606ms → 115ms；
   武炼巅峰（3875 話）詳情 ready 1.9–2.6s → 0.40s、TBT 1.5–1.9s → 48–59ms、往下捲觸發的 RSC 預取 124 → 0
+
+## 10. 站長操作紀錄（owner 專用）
+
+- 新增：`src/components/ActivityLogger.tsx`、`src/lib/activity-log.ts`（事件型別與正規化，含 `activity-log.test.ts`）、`src/app/api/activity-log/route.ts`；
+  修改上游：`src/app/layout.tsx` 在 `<TopProgressBar />` 後掛 `<ActivityLogger />`
+- 目的：回報「點了沒反應」「頁面卡住」時，有實際操作序列可查，不必靠重現
+- 只記錄站長（cookie `role === 'owner'`）；監聽一律 capture／passive、從不 `preventDefault`，不影響頁面行為
+- 事件（每筆都有 `t` 時間、`sid` 分頁 session、`path`）：
+  - `session`：UA、視窗寬高、`dpr`、`standalone`（是否以 PWA 開啟）
+  - `nav`：`from` → `path`
+  - `tap`：座標、`sy`（`body.scrollTop`）、`wy`（`window.scrollY`）、元素 `tag`／`name`（aria-label 或文字前 40 字）、`href`、`interactive`、`clicked`。
+    按下到放開位移 ≤ 10px、≤ 800ms 才算一次 tap；`clicked: false` 表示 700ms 內 click 沒到 document（iOS 整頁點不動就是這個樣子）
+  - `vis`：切到背景／回前景；`error`：前端錯誤與未處理的 Promise rejection
+- 送出：每 10 秒或滿 50 筆批次 POST；切背景、關頁改用 `sendBeacon`；單次最多 100 筆，佇列上限 500
+- 儲存：Kvrocks list `activity_log:<站長帳號>`，最新在前，保留 20000 筆；非 Redis 系存儲回 501，前端就停止記錄
+- 讀取（owner／admin，讀的都是站長的紀錄）：`/api/activity-log?limit=500`（JSON，`limit` 最多 5000）；加 `&format=jsonl` 改為一行一筆
+- 清空：`redis-cli -u "$KVROCKS_URL" DEL activity_log:<站長帳號>`。用 owner 帳號跑自動化測試後要清，以免混進真實紀錄
 
 ## 設定鍵一覽（localStorage）
 

@@ -11,6 +11,7 @@ import { getConfig } from '@/lib/config';
 import { getUserFeatureAccess } from '@/lib/permissions';
 import { listEnabledSourceScripts } from '@/lib/source-script';
 
+import ActivityLogger from '../components/ActivityLogger';
 import { StartupCacheCleanup } from '../components/DanmakuCacheCleanup';
 import { DownloadBubble } from '../components/DownloadBubble';
 import { DownloadPanel } from '../components/DownloadPanel';
@@ -412,6 +413,7 @@ export default async function RootLayout({
           disableTransitionOnChange
         >
           <TopProgressBar />
+          <ActivityLogger />
           <RouteScrollReset />
           <TokenRefreshManager />
           <TraditionalChineseProvider />

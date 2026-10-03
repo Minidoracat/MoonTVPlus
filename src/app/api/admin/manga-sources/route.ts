@@ -17,6 +17,7 @@ import {
 import {
   isMangaSourceAllowed,
   MANGA_DISABLE_ALL_SENTINEL,
+  type MangaSourceEgress,
   type MangaSourceProbeEntry,
 } from '@/lib/manga.types';
 import { suwayomiClient } from '@/lib/suwayomi.client';
@@ -61,9 +62,13 @@ export async function GET(request: NextRequest) {
   try {
     const config = await getConfig();
     // 帶 lang=undefined 取全部語言，管理面板要能看到／啟用其他語言的來源
-    const [sources, probeCache] = await Promise.all([
+    const [sources, probeCache, egress] = await Promise.all([
       suwayomiClient.getSourcesForAdmin(),
       readMangaProbeCache(),
+      // 只是附加資訊：讀不到（沒部署分流、舊版 Suwayomi）就不顯示，不能拖垮列表
+      suwayomiClient
+        .getSourceEgressForAdmin()
+        .catch(() => new Map<string, MangaSourceEgress>()),
     ]);
     const allowList = config.SuwayomiConfig?.SourceIds || [];
     const blockList = config.SuwayomiConfig?.DisabledSourceIds || [];
@@ -81,6 +86,7 @@ export async function GET(request: NextRequest) {
         contentWarning: item.contentWarning,
         enabled: isMangaSourceAllowed(item.id, allowList, blockList),
         probe: probeCache.entries[item.id] || null,
+        egress: egress.get(item.id) || null,
       })),
     });
   } catch (error) {

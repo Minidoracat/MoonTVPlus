@@ -3,6 +3,8 @@
 import { CheckCircle2, RefreshCw, XCircle } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
+import type { MangaSourceEgress } from '@/lib/manga.types';
+
 /** 單一能力（熱門／搜尋）的探測結果 */
 export interface AdminMangaSourceProbeOutcome {
   ok: boolean;
@@ -26,6 +28,8 @@ export interface AdminMangaSource {
   contentWarning?: 'SAFE' | 'MIXED' | 'NSFW';
   enabled: boolean;
   probe: AdminMangaSourceProbe | null;
+  /** 主機分流的出口；沒部署分流或還沒寫入就是 null */
+  egress?: MangaSourceEgress | null;
 }
 
 /** 延遲分級：綠 <1.5s、琥珀 <5s、紅 >=5s */
@@ -129,6 +133,49 @@ function SourceStatusBadge({ probe }: { probe: AdminMangaSourceProbe | null }) {
     >
       <CapabilityBadge label='熱門' outcome={probe.popular} />
       <CapabilityBadge label='搜尋' outcome={probe.search} />
+    </span>
+  );
+}
+
+/**
+ * 出口標示：主機分流把這個來源送 WARP 還是直連。
+ *
+ * 統計範圍是來源主站網域（含子網域）。放在其他網域的圖片 CDN 對應不到是哪個來源，
+ * 不列入；滑鼠停留可看每個主機的路由與最近一次測速。
+ */
+function EgressBadge({ egress }: { egress: MangaSourceEgress }) {
+  const warpCount = egress.hosts.filter((h) => h.route === 'warp').length;
+  const label = egress.warpDown
+    ? '直連（WARP 不通）'
+    : egress.route === 'warp'
+      ? 'WARP'
+      : egress.route === 'direct'
+        ? '直連'
+        : `混合 WARP ${warpCount}/${egress.hosts.length}`;
+  const toneClass = egress.warpDown
+    ? 'bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300'
+    : egress.route === 'warp'
+      ? 'bg-sky-100 text-sky-800 dark:bg-sky-900/30 dark:text-sky-300'
+      : egress.route === 'direct'
+        ? 'bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300'
+        : 'bg-violet-100 text-violet-800 dark:bg-violet-900/30 dark:text-violet-300';
+  const details = egress.hosts.map((h) => {
+    const timing =
+      h.directMs !== undefined && h.warpMs !== undefined
+        ? `（直連 ${formatLatency(h.directMs)}／WARP ${formatLatency(h.warpMs)}）`
+        : '';
+    return `${h.host}：${h.route === 'warp' ? 'WARP' : '直連'}${timing}`;
+  });
+  if (egress.updatedAt) {
+    details.push(`更新於 ${formatRelativeTime(egress.updatedAt)}`);
+  }
+
+  return (
+    <span
+      className={`rounded px-1.5 py-0.5 ${toneClass}`}
+      title={details.join('\n')}
+    >
+      {label}
     </span>
   );
 }
@@ -593,6 +640,7 @@ export default function MangaSourceManagerPanel({
                         成人
                       </span>
                     )}
+                    {source.egress && <EgressBadge egress={source.egress} />}
                     {source.probe &&
                       (
                         [

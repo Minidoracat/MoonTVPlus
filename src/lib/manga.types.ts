@@ -67,6 +67,78 @@ export interface MangaSource {
   contentWarning?: MangaContentWarning;
 }
 
+/**
+ * Suwayomi source meta 的 key：主機上的 Suwayomi 對外分流（egress/warp_route.py）
+ * 把每個來源目前走 WARP 還是直連寫在這裡，管理面板唯讀顯示。
+ */
+export const MANGA_EGRESS_META_KEY = 'moontv.egress';
+
+export type MangaEgressRoute = 'warp' | 'direct';
+
+export interface MangaSourceEgressHost {
+  host: string;
+  route: MangaEgressRoute;
+  /** 最近一次測速的首位元組時間；沒測過就沒有 */
+  directMs?: number;
+  warpMs?: number;
+}
+
+export interface MangaSourceEgress {
+  /** 來源主站網域（含子網域）全部走 WARP／全部直連／兩者都有 */
+  route: MangaEgressRoute | 'mixed';
+  hosts: MangaSourceEgressHost[];
+  /** WARP 本身不通時分流會暫時全部改直連 */
+  warpDown?: boolean;
+  updatedAt?: number;
+}
+
+const isEgressRoute = (value: unknown): value is MangaEgressRoute =>
+  value === 'warp' || value === 'direct';
+
+const optionalMs = (value: unknown): number | undefined =>
+  typeof value === 'number' && Number.isFinite(value) && value >= 0
+    ? value
+    : undefined;
+
+/**
+ * 解析 meta 值。值由主機上的腳本寫入，壞掉或格式不符就回 null（面板不顯示），
+ * 不讓一筆壞資料拖垮整個來源列表。
+ */
+export function parseMangaSourceEgress(
+  raw: string | null | undefined
+): MangaSourceEgress | null {
+  if (!raw) return null;
+  let data: unknown;
+  try {
+    data = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (!data || typeof data !== 'object') return null;
+  const record = data as Record<string, unknown>;
+  const route = record.route;
+  if (route !== 'mixed' && !isEgressRoute(route)) return null;
+
+  const hosts: MangaSourceEgressHost[] = [];
+  for (const item of Array.isArray(record.hosts) ? record.hosts : []) {
+    const entry = (item || {}) as Record<string, unknown>;
+    if (typeof entry.host !== 'string' || !isEgressRoute(entry.route)) continue;
+    hosts.push({
+      host: entry.host,
+      route: entry.route,
+      directMs: optionalMs(entry.directMs),
+      warpMs: optionalMs(entry.warpMs),
+    });
+  }
+
+  return {
+    route,
+    hosts,
+    warpDown: record.warpDown === true || undefined,
+    updatedAt: optionalMs(record.updatedAt),
+  };
+}
+
 /** GroupFilter 內的一個勾選項；position 是它在**群組內**的原始位置 */
 export interface MangaFilterGroupOption {
   /**

@@ -33,7 +33,7 @@
 | `src/app/manga/page.tsx` | 捲動只讀寫 `document.body.scrollTop`；瀏覽狀態在 layout effect cleanup 存；`appendUniqueMangas`；`pickDefaultMangaSourceId`；卡片 href 用 `buildMangaDetailHref` |
 | `src/app/manga/detail/page.tsx`、`src/app/manga/read/page.tsx` | `orderMangaChapters`、章節分批與 `prefetch={false}`、`MangaChapterOrderToggle`、`useOverlayFocus`；同目錄 `loading.tsx` 不可刪 |
 | `src/app/manga/search/page.tsx`、`src/app/manga/shelf/page.tsx`、`src/components/manga/MangaHistoryCard.tsx`、`src/components/manga/MangaLayout.tsx` | 詳情連結一律 `buildMangaDetailHref`；MangaLayout 的 skip link 與源管理 `useOverlayFocus` |
-| `src/lib/suwayomi.client.ts` | `chapterPagesCache`；`uploadDate` 轉數字；詳情 `sourceName` 退回伺服器來源名；列表與摘要查 `latestUploadedChapter { id pageCount }` 產生 `singleChapter` |
+| `src/lib/suwayomi.client.ts` | `chapterPagesCache`；`uploadDate` 轉數字；詳情 `sourceName` 退回伺服器來源名；列表與摘要查 `latestUploadedChapter { id pageCount }` 產生 `singleChapter`；`getSourceEgressForAdmin` |
 | `src/components/MangaCard.tsx` | `block`、`showSource`／`meta`／`progress`；hover 只給 `(hover:hover)`、動畫 `motion-safe:` |
 
 ## 1. 全站繁體中文介面
@@ -194,6 +194,16 @@
 - 儲存：Kvrocks list `activity_log:<站長帳號>`，最新在前，保留 20000 筆；非 Redis 系存儲回 501，前端就停止記錄
 - 讀取（owner／admin，讀的都是站長的紀錄）：`/api/activity-log?limit=500`（JSON，`limit` 最多 5000）；加 `&format=jsonl` 改為一行一筆
 - 清空：`redis-cli -u "$KVROCKS_URL" DEL activity_log:<站長帳號>`。用 owner 帳號跑自動化測試後要清，以免混進真實紀錄
+
+## 11. 漫畫源出口標示（WARP／直連）
+
+- 新增：`src/lib/manga-source-egress.test.ts`；修改上游：`src/lib/manga.types.ts`（`MANGA_EGRESS_META_KEY`、`MangaSourceEgress`、`parseMangaSourceEgress`）、
+  `src/lib/suwayomi.client.ts`（`getSourceEgressForAdmin`）；本 fork 檔案：`src/app/api/admin/manga-sources/route.ts`（GET 附 `egress`）、`src/components/manga/MangaSourceManagerPanel.tsx`（`EgressBadge`）
+- 資料來源：主機上的 Suwayomi 分流（`~/github/Suwayomi-Server-docker/egress/warp_route.py`，systemd `suwayomi-warp-route.timer`）每次更新路由後，
+  把每個來源的出口寫進 Suwayomi source meta `moontv.egress`（JSON：`route`、`hosts[{host, route, directMs, warpMs}]`、`warpDown`、`updatedAt`）。MoonTVPlus 只讀不寫
+- 統計範圍是來源 `homeUrl` 的主站網域（含子網域）。圖片放在其他網域的 CDN 從分流只看得到主機、對應不到來源，不列入
+- 面板在語言旁顯示「WARP」「直連」「混合 WARP n/m」，WARP 不通時顯示「直連（WARP 不通）」；滑鼠停留列出每個主機的路由與最近一次測速
+- 只出現在管理員的源管理面板：出口主機屬於基礎設施資訊，一般使用者的 `/api/manga/sources` 不帶這個欄位。讀 meta 失敗時列表照常顯示、只是沒有標示
 
 ## 設定鍵一覽（localStorage）
 

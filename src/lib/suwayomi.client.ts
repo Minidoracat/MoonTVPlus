@@ -7,6 +7,7 @@ import {
   buildFilterChangeInputs,
   isMangaSourceAllowed,
   MANGA_DISABLE_ALL_SENTINEL,
+  MANGA_EGRESS_META_KEY,
   MangaChapter,
   MangaChapterSummary,
   MangaDetail,
@@ -18,6 +19,7 @@ import {
   MangaSearchResult,
   MangaSearchSourceRef,
   MangaSource,
+  MangaSourceEgress,
   MangaSourceFilterOption,
   MangaSourceMeasurement,
   MangaSourceProbe,
@@ -25,6 +27,7 @@ import {
   MangaSourceSearchOutcome,
   MangaSourceSearchResponse,
   matchesSourceLang,
+  parseMangaSourceEgress,
   SourceExternalUrl,
 } from './manga.types';
 import { orderMangaChapters } from './manga-reader';
@@ -840,6 +843,42 @@ export class SuwayomiClient {
    */
   async getSourcesForAdmin(lang?: string): Promise<MangaSource[]> {
     return this.fetchSources(lang, undefined, true);
+  }
+
+  /**
+   * 各來源目前走 WARP 還是直連（主機分流腳本寫在 source meta）。
+   * 僅限管理面板：出口主機屬於基礎設施資訊，不給一般使用者路徑。
+   */
+  async getSourceEgressForAdmin(): Promise<Map<string, MangaSourceEgress>> {
+    const data = await this.graphqlRequest<{
+      sources?: {
+        nodes?: Array<{
+          id: string;
+          meta?: Array<{ key: string; value: string }>;
+        }>;
+      };
+    }>(`
+      query GetSourceEgress {
+        sources {
+          nodes {
+            id
+            meta {
+              key
+              value
+            }
+          }
+        }
+      }
+    `);
+    const result = new Map<string, MangaSourceEgress>();
+    for (const node of data.sources?.nodes || []) {
+      const raw = node.meta?.find(
+        (m) => m.key === MANGA_EGRESS_META_KEY
+      )?.value;
+      const egress = parseMangaSourceEgress(raw);
+      if (egress) result.set(String(node.id), egress);
+    }
+    return result;
   }
 
   private async fetchSources(

@@ -21,7 +21,14 @@ export function getS2TConverter(): Promise<OpenCCConverter | null> {
     s2tConverterPromise = import('opencc-js')
       .then((module) => {
         const OpenCC = module.default || module;
-        return OpenCC.Converter({ from: 'cn', to: 'twp' });
+        const convert = OpenCC.Converter({ from: 'cn', to: 'twp' });
+        // 台灣用語詞典有三條會把結果再包住原詞（算法→演算法、虛擬機→虛擬機器、
+        // 實模式→真實模式）：原文已是台灣用語時會變成「演演算法」，每轉一次多一層
+        return (text: string) =>
+          convert(text)
+            .replace(/演演算法/g, '演算法')
+            .replace(/虛擬機器器/g, '虛擬機器')
+            .replace(/真真實模式/g, '真實模式');
       })
       .catch((error) => {
         console.error('加载 opencc-js 简转繁转换器失败:', error);

@@ -77,6 +77,7 @@ export function TraditionalChineseProvider() {
     let convert: OpenCCConverter | null = null;
     // 记录我们刚写入的值，避免 observer 对自身写入再次触发造成循环
     const lastWritten = new WeakMap<Node, string>();
+    const lastWrittenAttrs = new WeakMap<Element, Map<string, string>>();
 
     const isEnabled = isTraditionalChineseEnabled;
 
@@ -104,8 +105,17 @@ export function TraditionalChineseProvider() {
       for (const attr of TEXT_ATTRIBUTES) {
         const value = el.getAttribute(attr);
         if (!value || !CHINESE_CHAR_REGEX.test(value)) continue;
+        /*
+         * 自己剛寫入的值不能再轉：OpenCC twp 不是冪等的（「算法」→「演算法」，
+         * 再轉一次又多一個「演」）。寫屬性會再觸發 observer，少了這道檢查就在
+         * microtask 裡無限迴圈 —— 標題含「演算法」的卡片一出現，整頁凍住變黑、點不動。
+         */
+        const written = lastWrittenAttrs.get(el);
+        if (written?.get(attr) === value) continue;
         const converted = (convert as OpenCCConverter)(value);
         if (converted !== value) {
+          if (written) written.set(attr, converted);
+          else lastWrittenAttrs.set(el, new Map([[attr, converted]]));
           el.setAttribute(attr, converted);
         }
       }

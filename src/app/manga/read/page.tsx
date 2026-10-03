@@ -20,6 +20,7 @@ import {
   type TouchEvent,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -1629,6 +1630,19 @@ export default function MangaReadPage() {
 
   const readerReady = pages.length > 0 && !historyRestorePending;
   const topControlsVisible = controlsVisible || !readerReady;
+
+  /*
+   * 水平容器在 readerReady 那一輪才掛上；applyStartPage 的 setTimeout 可能在它掛上前就跑掉，
+   * 頁碼已是目標頁、畫面卻停在第 1 頁（「上一話」從最後一頁接著看就是這樣壞的）。
+   * 掛上的那一刻在繪製前補捲一次。
+   */
+  const activePageRef = useRef(activePage);
+  activePageRef.current = activePage;
+  useLayoutEffect(() => {
+    if (readerReady && readMode === 'horizontal') {
+      scrollToPage(activePageRef.current, 'auto');
+    }
+  }, [readerReady, readMode, scrollToPage]);
 
   // 面板開啟時焦點移進去、關閉時回到開啟它的按鈕；不 inert，header 的開關鈕仍要按得到
   const settingsPanelRef = useRef<HTMLDivElement>(null);

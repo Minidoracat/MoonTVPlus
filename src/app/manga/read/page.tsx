@@ -17,6 +17,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import {
   type CSSProperties,
   type MouseEvent,
+  type TouchEvent,
   useCallback,
   useEffect,
   useMemo,
@@ -46,9 +47,13 @@ import {
   getHorizontalPageIndex,
   getHorizontalPageOffset,
   getNextMangaChapter,
+  getPreviousMangaChapter,
   getReaderProgress,
   getReaderStartPage,
+  isMangaDoubleTap,
   isVerticalRestoreWindowSettled,
+  MANGA_DOUBLE_TAP_MS,
+  type MangaTapPoint,
   orderMangaChapters,
   readMangaChapterNewestFirst,
   shouldEagerLoadVerticalRestorePage,
@@ -59,6 +64,9 @@ import { useOverlayFocus } from '@/hooks/useOverlayFocus';
 import MangaChapterOrderToggle from '@/components/manga/MangaChapterOrderToggle';
 import MangaLoadingStatus from '@/components/manga/MangaLoadingStatus';
 import MangaPageImage from '@/components/manga/MangaPageImage';
+import MangaZoomViewer, {
+  type MangaZoomTarget,
+} from '@/components/manga/MangaZoomViewer';
 
 type ReadMode = 'single' | 'double' | 'vertical' | 'horizontal';
 type ScaleMode = 'fit' | 'original';
@@ -66,7 +74,10 @@ type ScaleMode = 'fit' | 'original';
 const READ_MODE_STORAGE_KEY = 'mangaReadMode';
 const SCALE_MODE_STORAGE_KEY = 'mangaScaleMode';
 const PAGE_GAP_STORAGE_KEY = 'mangaPageGap';
-const SAVE_INTERVAL_MS = 10000;
+/** 翻頁後最慢這麼久寫入閱讀紀錄；切到背景、離開頁面時另外立刻寫 */
+const SAVE_INTERVAL_MS = 2000;
+/** 章節開頭再往前拉（直式往下、水平往右）超過這個距離，就問要不要回上一話 */
+const EDGE_PULL_PX = 72;
 const PRELOAD_PAGE_COUNT = 5;
 const VERTICAL_RESTORE_TIMEOUT_MS = 4000;
 const SHELF_SYNC_RETRY_MS = 30_000;
@@ -195,12 +206,15 @@ export default function MangaReadPage() {
   const sourceName = searchParams.get('sourceName') || sourceId;
   const chapterName = searchParams.get('chapterName') || '章节';
   const returnTo = searchParams.get('returnTo') || '/manga';
-  /** 章節列表／下一話明確帶入，優先於歷史續讀紀錄 */
-  const startAtFirstPage = searchParams.get('startPage') === '1';
+  /**
+   * 明確的起始頁優先於歷史續讀紀錄：章節列表／下一話帶 `startPage=1`，
+   * 第一頁再往前的「上一話」帶 `startPage=last`，接著往回看。
+   */
+  const startPageParam = searchParams.get('startPage');
+  const startPageIntent =
+    startPageParam === '1' ? 'first' : startPageParam === 'last' ? 'last' : null;
   const chapterRestoreKey = `${sourceId}+${mangaId}+${chapterId}`;
-  const historyRestoreToken = `${chapterRestoreKey}:${
-    startAtFirstPage ? 'first' : 'resume'
-  }`;
+  const historyRestoreToken = `${chapterRestoreKey}:${startPageIntent ?? 'resume'}`;
   const mangaDetailRequestKey = `${sourceId}+${mangaId}`;
 
   const [pages, setPages] = useState<string[]>([]);
@@ -239,6 +253,11 @@ export default function MangaReadPage() {
   >({});
   /** 垂直模式載入失敗的頁；失敗頁改渲染重試 placeholder，不再佔滿一屏。 */
   const [failedPages, setFailedPages] = useState<Set<number>>(new Set());
+  /** 雙擊放大中的那一頁 */
+  const [zoomTarget, setZoomTarget] = useState<MangaZoomTarget | null>(null);
+  /** 第一頁再往前時的「回到上一話？」 */
+  const [showPreviousChapterPrompt, setShowPreviousChapterPrompt] =
+    useState(false);
 
   const verticalPageRefs = useRef<Array<HTMLDivElement | null>>([]);
   const horizontalContainerRef = useRef<HTMLDivElement | null>(null);
@@ -274,6 +293,11 @@ export default function MangaReadPage() {
   const historyRestoreVersionRef = useRef(0);
   const verticalRestoreGenerationRef = useRef(0);
   const immersiveDesiredRef = useRef(false);
+  /** 圖上的上一次單擊；第二下落在雙擊時間窗內就放大 */
+  const lastImageTapRef = useRef<MangaTapPoint | null>(null);
+  const controlsTapTimerRef = useRef<number | null>(null);
+  /** 在章節開頭按下的位置；放開時往回拉夠遠就問要不要回上一話 */
+  const edgePullStartRef = useRef<{ x: number; y: number } | null>(null);
   const mangaDetailIsCurrent =
     mangaDetailOwnerRef.current === mangaDetailRequestKey;
   const ownedMangaDetail = mangaDetailIsCurrent ? mangaDetail : null;
@@ -711,6 +735,9 @@ export default function MangaReadPage() {
       if (verticalRestoreTimeoutRef.current !== null) {
         window.clearTimeout(verticalRestoreTimeoutRef.current);
       }
+      if (controlsTapTimerRef.current !== null) {
+        window.clearTimeout(controlsTapTimerRef.current);
+      }
       const shelfSyncTimer = shelfSyncAttemptRef.current?.timer;
       if (shelfSyncTimer !== null && shelfSyncTimer !== undefined) {
         window.clearTimeout(shelfSyncTimer);
@@ -734,6 +761,7 @@ export default function MangaReadPage() {
     // 章底完讀彈窗會收起控制列，換話後必須把 header／控制列還給使用者。
     setControlsVisible(true);
     setActivePage(0);
+    setZoomTarget(null);
     progressDraftRef.current = null;
     setProgressDraft(null);
     restoredChapterKeyRef.current = null;
@@ -901,9 +929,12 @@ export default function MangaReadPage() {
       }
     };
 
-    // 明確選章固定第 1 頁，無須等待 history cache/network。
-    if (startAtFirstPage) {
-      applyStartPage(0, true);
+    // 明確的起始頁（選章第 1 頁、上一話最後一頁）無須等待 history cache/network。
+    if (startPageIntent) {
+      // 雙頁模式最後一組從倒數第二頁開始，兩頁才會一起出現
+      const lastPage =
+        readMode === 'double' ? Math.max(pages.length - 2, 0) : pages.length - 1;
+      applyStartPage(startPageIntent === 'last' ? lastPage : 0, true);
       return () => {
         cancelled = true;
       };
@@ -940,11 +971,12 @@ export default function MangaReadPage() {
     searchParams,
     sourceId,
     stagePendingRecord,
-    startAtFirstPage,
+    startPageIntent,
   ]);
 
   useEffect(() => {
     setShowChapterComplete(false);
+    setShowPreviousChapterPrompt(false);
   }, [activePage, chapterId, readMode]);
 
   useEffect(() => {
@@ -1290,6 +1322,27 @@ export default function MangaReadPage() {
     return true;
   };
 
+  const previousChapter = useMemo<MangaChapter | null>(
+    () => getPreviousMangaChapter(ownedMangaDetail?.chapters || [], chapterId),
+    [chapterId, ownedMangaDetail?.chapters]
+  );
+  /** 確定本來就是第一話才不問；章節列表還在載或失敗時照樣開，彈窗會說明 */
+  const canAskPreviousChapter =
+    Boolean(previousChapter) ||
+    ownedMangaDetailLoading ||
+    Boolean(ownedMangaDetailError);
+
+  /** 章節開頭：直式捲在最上面，其他模式停在第一頁（雙頁是第一組） */
+  const isAtChapterStart = () =>
+    readMode === 'vertical' ? getReaderScrollTop() <= 2 : activePage <= 0;
+
+  const openPreviousChapterPrompt = () => {
+    if (!canAskPreviousChapter) return;
+    setShowPreviousChapterPrompt(true);
+    setControlsVisible(false);
+    setSettingsOpen(false);
+  };
+
   const clampPage = (page: number) => {
     if (!pages.length) return 0;
     return Math.min(Math.max(page, 0), pages.length - 1);
@@ -1347,6 +1400,11 @@ export default function MangaReadPage() {
 
   /** 垂直模式翻頁是視窗滾動，水平模式是容器捲動，單頁／雙頁則直接換頁碼。 */
   const stepPage = (direction: 1 | -1) => {
+    // 已在第一頁還往前：問要不要回上一話，而不是什麼都不做
+    if (direction === -1 && isAtChapterStart()) {
+      openPreviousChapterPrompt();
+      return;
+    }
     const narrowDouble = readMode === 'double' && window.innerWidth < 768;
     const canScrollForward =
       getReaderScrollTop() + window.innerHeight < getReaderScrollHeight() - 24;
@@ -1434,10 +1492,13 @@ export default function MangaReadPage() {
   ]);
 
   /**
-   * 使用者明確點章節列表／下一話時一律從第 1 頁開始。
-   * 這是導航意圖，不等同從書架／歷史進來的「繼續閱讀」。
+   * 使用者明確點章節列表／下一話時一律從第 1 頁開始；第一頁再往前的「上一話」
+   * 從最後一頁接著往回看。這是導航意圖，不等同從書架／歷史進來的「繼續閱讀」。
    */
-  const chapterReadHref = (chapter: MangaChapter) =>
+  const chapterReadHref = (
+    chapter: MangaChapter,
+    startAt: 'first' | 'last' = 'first'
+  ) =>
     buildMangaReadHref({
       mangaId,
       sourceId,
@@ -1447,7 +1508,7 @@ export default function MangaReadPage() {
       sourceName,
       chapterName: chapter.name,
       returnTo,
-      startAtFirstPage: true,
+      startAt,
     });
 
   const detailHref = buildMangaDetailHref({
@@ -1573,9 +1634,11 @@ export default function MangaReadPage() {
   const settingsPanelRef = useRef<HTMLDivElement>(null);
   const chapterPanelRef = useRef<HTMLDivElement>(null);
   const completePanelRef = useRef<HTMLDivElement>(null);
+  const previousPanelRef = useRef<HTMLDivElement>(null);
   useOverlayFocus(settingsOpen, settingsPanelRef);
   useOverlayFocus(chapterListOpen, chapterPanelRef);
   useOverlayFocus(showChapterComplete, completePanelRef);
+  useOverlayFocus(showPreviousChapterPrompt, previousPanelRef);
 
   // 本話載好後在背景預熱下一話的內頁清單（伺服器端快取），讀完按下一話不必再等來源站
   const nextChapterId = nextChapter?.id;
@@ -1592,21 +1655,104 @@ export default function MangaReadPage() {
   const handleReaderClick = (event: MouseEvent<HTMLDivElement>) => {
     const target = event.target as HTMLElement;
     if (target.closest('a, button, input, select, label')) return;
-    if (settingsOpen || chapterListOpen || showChapterComplete) return;
+    if (
+      settingsOpen ||
+      chapterListOpen ||
+      showChapterComplete ||
+      showPreviousChapterPrompt
+    ) {
+      return;
+    }
 
     // 畫布點擊只切換 controls；翻頁統一由明確的底部按鈕處理。
-    setControlsVisible((prev) => !prev);
+    const image = target.closest('img');
+    if (!image) {
+      lastImageTapRef.current = null;
+      setControlsVisible((prev) => !prev);
+      return;
+    }
+    // 圖上單擊要等雙擊時間窗過了才切換 controls；雙擊則放大點到的位置
+    if (controlsTapTimerRef.current !== null) {
+      window.clearTimeout(controlsTapTimerRef.current);
+      controlsTapTimerRef.current = null;
+    }
+    const tap = { time: event.timeStamp, x: event.clientX, y: event.clientY };
+    if (isMangaDoubleTap(lastImageTapRef.current, tap)) {
+      lastImageTapRef.current = null;
+      const rect = image.getBoundingClientRect();
+      // 還沒載好的圖沒有尺寸可放大
+      if (image.naturalWidth > 0 && rect.width > 0 && rect.height > 0) {
+        setZoomTarget({
+          src: image.currentSrc || image.src,
+          alt: image.alt,
+          rect: {
+            left: rect.left,
+            top: rect.top,
+            width: rect.width,
+            height: rect.height,
+          },
+          point: { x: tap.x, y: tap.y },
+        });
+      }
+      return;
+    }
+    lastImageTapRef.current = tap;
+    controlsTapTimerRef.current = window.setTimeout(() => {
+      controlsTapTimerRef.current = null;
+      setControlsVisible((prev) => !prev);
+    }, MANGA_DOUBLE_TAP_MS);
+  };
+
+  const handleReaderTouchStart = (event: TouchEvent<HTMLDivElement>) => {
+    edgePullStartRef.current = null;
+    if (
+      event.touches.length !== 1 ||
+      !readerReady ||
+      showChapterComplete ||
+      showPreviousChapterPrompt
+    ) {
+      return;
+    }
+    const atStart =
+      readMode === 'vertical'
+        ? getReaderScrollTop() <= 2
+        : readMode === 'horizontal' &&
+          (horizontalContainerRef.current?.scrollLeft ?? 1) <= 1;
+    if (!atStart) return;
+    const touch = event.touches[0];
+    edgePullStartRef.current = { x: touch.clientX, y: touch.clientY };
+  };
+
+  /** 第一頁再往前拉（直式往下、水平往右）、頁面沒跟著動，就問要不要回上一話 */
+  const handleReaderTouchEnd = (event: TouchEvent<HTMLDivElement>) => {
+    const start = edgePullStartRef.current;
+    edgePullStartRef.current = null;
+    const touch = event.changedTouches[0];
+    if (!start || !touch) return;
+    const dx = touch.clientX - start.x;
+    const dy = touch.clientY - start.y;
+    const [along, across] = readMode === 'vertical' ? [dy, dx] : [dx, dy];
+    if (
+      along > EDGE_PULL_PX &&
+      along > Math.abs(across) * 1.5 &&
+      isAtChapterStart()
+    ) {
+      openPreviousChapterPrompt();
+    }
   };
 
   // 讀最新 state 與非 memo 的 stepPage，故每次 render 重綁；面板開啟時只留 Escape
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.metaKey || event.ctrlKey || event.altKey) return;
+      // 放大檢視自己處理 Esc；開著時其他按鍵也不翻頁
+      if (zoomTarget) return;
       // Escape 放最前面：焦點在進度條（input）或面板內按鈕上也要能關面板／退沉浸
       if (event.key === 'Escape') {
         if (settingsOpen) setSettingsOpen(false);
         else if (chapterListOpen) setChapterListOpen(false);
         else if (showChapterComplete) setShowChapterComplete(false);
+        else if (showPreviousChapterPrompt) setShowPreviousChapterPrompt(false);
         else if (immersiveMode) applyImmersiveMode(false);
         else return;
         event.preventDefault();
@@ -1619,7 +1765,13 @@ export default function MangaReadPage() {
       // 焦點在按鈕／連結上時 Space 是啟動元件，不能攔成翻頁
       if (event.key === ' ' && target?.closest('button, a')) return;
 
-      if (settingsOpen || chapterListOpen || showChapterComplete || !readerReady)
+      if (
+        settingsOpen ||
+        chapterListOpen ||
+        showChapterComplete ||
+        showPreviousChapterPrompt ||
+        !readerReady
+      )
         return;
 
       if (
@@ -1927,9 +2079,13 @@ export default function MangaReadPage() {
             <button
               type='button'
               onClick={() => stepPage(-1)}
-              disabled={readMode !== 'vertical' && activePage <= 0}
+              disabled={
+                readMode !== 'vertical' && activePage <= 0 && !canAskPreviousChapter
+              }
               className='inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-white/10 transition hover:bg-white/20 disabled:opacity-30'
-              aria-label='上一页'
+              aria-label={
+                readMode !== 'vertical' && activePage <= 0 ? '上一话' : '上一页'
+              }
             >
               <ChevronLeft className='h-5 w-5' />
             </button>
@@ -1974,14 +2130,18 @@ export default function MangaReadPage() {
         </div>
       )}
 
+      {/* manipulation 關掉瀏覽器自己的雙擊縮放，雙擊才交給閱讀器放大；touch-action 只
+          算到最近的捲動容器（每頁的 overflow 外框、水平容器），所以圖片本身也要設 */}
       <div
-        className={`relative select-none ${
+        className={`relative select-none touch-manipulation [&_img]:touch-manipulation ${
           immersiveMode
             ? 'min-h-[100dvh] bg-black px-0 py-0'
             : 'min-h-[calc(100dvh-var(--reader-chrome))] px-0 py-3 sm:px-3'
         }`}
         style={{ '--reader-chrome': readerChrome } as CSSProperties}
         onClick={handleReaderClick}
+        onTouchStart={handleReaderTouchStart}
+        onTouchEnd={handleReaderTouchEnd}
       >
         {showChapterComplete && (
           <div
@@ -2038,6 +2198,64 @@ export default function MangaReadPage() {
                   onClick={() => setShowChapterComplete(false)}
                 >
                   关闭
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {showPreviousChapterPrompt && (
+          <div
+            className='fixed inset-0 z-30 flex items-center justify-center bg-black/60 px-4'
+            onClick={() => setShowPreviousChapterPrompt(false)}
+          >
+            <div
+              ref={previousPanelRef}
+              role='dialog'
+              aria-labelledby='manga-reader-previous-title'
+              className='w-full max-w-sm rounded-3xl border border-gray-200 bg-white p-6 text-center shadow-xl dark:border-gray-700 dark:bg-gray-950'
+              onClick={(event) => event.stopPropagation()}
+            >
+              <h2
+                id='manga-reader-previous-title'
+                className='text-lg font-semibold text-gray-900 dark:text-gray-100'
+              >
+                已经是本话第一页
+              </h2>
+              <div className='mt-2 text-sm text-gray-500 dark:text-gray-400'>
+                {ownedMangaDetailError
+                  ? `无法确认上一话：${ownedMangaDetailError}`
+                  : ownedMangaDetailLoading
+                  ? '正在确认上一话…'
+                  : previousChapter
+                  ? '要回到上一话吗？会从上一话的最后一页接着往前看'
+                  : '这已经是第一话'}
+              </div>
+              <div className='mt-6 flex flex-col gap-3'>
+                {!ownedMangaDetailError &&
+                  !ownedMangaDetailLoading &&
+                  previousChapter && (
+                    <>
+                      <Link
+                        href={chapterReadHref(previousChapter, 'last')}
+                        className='rounded-2xl bg-sky-600 px-4 py-3 text-sm font-medium text-white transition hover:bg-sky-700'
+                      >
+                        上一话：{previousChapter.name}
+                      </Link>
+                      <Link
+                        href={chapterReadHref(previousChapter)}
+                        className='rounded-2xl border border-gray-200 px-4 py-3 text-sm font-medium text-gray-700 transition hover:bg-gray-50 dark:border-gray-700 dark:text-gray-200 dark:hover:bg-gray-900'
+                      >
+                        从上一话第 1 页开始
+                      </Link>
+                    </>
+                  )}
+                <button
+                  type='button'
+                  className='rounded-2xl border border-gray-200 px-4 py-3 text-sm font-medium text-gray-700 transition hover:bg-gray-50 dark:border-gray-700 dark:text-gray-200 dark:hover:bg-gray-900'
+                  onClick={() => setShowPreviousChapterPrompt(false)}
+                >
+                  留在本话
                 </button>
               </div>
             </div>
@@ -2228,6 +2446,13 @@ export default function MangaReadPage() {
             </div>
           ))}
       </div>
+
+      {zoomTarget && (
+        <MangaZoomViewer
+          target={zoomTarget}
+          onClose={() => setZoomTarget(null)}
+        />
+      )}
 
       <Link href={detailHref} className='sr-only'>
         返回详情

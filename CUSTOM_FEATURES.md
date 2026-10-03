@@ -31,7 +31,7 @@
 | `src/app/api/douban-recommendations/route.ts` | `!response.ok` 時轉發 `Retry-After` |
 | `jest.config.js` | `moduleNameMapper` 的 `^cheerio/slim$`（jest 27 不認 exports 子路徑） |
 | `src/app/manga/page.tsx` | 捲動只讀寫 `document.body.scrollTop`；瀏覽狀態在 layout effect cleanup 存；`appendUniqueMangas`；`pickDefaultMangaSourceId`；卡片 href 用 `buildMangaDetailHref`；picker 的 `egress`；推荐類型的本日／本周／本月（`findMangaHotWindows`／`matchMangaHotWindow`） |
-| `src/app/manga/detail/page.tsx`、`src/app/manga/read/page.tsx` | `orderMangaChapters`、章節分批與 `prefetch={false}`、`MangaChapterOrderToggle`、`useOverlayFocus`；同目錄 `loading.tsx` 不可刪 |
+| `src/app/manga/detail/page.tsx`、`src/app/manga/read/page.tsx` | `orderMangaChapters`、章節分批與 `prefetch={false}`、`MangaChapterOrderToggle`、`useOverlayFocus`；同目錄 `loading.tsx` 不可刪；閱讀器雙擊放大、第一頁問上一話、`startPage=last`；詳情頁讀到一半的那一話續讀、「继续阅读」為主按鈕 |
 | `src/app/manga/search/page.tsx`、`src/app/manga/shelf/page.tsx`、`src/components/manga/MangaHistoryCard.tsx`、`src/components/manga/MangaLayout.tsx` | 詳情連結一律 `buildMangaDetailHref`；MangaLayout 的 skip link 與源管理 `useOverlayFocus` |
 | `src/lib/suwayomi.client.ts` | `chapterPagesCache`；`uploadDate` 轉數字；詳情 `sourceName` 退回伺服器來源名；列表與摘要查 `latestUploadedChapter { id pageCount }` 產生 `singleChapter`；`getSourceEgressForAdmin` |
 | `src/components/MangaCard.tsx` | `block`、`showSource`／`meta`／`progress`；hover 只給 `(hover:hover)`、動畫 `motion-safe:` |
@@ -48,6 +48,11 @@
 
 **修改的上游檔案**
 - `src/app/layout.tsx` — import + `<TraditionalChineseProvider />` 掛載（2 行，位於 `<TokenRefreshManager />` 之後）
+
+**必守**：`TraditionalChineseProvider` 的屬性轉換要記住自己寫入的值（`lastWrittenAttrs`），跟文字節點的 `lastWritten` 一樣。
+OpenCC twp 不是冪等的（`算法`→`演算法`，再轉一次又多一個「演」），少了這道檢查，寫入觸發 observer 後會在 microtask 裡無限迴圈：
+標題含「演算法」的漫畫卡片一出現，iPhone 上整頁變黑、點什麼都沒反應（`TraditionalChineseProvider.test.tsx` 守著）。
+`opencc-client.ts` 另把三條會再包住原詞的台灣用語（演算法、虛擬機器、真實模式）收回，避免顯示成「演演算法」。
 
 ## 2. 語系快速切換按鈕與設定開關
 
@@ -214,6 +219,18 @@
 - 選項本身沒有熱門字眼、且整個下拉只有時間（禁漫天堂「今天／这周／本月」）時，再配同群組（找不到就其他下拉）第一個熱門類選項（排行、熱門、人氣、點擊、瀏覽…）；「三日內／七日內」這類更新時間篩選不算
 - 目前有時間窗的來源：漫画柜、MyComic、禁漫天堂、哔咔漫画、Hanime1.me、Komiic、瓜子漫画、再漫画、嗶哩漫畫
 - 時間窗只存在 `filterSelections`（走 SEARCH）：跟著既有瀏覽狀態還原，不進網址；filter 恰好等於某個時間窗時 capsule 亮該時間窗，多選其他條件就改回顯示「已套用本源分类」提示
+
+## 13. 漫畫閱讀器：雙擊放大、第一頁問上一話、即時進度
+
+- 新增：`src/components/manga/MangaZoomViewer.tsx`；修改：`src/app/manga/read/page.tsx`、`src/app/manga/detail/page.tsx`、`src/components/manga/MangaHistoryCard.tsx`、
+  `src/lib/manga-reader.ts`（`getPreviousMangaChapter`、`isMangaChapterInProgress`、`isMangaDoubleTap`、`getMangaZoomLayout`；`buildMangaReadHref` 的 `startAt: 'first' | 'last' | 'resume'`）、`src/lib/db.client.ts`（閱讀紀錄 POST 加 `keepalive`）
+- 雙擊放大：圖上單擊要等 300ms 雙擊時間窗才切換控制列；雙擊在全螢幕捲動層放大 2.5 倍，點到的位置留在手指下，用原生捲動拖曳；再雙擊、關閉鈕或 Esc 縮回原位。
+  不在原頁面 transform —— 直式的捲動容器是 body（見第 9 節的 iOS 根捲動問題），頁碼追蹤也不受影響。
+  閱讀區與每張圖都要 `touch-action: manipulation`：關掉瀏覽器自己的雙擊縮放，而 touch-action 只算到最近的捲動容器（每頁外框、水平容器）
+- 第一頁再往前：直式捲在最上面、其他模式在第一頁時，按上一頁／←／PageUp，或直式往下拉、水平往右滑超過 72px，就問要不要回上一話。
+  「上一话」帶 `startPage=last` 從最後一頁接著往回看，另有「从上一话第 1 页开始」；確定是第一話就不問
+- 即時進度：翻頁後 2 秒內寫入閱讀紀錄（原本 10 秒），切背景／離開時照舊立刻寫，POST 用 `keepalive` 讓 iOS 凍結頁面時也送得出去。
+  詳情頁有紀錄時「继续阅读」是主按鈕、「从第一话开始」次要；章節列表中讀到一半（還沒到最後一頁）的那一話點下去續讀，其他話與讀完的照舊從第 1 頁
 
 ## 設定鍵一覽（localStorage）
 

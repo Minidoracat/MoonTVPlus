@@ -47,6 +47,30 @@ export function getNextMangaChapter(
   return ordered[index + 1];
 }
 
+export function getPreviousMangaChapter(
+  chapters: MangaChapter[],
+  chapterId: string
+): MangaChapter | null {
+  const ordered = orderMangaChapters(chapters);
+  const index = ordered.findIndex((chapter) => chapter.id === chapterId);
+  return index > 0 ? ordered[index - 1] : null;
+}
+
+/**
+ * 這一話有讀到一半的紀錄（還沒到最後一頁）。詳情頁章節列表點它要接著讀 —— 那一列就寫著
+ * 「上次看到第 N 页」；讀完的話與其他話照舊從第 1 頁開始，不會一點進去就跳到尾頁。
+ */
+export function isMangaChapterInProgress(
+  record: MangaReadRecord | undefined,
+  chapterId: string
+): boolean {
+  return Boolean(
+    record &&
+      record.chapterId === chapterId &&
+      record.pageIndex < record.pageCount - 1
+  );
+}
+
 const CHAPTER_ORDER_STORAGE_KEY = 'moontv_manga_chapter_order';
 
 /** 章節列表要不要最新在前（詳情頁與閱讀器共用）；預設最早在前，從第一話往下看 */
@@ -124,6 +148,10 @@ export function getReaderProgress(page: number, pageCount: number): number {
   return Math.round(((clamped + 1) / pageCount) * 100);
 }
 
+/**
+ * `startAt`：`first` 明確選章從第 1 頁；`last` 從上一話接著往回看，落在最後一頁；
+ * `resume` 不帶參數，照閱讀紀錄續讀。網址沿用 `startPage=1`，舊連結照樣有效。
+ */
 export function buildMangaReadHref(input: {
   mangaId: string;
   sourceId: string;
@@ -133,7 +161,7 @@ export function buildMangaReadHref(input: {
   sourceName: string;
   chapterName: string;
   returnTo: string;
-  startAtFirstPage: boolean;
+  startAt: 'first' | 'last' | 'resume';
 }): string {
   const {
     mangaId,
@@ -144,7 +172,7 @@ export function buildMangaReadHref(input: {
     sourceName,
     chapterName,
     returnTo,
-    startAtFirstPage,
+    startAt,
   } = input;
   const params = new URLSearchParams({
     mangaId,
@@ -156,7 +184,7 @@ export function buildMangaReadHref(input: {
     chapterName,
     returnTo,
   });
-  if (startAtFirstPage) params.set('startPage', '1');
+  if (startAt !== 'resume') params.set('startPage', startAt === 'first' ? '1' : 'last');
   return `/manga/read?${params.toString()}`;
 }
 
@@ -241,4 +269,67 @@ export function isVerticalRestoreWindowSettled(
     if (!settledPages.has(page)) return false;
   }
   return true;
+}
+
+/** 兩下點擊算雙擊的時間窗；圖片上的單擊也要等這麼久才切換控制列 */
+export const MANGA_DOUBLE_TAP_MS = 300;
+
+export interface MangaTapPoint {
+  time: number;
+  x: number;
+  y: number;
+}
+
+/** 第二下常會偏一點，40px 內都算同一個位置 */
+export function isMangaDoubleTap(
+  previous: MangaTapPoint | null,
+  next: MangaTapPoint
+): boolean {
+  return Boolean(
+    previous &&
+      next.time - previous.time <= MANGA_DOUBLE_TAP_MS &&
+      Math.hypot(next.x - previous.x, next.y - previous.y) <= 40
+  );
+}
+
+/** 放大圖的尺寸、在捲動內容裡的位置（比畫面小的那一軸置中）與初始捲動量 */
+export interface MangaZoomLayout {
+  width: number;
+  height: number;
+  left: number;
+  top: number;
+  scrollLeft: number;
+  scrollTop: number;
+}
+
+/**
+ * 雙擊放大的版面：放大後的圖尺寸、它在捲動內容裡的位置，以及讓點到的那一點
+ * 留在手指下的初始捲動量。圖在某一軸比畫面小時那一軸置中、不能捲；靠邊時捲動量
+ * 會被夾住，那一點就會偏離手指（不可能捲出圖外）。
+ */
+export function getMangaZoomLayout(input: {
+  rect: { left: number; top: number; width: number; height: number };
+  point: { x: number; y: number };
+  viewport: { width: number; height: number };
+  scale: number;
+}): MangaZoomLayout {
+  const { rect, point, viewport, scale } = input;
+  const axis = (start: number, size: number, at: number, view: number) => {
+    const zoomed = size * scale;
+    const offset = Math.max((view - zoomed) / 2, 0);
+    const ratio = Math.min(Math.max((at - start) / size, 0), 1);
+    const maxScroll = Math.max(zoomed - view, 0);
+    const scroll = Math.min(Math.max(offset + ratio * zoomed - at, 0), maxScroll);
+    return { zoomed, offset, scroll };
+  };
+  const x = axis(rect.left, rect.width, point.x, viewport.width);
+  const y = axis(rect.top, rect.height, point.y, viewport.height);
+  return {
+    width: x.zoomed,
+    height: y.zoomed,
+    left: x.offset,
+    top: y.offset,
+    scrollLeft: x.scroll,
+    scrollTop: y.scroll,
+  };
 }

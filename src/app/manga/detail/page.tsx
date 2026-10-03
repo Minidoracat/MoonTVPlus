@@ -15,6 +15,7 @@ import {
 import {
   buildMangaReadHref,
   buildMangaShelfItem,
+  isMangaChapterInProgress,
   orderMangaChapters,
   readMangaChapterNewestFirst,
 } from '@/lib/manga-reader';
@@ -208,7 +209,13 @@ export default function MangaDetailPage() {
     setShelf((prev) => ({ ...prev, [key]: item }));
   };
 
-  const chapterHref = (chapter: MangaChapter) =>
+  // 讀到一半的那一話（列表上寫著「上次看到第 N 页」）點下去接著讀；其他話從第 1 頁
+  const chapterHref = (
+    chapter: MangaChapter,
+    startAt: 'first' | 'resume' = isMangaChapterInProgress(currentRecord, chapter.id)
+      ? 'resume'
+      : 'first'
+  ) =>
     buildMangaReadHref({
       mangaId,
       sourceId,
@@ -218,7 +225,7 @@ export default function MangaDetailPage() {
       sourceName: detail?.sourceName || '',
       chapterName: chapter.name,
       returnTo,
-      startAtFirstPage: true,
+      startAt,
     });
 
   if (detailError) {
@@ -290,11 +297,7 @@ export default function MangaDetailPage() {
         <div className='col-span-full space-y-4 md:col-span-1 md:col-start-2'>
           {detail.description && <p className='text-sm leading-7 text-gray-600 dark:text-gray-300'>{detail.description}</p>}
           <div className='flex flex-wrap gap-3'>
-            {firstChapter && (
-              <Link href={chapterHref(firstChapter)} className='inline-flex min-h-11 grow items-center justify-center rounded-2xl bg-sky-600 px-5 py-3 text-sm font-medium text-white transition hover:bg-sky-700 sm:grow-0'>
-                <BookOpen aria-hidden='true' className='mr-2 inline h-4 w-4' />开始阅读
-              </Link>
-            )}
+            {/* 有閱讀紀錄時「继续阅读」是主要動作：從書架、推荐點回作品，一按就回到上次那一頁 */}
             {currentRecord && (
               <Link
                 href={buildMangaReadHref({
@@ -306,9 +309,9 @@ export default function MangaDetailPage() {
                   sourceName: detail.sourceName,
                   chapterName: currentRecord.chapterName,
                   returnTo,
-                  startAtFirstPage: false,
+                  startAt: 'resume',
                 })}
-                className='inline-flex min-h-11 grow items-center justify-center rounded-2xl border border-sky-300 px-5 py-2 text-sm font-medium text-sky-700 transition hover:bg-sky-50 dark:text-sky-300 dark:hover:bg-sky-950/30 sm:grow-0'
+                className='inline-flex min-h-11 grow items-center justify-center rounded-2xl bg-sky-600 px-5 py-2 text-sm font-medium text-white transition hover:bg-sky-700 sm:grow-0'
               >
                 <Clock3 aria-hidden='true' className='mr-2 h-4 w-4 shrink-0' />
                 <span className='min-w-0 text-left'>
@@ -317,6 +320,19 @@ export default function MangaDetailPage() {
                     {currentRecord.chapterName} · 第 {currentRecord.pageIndex + 1}/{currentRecord.pageCount} 页
                   </span>
                 </span>
+              </Link>
+            )}
+            {firstChapter && (
+              <Link
+                href={chapterHref(firstChapter, 'first')}
+                className={`inline-flex min-h-11 grow items-center justify-center rounded-2xl px-5 py-3 text-sm font-medium transition sm:grow-0 ${
+                  currentRecord
+                    ? 'border border-sky-300 text-sky-700 hover:bg-sky-50 dark:text-sky-300 dark:hover:bg-sky-950/30'
+                    : 'bg-sky-600 text-white hover:bg-sky-700'
+                }`}
+              >
+                <BookOpen aria-hidden='true' className='mr-2 inline h-4 w-4' />
+                {currentRecord ? '从第一话开始' : '开始阅读'}
               </Link>
             )}
             <button type='button' onClick={toggleShelf} className='inline-flex min-h-11 grow items-center justify-center rounded-2xl border border-gray-200 px-5 py-3 text-sm font-medium text-gray-700 transition hover:border-sky-300 hover:text-sky-600 dark:border-gray-700 dark:text-gray-200 sm:grow-0'>

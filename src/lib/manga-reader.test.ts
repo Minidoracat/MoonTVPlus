@@ -6,9 +6,12 @@ import {
   getHorizontalPageIndex,
   getHorizontalPageOffset,
   getHorizontalPageStride,
+  getMangaZoomLayout,
   getNextMangaChapter,
+  getPreviousMangaChapter,
   getReaderProgress,
   getReaderStartPage,
+  isMangaChapterInProgress,
   isVerticalRestoreWindowSettled,
   orderMangaChapters,
   shouldEagerLoadVerticalRestorePage,
@@ -65,12 +68,15 @@ describe('reader chapter navigation', () => {
     ]);
   });
 
-  it('取得下一話；最後一話與未知章節回 null', () => {
+  it('取得上一話／下一話；頭尾與未知章節回 null', () => {
     const chapters = [chapter('c3', 3), chapter('c1', 1), chapter('c2', 2)];
     expect(getNextMangaChapter(chapters, 'c1')?.id).toBe('c2');
     expect(getNextMangaChapter(chapters, 'c2')?.id).toBe('c3');
     expect(getNextMangaChapter(chapters, 'c3')).toBeNull();
     expect(getNextMangaChapter(chapters, 'missing')).toBeNull();
+    expect(getPreviousMangaChapter(chapters, 'c3')?.id).toBe('c2');
+    expect(getPreviousMangaChapter(chapters, 'c1')).toBeNull();
+    expect(getPreviousMangaChapter(chapters, 'missing')).toBeNull();
   });
 
   it('清單大致有序時照來源順序：特別篇與誤判話數的章節留在原位', () => {
@@ -169,6 +175,14 @@ describe('reader start page', () => {
       })
     ).toBe(0);
   });
+
+  it('詳情頁點讀到一半的那一話要續讀；讀完的與其他話從頭', () => {
+    expect(isMangaChapterInProgress(record('c2', 6), 'c2')).toBe(true);
+    // pageCount 10：第 10 頁（index 9）就是讀完
+    expect(isMangaChapterInProgress(record('c2', 9), 'c2')).toBe(false);
+    expect(isMangaChapterInProgress(record('c2', 6), 'c3')).toBe(false);
+    expect(isMangaChapterInProgress(undefined, 'c2')).toBe(false);
+  });
 });
 
 describe('reader progress', () => {
@@ -207,19 +221,13 @@ describe('reader navigation href', () => {
     returnTo: '/manga?tab=shelf',
   };
 
-  it('明確選章帶一次性 startPage=1；繼續閱讀不帶', () => {
-    const selected = new URL(
-      buildMangaReadHref({ ...base, startAtFirstPage: true }),
-      'http://reader.test'
-    );
-    expect(selected.searchParams.get('mangaId')).toBe('manga&1');
-    expect(selected.searchParams.get('startPage')).toBe('1');
-
-    const resumed = new URL(
-      buildMangaReadHref({ ...base, startAtFirstPage: false }),
-      'http://reader.test'
-    );
-    expect(resumed.searchParams.has('startPage')).toBe(false);
+  it('startAt：first 帶 startPage=1、last 帶 startPage=last、resume 不帶', () => {
+    const href = (startAt: 'first' | 'last' | 'resume') =>
+      new URL(buildMangaReadHref({ ...base, startAt }), 'http://reader.test');
+    expect(href('first').searchParams.get('mangaId')).toBe('manga&1');
+    expect(href('first').searchParams.get('startPage')).toBe('1');
+    expect(href('last').searchParams.get('startPage')).toBe('last');
+    expect(href('resume').searchParams.has('startPage')).toBe(false);
   });
 
   it('其他来源搜索使用既有 manga search URL 并编码标题', () => {
@@ -282,5 +290,43 @@ describe('vertical restore window', () => {
 
     settled.delete(99);
     expect(isVerticalRestoreWindowSettled(settled, 100)).toBe(false);
+  });
+});
+
+describe('double-tap zoom layout', () => {
+  const viewport = { width: 390, height: 844 };
+
+  it('點到的那一點放大後留在手指下', () => {
+    const rect = { left: 0, top: 100, width: 390, height: 600 };
+    const point = { x: 195, y: 400 };
+    const layout = getMangaZoomLayout({ rect, point, viewport, scale: 2.5 });
+    expect(layout).toMatchObject({ width: 975, height: 1500, left: 0, top: 0 });
+    // 圖上同一個相對位置（正中央）換算回畫面座標
+    expect(layout.left + 0.5 * layout.width - layout.scrollLeft).toBe(point.x);
+    expect(layout.top + 0.5 * layout.height - layout.scrollTop).toBe(point.y);
+  });
+
+  it('點在邊角時捲動量夾在可捲範圍內', () => {
+    const rect = { left: 0, top: 100, width: 390, height: 600 };
+    const corner = getMangaZoomLayout({ rect, point: { x: 390, y: 700 }, viewport, scale: 2.5 });
+    expect(corner.scrollLeft).toBe(975 - 390);
+    expect(corner.scrollTop).toBe(1500 - 844);
+    const outside = getMangaZoomLayout({ rect, point: { x: 0, y: 50 }, viewport, scale: 2.5 });
+    expect(outside.scrollLeft).toBe(0);
+    expect(outside.scrollTop).toBe(0);
+  });
+
+  it('放大後仍比畫面窄的那一軸置中、不能捲', () => {
+    const layout = getMangaZoomLayout({
+      rect: { left: 490, top: 250, width: 300, height: 400 },
+      point: { x: 640, y: 450 },
+      viewport: { width: 1280, height: 900 },
+      scale: 2.5,
+    });
+    expect(layout.width).toBe(750);
+    expect(layout.left).toBe(265);
+    expect(layout.scrollLeft).toBe(0);
+    expect(layout.top).toBe(0);
+    expect(layout.scrollTop).toBe(50);
   });
 });

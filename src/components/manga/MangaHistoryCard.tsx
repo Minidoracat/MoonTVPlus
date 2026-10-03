@@ -52,7 +52,7 @@ export default function MangaHistoryCard({
         sourceName: item.sourceName,
         chapterName: item.chapterName,
         returnTo: '/manga/history',
-        startAtFirstPage: false,
+        startAt: 'resume',
       }),
     [item]
   );

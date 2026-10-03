@@ -2059,6 +2059,8 @@ export async function saveMangaReadRecord(
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ key, record }),
+        // 切到背景／離開閱讀頁時的最後一筆進度：iOS 會馬上凍結頁面，沒有 keepalive 請求常被丟掉
+        keepalive: true,
       });
     } catch (err) {
       await handleDatabaseOperationFailure('mangaHistory', err);

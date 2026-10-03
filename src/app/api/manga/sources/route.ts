@@ -2,9 +2,11 @@ import { createHash } from 'crypto';
 
 import { NextRequest, NextResponse } from 'next/server';
 
+import { getAuthInfoFromCookie } from '@/lib/auth';
 import { readMangaProbeCache } from '@/lib/manga-probe-cache.server';
 import {
   toMangaSourceProbeSummary,
+  type MangaSourceEgress,
   type MangaSourceProbeSummary,
 } from '@/lib/manga.types';
 import { getSuwayomiConfig, suwayomiClient } from '@/lib/suwayomi.client';
@@ -46,9 +48,18 @@ export async function GET(request: NextRequest) {
      */
     const config = await getSuwayomiConfig();
     const lang = rawLang || config.defaultLang;
-    const [sources, probeCache] = await Promise.all([
+    // 出口屬於基礎設施資訊，只給管理員（cookie 的 role 有簽章，middleware 驗過）
+    const role = getAuthInfoFromCookie(request)?.role;
+    const isAdmin = role === 'owner' || role === 'admin';
+    const [sources, probeCache, egressMap] = await Promise.all([
       suwayomiClient.getSources(lang),
       readMangaProbeCache(),
+      // 只是附加資訊：讀不到（沒部署分流、舊版 Suwayomi）就不顯示，不能拖垮列表
+      isAdmin
+        ? suwayomiClient
+            .getSourceEgressForAdmin()
+            .catch(() => new Map<string, MangaSourceEgress>())
+        : null,
     ]);
     // maxSources = 單次搜尋實際查詢的來源上限，前端用來提示多選超限
     //
@@ -65,13 +76,17 @@ export async function GET(request: NextRequest) {
       .digest('hex')
       .slice(0, 12);
 
-    // 只對「這位使用者看得到的來源」附上探測摘要 —— sources 已經套過
+    // 只對「這位使用者看得到的來源」附上探測摘要與出口 —— sources 已經套過
     // 允許清單，用它當來源比對就不會洩漏被停用來源的存在。
     // 摘要不含錯誤訊息（見 toMangaSourceProbeSummary 的說明）。
     const probe: Record<string, MangaSourceProbeSummary> = {};
+    const egress: Record<string, MangaSourceEgress['route']> | undefined =
+      egressMap ? {} : undefined;
     for (const source of sources) {
       const entry = probeCache.entries[source.id];
       if (entry) probe[source.id] = toMangaSourceProbeSummary(entry);
+      const route = egressMap?.get(source.id)?.route;
+      if (egress && route) egress[source.id] = route;
     }
 
     return NextResponse.json({
@@ -80,6 +95,8 @@ export async function GET(request: NextRequest) {
       policyVersion,
       probe,
       probedAt: probeCache.testedAt || null,
+      // 非管理員是 undefined，JSON 序列化時整個欄位不出現
+      egress,
     });
   } catch (error) {
     return mangaErrorResponse(error);

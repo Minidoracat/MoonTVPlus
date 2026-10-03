@@ -30,7 +30,7 @@
 | `src/app/api/cron/[password]/route.ts` | `refreshRecordAndFavorites` 末尾的 `prewarmDoubanComments` |
 | `src/app/api/douban-recommendations/route.ts` | `!response.ok` 時轉發 `Retry-After` |
 | `jest.config.js` | `moduleNameMapper` 的 `^cheerio/slim$`（jest 27 不認 exports 子路徑） |
-| `src/app/manga/page.tsx` | 捲動只讀寫 `document.body.scrollTop`；瀏覽狀態在 layout effect cleanup 存；`appendUniqueMangas`；`pickDefaultMangaSourceId`；卡片 href 用 `buildMangaDetailHref` |
+| `src/app/manga/page.tsx` | 捲動只讀寫 `document.body.scrollTop`；瀏覽狀態在 layout effect cleanup 存；`appendUniqueMangas`；`pickDefaultMangaSourceId`；卡片 href 用 `buildMangaDetailHref`；picker 的 `egress`；推荐類型的本日／本周／本月（`findMangaHotWindows`／`matchMangaHotWindow`） |
 | `src/app/manga/detail/page.tsx`、`src/app/manga/read/page.tsx` | `orderMangaChapters`、章節分批與 `prefetch={false}`、`MangaChapterOrderToggle`、`useOverlayFocus`；同目錄 `loading.tsx` 不可刪 |
 | `src/app/manga/search/page.tsx`、`src/app/manga/shelf/page.tsx`、`src/components/manga/MangaHistoryCard.tsx`、`src/components/manga/MangaLayout.tsx` | 詳情連結一律 `buildMangaDetailHref`；MangaLayout 的 skip link 與源管理 `useOverlayFocus` |
 | `src/lib/suwayomi.client.ts` | `chapterPagesCache`；`uploadDate` 轉數字；詳情 `sourceName` 退回伺服器來源名；列表與摘要查 `latestUploadedChapter { id pageCount }` 產生 `singleChapter`；`getSourceEgressForAdmin` |
@@ -203,7 +203,17 @@
   把每個來源的出口寫進 Suwayomi source meta `moontv.egress`（JSON：`route`、`hosts[{host, route, directMs, warpMs}]`、`warpDown`、`updatedAt`）。MoonTVPlus 只讀不寫
 - 統計範圍是來源 `homeUrl` 的主站網域（含子網域）。圖片放在其他網域的 CDN 從分流只看得到主機、對應不到來源，不列入
 - 面板在語言旁顯示「WARP」「直連」「混合 WARP n/m」，WARP 不通時顯示「直連（WARP 不通）」；滑鼠停留列出每個主機的路由與最近一次測速
-- 只出現在管理員的源管理面板：出口主機屬於基礎設施資訊，一般使用者的 `/api/manga/sources` 不帶這個欄位。讀 meta 失敗時列表照常顯示、只是沒有標示
+- 只給管理員（源管理面板與下一條的 picker）：出口主機屬於基礎設施資訊，一般使用者的 `/api/manga/sources` 不帶這個欄位。讀 meta 失敗時列表照常顯示、只是沒有標示
+- 推荐頁換源 picker（`src/components/manga/MangaSourcePicker.tsx` 的 `egress` prop）在延遲旁顯示「WARP」「直连」「混合」，只有管理員看得到：
+  `src/app/api/manga/sources/route.ts` 依 cookie `role`（owner／admin）才讀 `getSourceEgressForAdmin`，回應的 `egress` 只含已套允許清單的來源，一般使用者不呼叫也不帶欄位；`src/app/manga/page.tsx` 轉交給 picker
+
+## 12. 漫畫近期熱門（本日／本週／本月）
+
+- 新增：`src/lib/manga-hot-window.ts`（`findMangaHotWindows`、`matchMangaHotWindow`）、`src/lib/manga-hot-window.test.ts`；修改：`src/app/manga/page.tsx`（推荐類型在「热门」「最新」之間插入可用的時間窗）
+- Suwayomi 沒有近期熱門，改從各來源自帶的 select／sort／group_select 推：選項名稱像「日排行／本週／今天／過去 24 小時」的就是時間窗，依 filter 順序取第一個命中的控制項
+- 選項本身沒有熱門字眼、且整個下拉只有時間（禁漫天堂「今天／这周／本月」）時，再配同群組（找不到就其他下拉）第一個熱門類選項（排行、熱門、人氣、點擊、瀏覽…）；「三日內／七日內」這類更新時間篩選不算
+- 目前有時間窗的來源：漫画柜、MyComic、禁漫天堂、哔咔漫画、Hanime1.me、Komiic、瓜子漫画、再漫画、嗶哩漫畫
+- 時間窗只存在 `filterSelections`（走 SEARCH）：跟著既有瀏覽狀態還原，不進網址；filter 恰好等於某個時間窗時 capsule 亮該時間窗，多選其他條件就改回顯示「已套用本源分类」提示
 
 ## 設定鍵一覽（localStorage）
 

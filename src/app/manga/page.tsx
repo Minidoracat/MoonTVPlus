@@ -19,6 +19,7 @@ import {
 } from '@/lib/db.client';
 import type {
   MangaFilterSelection,
+  MangaSourceEgress,
   MangaSourceFilterOption,
   MangaSourceProbeSummary,
 } from '@/lib/manga.types';
@@ -36,6 +37,12 @@ import {
   MANGA_BROWSE_STATE_KEY,
   parseMangaBrowseState,
 } from '@/lib/manga-browse-state';
+import {
+  type MangaHotWindow,
+  findMangaHotWindows,
+  MANGA_HOT_WINDOW_LABELS,
+  matchMangaHotWindow,
+} from '@/lib/manga-hot-window';
 import { buildMangaDetailHref } from '@/lib/manga-reader';
 import { formatMangaChapterLine } from '@/lib/manga-search-view';
 import {
@@ -98,6 +105,10 @@ export default function MangaRecommendPage() {
   const [sources, setSources] = useState<MangaSource[] | null>(null);
   const [sourceProbe, setSourceProbe] = useState<
     Record<string, MangaSourceProbeSummary>
+  >({});
+  /** 每個源的出口（WARP／直連）；只有管理員的回應會帶 */
+  const [sourceEgress, setSourceEgress] = useState<
+    Record<string, MangaSourceEgress['route']>
   >({});
   const [sourceId, setSourceId] = useState(
     () => searchParams.get('sourceId') || ''
@@ -268,6 +279,7 @@ export default function MangaRecommendPage() {
         setSources(nextSources);
         // 管理員最近一次測試的燈號／延遲，供 picker 顯示
         setSourceProbe(probe);
+        setSourceEgress(data.egress || {});
         const fromUrl = searchParams.get('sourceId') || '';
         if (nextSources.some((source) => source.id === fromUrl)) return;
         /*
@@ -540,10 +552,18 @@ export default function MangaRecommendPage() {
     return () => observer.disconnect();
   }, [fetchRecommend, loading, loadingMore, page, result.hasNextPage]);
 
-
+  // 本日／本周／本月：從這個來源自帶的 filter 推出來，套用時就是一組 filterSelections
+  const hotWindows = useMemo(() => findMangaHotWindows(sourceFilters), [sourceFilters]);
+  const activeHotWindow = useMemo(
+    () => matchMangaHotWindow(hotWindows, filterSelections),
+    [filterSelections, hotWindows]
+  );
 
   const recommendOptions = [
     { label: '热门', value: 'POPULAR', icon: <Flame className='h-3.5 w-3.5' /> },
+    ...(Object.keys(MANGA_HOT_WINDOW_LABELS) as MangaHotWindow[])
+      .filter((key) => hotWindows[key])
+      .map((key) => ({ label: MANGA_HOT_WINDOW_LABELS[key], value: key })),
     { label: '最新', value: 'LATEST', icon: <Sparkles className='h-3.5 w-3.5' /> },
   ];
 
@@ -588,6 +608,7 @@ export default function MangaRecommendPage() {
               value={sourceId}
               onChange={setSourceId}
               probe={sourceProbe}
+              egress={sourceEgress}
             />
           ) : (
             <div className='rounded-2xl bg-gray-100 px-4 py-3 text-sm text-gray-500 dark:bg-gray-900 dark:text-gray-400'>
@@ -650,7 +671,7 @@ export default function MangaRecommendPage() {
 
         <div className='space-y-2'>
           <div className='text-sm font-medium text-gray-700 dark:text-gray-200'>推荐类型</div>
-          {filterSelections.length > 0 || keyword ? (
+          {keyword || (filterSelections.length > 0 && !activeHotWindow) ? (
             <p className='rounded-2xl bg-gray-100 px-4 py-3 text-xs text-gray-600 dark:bg-gray-900 dark:text-gray-300'>
               {keyword
                 ? `正在本源搜尋「${keyword}」，结果由关键字与筛选决定；清除后可再切换热门／最新。`
@@ -659,8 +680,18 @@ export default function MangaRecommendPage() {
           ) : (
             <CapsuleSwitch
               options={recommendOptions}
-              active={recommendType}
-              onChange={(value) => setRecommendType(value as MangaRecommendType)}
+              active={activeHotWindow ?? recommendType}
+              onChange={(value) => {
+                const windowSelections = hotWindows[value as MangaHotWindow];
+                if (windowSelections) {
+                  setFilterSelections(windowSelections);
+                  setRecommendType('POPULAR');
+                  return;
+                }
+                // 從時間窗切回熱門／最新：時間窗就是那組 filter，要一起清掉
+                if (activeHotWindow) setFilterSelections([]);
+                setRecommendType(value as MangaRecommendType);
+              }}
             />
           )}
         </div>

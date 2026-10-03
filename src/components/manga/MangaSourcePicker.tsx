@@ -16,6 +16,7 @@ import {
 import { formatMangaPopularStatus } from '@/lib/manga-source-health';
 import type {
   MangaSource,
+  MangaSourceEgress,
   MangaSourceProbeSummary,
 } from '@/lib/manga.types';
 
@@ -29,6 +30,8 @@ interface MangaSourcePickerProps {
   allLabel?: string;
   /** 管理員最近一次測試的結果（伺服器端快取），用來顯示燈號與延遲 */
   probe?: Record<string, MangaSourceProbeSummary>;
+  /** 每個源目前的出口；只有管理員的 /api/manga/sources 回應會帶 */
+  egress?: Record<string, MangaSourceEgress['route']>;
   className?: string;
 }
 
@@ -42,6 +45,15 @@ const CATEGORY_ICON: Record<
   adult: ShieldAlert,
 };
 
+const EGRESS_LABEL: Record<
+  MangaSourceEgress['route'],
+  { label: string; className: string }
+> = {
+  warp: { label: 'WARP', className: 'text-sky-600 dark:text-sky-400' },
+  direct: { label: '直连', className: 'text-gray-400 dark:text-gray-500' },
+  mixed: { label: '混合', className: 'text-violet-600 dark:text-violet-400' },
+};
+
 export default function MangaSourcePicker({
   sources,
   value,
@@ -49,6 +61,7 @@ export default function MangaSourcePicker({
   allowAll = false,
   allLabel = '全部来源',
   probe,
+  egress,
   className = '',
 }: MangaSourcePickerProps) {
   const [open, setOpen] = useState(false);
@@ -149,6 +162,8 @@ export default function MangaSourcePicker({
             // 用搜尋的燈號會誤導（有來源搜不到但熱門正常）。
             // 為何沒有被動量測的 fallback，見 formatMangaPopularStatus 的說明。
             const status = formatMangaPopularStatus(probe?.[source.id]);
+            const route = egress?.[source.id];
+            const egressLabel = route ? EGRESS_LABEL[route] : undefined;
             return (
               <button
                 key={source.id}
@@ -165,6 +180,14 @@ export default function MangaSourcePicker({
                 <span className='min-w-0 flex-1 truncate text-sm font-medium'>
                   {getMangaSourceLabel(source)}
                 </span>
+                {egressLabel && (
+                  <span
+                    className={`shrink-0 text-[10px] font-medium ${egressLabel.className}`}
+                    title='出口（仅管理员可见）'
+                  >
+                    {egressLabel.label}
+                  </span>
+                )}
                 {status && (
                   <span
                     className={`shrink-0 text-[10px] tabular-nums ${

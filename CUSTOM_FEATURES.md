@@ -276,6 +276,8 @@ OpenCC twp 不是冪等的（`算法`→`演算法`，再轉一次又多一個�
   **規格沒有歌詞欄位**，鎖定畫面與車機不會顯示歌詞
 - CarPlay（網頁做不到，走原生 Subsonic App）：
   - lxserver 內建 Subsonic（`/rest`），用 `tailscale serve --bg --http=4533 --set-path=/rest http://127.0.0.1:9527/rest` 只開這一段給 tailnet（沒開 funnel）。要用主機名 `http://workspace-baota-1.taile8961b.ts.net:4533`，用 IP 會 404；拆掉：`tailscale serve --http=4533 off`
+  - 根路徑 `/` 另外掛 `tailscale serve --bg --http=4533 --set-path=/ "text:lxserver Subsonic endpoint is at /rest"`：Amperfy 登入前會先 GET 伺服器網址本身，回 400 以上（401 除外）就直接「Login failed … 404」。
+    文字處理器只回固定字串，`/api/music/*` 等其他路徑一樣碰不到 lxserver
   - iPhone 用 Amperfy（免費、開源、支援 CarPlay），後端選 Subsonic，帳號 `Minidoracat`，密碼是 `~/github/lxserver/data/users.json` 的 `password`（**不是** `.env` 的 `LX_USER_Minidoracat`，兩者不同）
   - Amperfy 要關「Auto-cache played tracks and download upcoming ones」（預設開，每首會預抓 3 首）、不要按 Download；只從歌單、收藏、搜尋播放，「歌手」頁與 Recent／Random Albums 進去的是 QQ 歌曲，只會播佔位檔
   - 周杰倫歌單已用 lxserver 網頁播放器 API 匯入 `Minidoracat`（`userlist_1791142166785`，190 首，原本是空的，備份在 `/root/backup/lxserver-Minidoracat-list-20261005-032918.json`）

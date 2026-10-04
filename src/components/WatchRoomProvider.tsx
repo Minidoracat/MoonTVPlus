@@ -113,7 +113,6 @@ export function WatchRoomProvider({ children }: WatchRoomProviderProps) {
       setToast({
         message: '房主已解散房间',
         type: 'error',
-        duration: 4000,
         onClose: () => setToast(null),
       });
     } else {

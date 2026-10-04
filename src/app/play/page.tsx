@@ -2590,7 +2590,6 @@ function PlayPageClient() {
       setToast({
         message: '观影室服务未连接',
         type: 'error',
-        duration: 3000,
         onClose: () => setToast(null),
       });
       return;
@@ -2615,7 +2614,6 @@ function PlayPageClient() {
       setToast({
         message: error?.message || '创建观影室失败',
         type: 'error',
-        duration: 3000,
         onClose: () => setToast(null),
       });
     } finally {

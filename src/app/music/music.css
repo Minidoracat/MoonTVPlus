@@ -106,3 +106,21 @@
 .music-theme textarea::placeholder {
   color: var(--music-text-muted) !important;
 }
+
+/*
+ * 系统开了「减少动态效果」：唱片不转、缓冲条纹不跑、歌词不缩放滑动。
+ * 状态都留着静态线索（「缓冲中」「解析中」字样、条纹本身、播放钮图示），不靠动画表达。
+ * !important 是为了压过黑胶唱片写在 style 属性里的 animation。
+ */
+@media (prefers-reduced-motion: reduce) {
+  .music-theme *,
+  .music-theme *::before,
+  .music-theme *::after,
+  .music-theme-portal *,
+  .music-theme-portal *::before,
+  .music-theme-portal *::after {
+    animation: none !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

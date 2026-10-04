@@ -1,7 +1,10 @@
 import { ArrowLeft, Disc3, Heart, ListMusic, Search, X } from 'lucide-react';
+import Link from 'next/link';
+import { useEffect, useRef } from 'react';
 
 import { cn } from '@/lib/cn';
 import type { MusicSource } from '@/lib/music/types';
+import { useOverlayFocus } from '@/hooks/useOverlayFocus';
 
 import {
   MUSIC_DRAWER,
@@ -22,7 +25,6 @@ interface MusicSidebarDrawerProps {
   isOpen: boolean;
   pathname: string | null;
   onClose: () => void;
-  onNavigate: (href: string) => void;
 }
 
 const musicNavItems = [
@@ -41,19 +43,31 @@ export default function MusicSidebarDrawer({
   isOpen,
   pathname,
   onClose,
-  onNavigate,
 }: MusicSidebarDrawerProps) {
-  if (!isOpen) return null;
+  const panelRef = useRef<HTMLElement>(null);
+  useOverlayFocus(isOpen, panelRef);
 
-  const navigate = (href: string) => {
-    onClose();
-    onNavigate(href);
-  };
+  useEffect(() => {
+    if (!isOpen) return undefined;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [isOpen, onClose]);
+
+  if (!isOpen) return null;
 
   return (
     <div className='fixed inset-0 z-[10000]'>
-      <button className={MUSIC_DRAWER_SCRIM} onClick={onClose} aria-label='关闭菜单' />
-      <aside className={MUSIC_DRAWER}>
+      <button className={MUSIC_DRAWER_SCRIM} onClick={onClose} aria-label='关闭菜单' tabIndex={-1} />
+      <aside
+        ref={panelRef}
+        className={MUSIC_DRAWER}
+        role='dialog'
+        aria-modal='true'
+        aria-label='音乐菜单'
+      >
         <div className='mb-8 flex items-center justify-between gap-3'>
           <div className='flex min-w-0 items-center gap-3'>
             <div className={MUSIC_DRAWER_BRAND}>
@@ -80,31 +94,34 @@ export default function MusicSidebarDrawer({
               : pathname?.startsWith(`/music/${item.key}`);
 
             return (
-              <button
+              // 用真连结：中键／Cmd 点开新分页、长按复制网址都能用；点下去顺手收起抽屉
+              <Link
                 key={item.key}
-                onClick={() => navigate(href)}
+                href={href}
+                onClick={onClose}
                 aria-current={active ? 'page' : undefined}
                 className={cn(
                   MUSIC_DRAWER_ITEM,
                   active ? MUSIC_DRAWER_ITEM_ACTIVE : MUSIC_DRAWER_ITEM_IDLE
                 )}
               >
-                <item.Icon className='h-4 w-4 shrink-0' strokeWidth={1.9} />
+                <item.Icon className='h-4 w-4 shrink-0' strokeWidth={1.9} aria-hidden />
                 <span className={MUSIC_DRAWER_LABEL}>{item.label}</span>
                 {active ? <span aria-hidden className={MUSIC_DRAWER_MARK} /> : null}
-              </button>
+              </Link>
             );
           })}
         </nav>
 
         <div className='mt-auto border-t border-music-edge pt-4 dark:border-music-night-edge'>
-          <button
-            onClick={() => navigate('/')}
+          <Link
+            href='/'
+            onClick={onClose}
             className={cn(MUSIC_DRAWER_ITEM, MUSIC_DRAWER_ITEM_IDLE)}
           >
-            <ArrowLeft className='h-4 w-4 shrink-0' strokeWidth={1.9} />
+            <ArrowLeft className='h-4 w-4 shrink-0' strokeWidth={1.9} aria-hidden />
             <span className={MUSIC_DRAWER_LABEL}>返回主页</span>
-          </button>
+          </Link>
         </div>
       </aside>
     </div>

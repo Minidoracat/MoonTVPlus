@@ -40,6 +40,9 @@
 | `src/components/RouteScrollReset.tsx` | 上游 v226 把重設擴到 `/books`；本 fork 的 `/manga` 有 `MANGA_BROWSE_STATE_KEY` 時不重設（交給瀏覽狀態還原） |
 | `src/lib/suwayomi.client.ts` | `chapterPagesCache`；`uploadDate` 轉數字；詳情 `sourceName` 退回伺服器來源名；列表與摘要查 `latestUploadedChapter { id pageCount }` 產生 `singleChapter`；`getSourceEgressForAdmin` |
 | `src/components/MangaCard.tsx` | 上游 v226 已刪，本 fork 保留：`block`、`showSource`／`meta`／`progress`；hover 只給 `(hover:hover)`、動畫 `motion-safe:` |
+| `src/app/music/MusicClient.tsx`（⚠ 上游 v226 剛改版，高頻衝突） | 第 15 節全部：頂欄「首页」連結、播放控制的 `aria-label`、封面縮圖改 `<button>`、大播放器／播放列表 `role="dialog"` + `useOverlayFocus` + Esc + 背景 `inert`（`useLayoutEffect`）、`reportPlaybackFailure`／`playIntentRef`、`togglePlay` 遇 `audio.error` 重新 `playSong`、原生直立音量滑桿、HQ 鈕淺色配色、迷你播放器右側控制 `hidden sm:flex` |
+| `src/components/music/MusicSidebarDrawer.tsx` | 導覽項目改 `next/link`、`role="dialog"`、Esc、`useOverlayFocus`；沒有 `onNavigate` prop |
+| `src/app/music/music.css` | 檔尾 `prefers-reduced-motion: reduce` 區塊 |
 
 ## 1. 全站繁體中文介面
 
@@ -247,6 +250,18 @@ OpenCC twp 不是冪等的（`算法`→`演算法`，再轉一次又多一個�
   - Huibq 會封 IP：2026-10-05 連續送約 200 個解析請求（逐首驗證歌單），前 16 首成功後回 `音源日志：block ip`，連原本可播的也失敗。不要批次驗證播放連結；需要抽查時一次幾首、隔開送
   - 被封後 lxserver 對外改走主機 WARP：compose 設 `PROXY_ALL_ENABLED`／`PROXY_ALL_ADDRESS=http://host.docker.internal:40000`。上游只讓 musicSdk 吃這個設定，音源腳本的 `lx.request`（needle）不吃；本機改 `src/server/userApi.ts` 的 `createLxRequest` 共用 `request.js` 的 `getRequestAgent`（TLS 通道）。不要改用 `HTTP(S)_PROXY`：needle 會對 https 網址送明文絕對 URI，被 Huibq 後端（`lxmusicapi.onrender.com`）301 無限轉址
 - 腳本失效時：在 lxserver 管理後台（`127.0.0.1:9527`）換源，或用 `POST /api/custom-source/import`（header `x-frontend-auth` = `.env` 的 `FRONTEND_PASSWORD`）匯入；新匯入預設停用，要再 `toggle`
+
+## 15. 音樂播放器無障礙與操作改善（2026-10-05 better-interface 評估）
+
+- 回主頁：頂欄右側常駐「首页」連結（原本要開抽屜滑到底）；抽屜項目改真連結，可中鍵開新分頁
+- 播放失敗一定提示：音源取不到時跳錯誤 toast（留到使用者關閉）、播放鈕回到「播放」；只在使用者要求播放時提示（`playIntentRef`），打開頁面還原上一首失敗不吵。
+  Chrome 觸發 audio `error` 前已把 `paused` 設回 true，不能用 `audio.paused` 判斷意圖。按播放時若 `audio.error` 存在就重新 `playSong`（重新解析），「稍後再試」才有效
+- 鍵盤／讀屏：迷你與大播放器的上一首／播放／下一首、關閉鈕、進度與音量滑桿都有名稱；封面縮圖是按鈕；大播放器、播放列表、抽屜是 dialog（焦點移入、Esc 關閉、焦點還原、背景 inert）；歌詞行不再移除焦點框
+- 背景 inert 用 `useLayoutEffect`：它的清理比所有 `useEffect` 早，`useOverlayFocus` 還焦點時按鈕已不是 inert（抽屜是子元件，passive effect 清理比父層早，換宣告順序沒用）
+- 減少動態效果：`music.css` 停掉唱片旋轉、緩衝條紋、轉圈與過渡；歌詞自動捲動改瞬間
+- 320px：迷你播放器右側（收藏、下載、循環、音量）窄於 `sm` 時收進大播放器，歌名不再被擠成 0 寬
+- `Toast.tsx`（全站共用，約 12 個頁面／元件在用）：`role`（錯誤 `alert`、其他 `status`）、關閉鈕名稱；**錯誤不自動消失**，`duration` 只作用於成功與提示（呼叫端的錯誤 toast 已拿掉失效的 `duration`）；隱藏後 `pointer-events-none`，沒傳 `onClose` 的 toast 不會留下看不見的擋點擊層
+- 未做（評估報告列為待辦）：小於 12px 的徽章字、`transition-all`、音樂頁沒有 `<h1>`、迷你播放器進度條只有 4px 高
 
 ## 設定鍵一覽（localStorage）
 

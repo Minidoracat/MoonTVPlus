@@ -1,8 +1,9 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 'use client';
 
+import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import {
   closestCenter,
@@ -24,7 +25,7 @@ import {
   verticalListSortingStrategy,
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { GripVertical, ImageOff, ListMusic, SlidersHorizontal, Trash2, X } from 'lucide-react';
+import { GripVertical, Home, ImageOff, ListMusic, SlidersHorizontal, Trash2, X } from 'lucide-react';
 import AddToPlaylistModal from '@/components/AddToPlaylistModal';
 import Toast, { ToastProps } from '@/components/Toast';
 import LyricsPiPWindow from '@/components/LyricsPiPWindow';
@@ -52,6 +53,7 @@ import {
   MUSIC_ROW_TEXT,
 } from '@/components/music/tokens';
 import { useWatchRoomContextSafe } from '@/components/WatchRoomProvider';
+import { useOverlayFocus } from '@/hooks/useOverlayFocus';
 import { cn } from '@/lib/cn';
 import { getSourceDisplayLabel, normalizeSource, SourcePill } from '@/lib/music/shared';
 import type { MusicQuality, MusicSource, Song } from '@/lib/music/types';
@@ -526,6 +528,14 @@ export default function MusicClient({ children: _children }: { children?: React.
 
   const audioRef = useRef<HTMLAudioElement>(null);
   const lyricsContainerRef = useRef<HTMLDivElement>(null);
+  const fullPlayerRef = useRef<HTMLDivElement>(null);
+  const playlistDialogRef = useRef<HTMLDivElement>(null);
+  // 覆盖层开着时把背景（顶栏、页面、迷你播放器）设 inert：Tab 不会跑到被盖住的东西上
+  const headerRef = useRef<HTMLElement>(null);
+  const mainRef = useRef<HTMLElement>(null);
+  const miniPlayerRef = useRef<HTMLDivElement>(null);
+  // 使用者是否要求在播：音源出错时据此决定要不要提示（Chrome 触发 error 前已把 paused 设回 true，不能拿它判断）
+  const playIntentRef = useRef(false);
   const sleepHoursPickerRef = useRef<HTMLDivElement>(null);
   const sleepMinutesPickerRef = useRef<HTMLDivElement>(null);
   const lastSaveTimeRef = useRef<number>(0);
@@ -960,6 +970,34 @@ export default function MusicClient({ children: _children }: { children?: React.
     currentSongRef.current = currentSong;
   }, [currentSong]);
 
+  useOverlayFocus(showLyrics, fullPlayerRef);
+  useOverlayFocus(showPlaylist, playlistDialogRef);
+
+  const overlayOpen = showLyrics || showPlaylist || showSidebarDrawer;
+  // layout effect：关闭时 inert 必须先拿掉，useOverlayFocus（包括抽屉里那份）才能把焦点还给顶栏／迷你播放器的按钮
+  useLayoutEffect(() => {
+    if (!overlayOpen) return undefined;
+    const background = [headerRef.current, mainRef.current, miniPlayerRef.current].filter(
+      (el): el is HTMLElement => el !== null
+    );
+    background.forEach((el) => el.setAttribute('inert', ''));
+    return () => background.forEach((el) => el.removeAttribute('inert'));
+  }, [overlayOpen]);
+
+  // Esc 先关最上层：播放列表盖在大播放器上；音质、定时等子选单开着时交给它们自己
+  const subMenuOpen =
+    showQualityMenu || showSleepTimerMenu || showAudioEffectsMenu || showAddToPlaylistModal || confirmModal.isOpen;
+  useEffect(() => {
+    if ((!showLyrics && !showPlaylist) || subMenuOpen) return undefined;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      if (showPlaylist) setShowPlaylist(false);
+      else setShowLyrics(false);
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [showLyrics, showPlaylist, subMenuOpen]);
+
   useEffect(() => {
     currentSourceRef.current = currentSource;
   }, [currentSource]);
@@ -1070,8 +1108,21 @@ export default function MusicClient({ children: _children }: { children?: React.
     setToast({ message: '已添加到稍后播放', type: 'success', onClose: () => setToast(null) });
   };
 
+  // 播放失败一定要说出来：原本只写 console，按钮还停在「暂停」，看起来像在播却没声音
+  const reportPlaybackFailure = (song: Song | null, reason?: string) => {
+    playIntentRef.current = false;
+    setIsBuffering(false);
+    setIsPlaying(false);
+    setToast({
+      message: `无法播放《${song?.name ?? '这首歌'}》：${reason || '暂时取不到音源'}。请换一首，或稍后再试。`,
+      type: 'error',
+      onClose: () => setToast(null),
+    });
+  };
+
   // 播放歌曲
   const playSong = async (song: Song, index: number) => {
+    playIntentRef.current = true;
     beginResolving();
     try {
       // 使用歌曲自己的平台信息，如果没有则使用当前选择的平台
@@ -1145,6 +1196,8 @@ export default function MusicClient({ children: _children }: { children?: React.
           audioRef.current.play().catch(err => {
             console.error('播放失败:', err);
             setIsBuffering(false);
+            // 自动播放被浏览器挡下：没声音，按钮要回到「播放」；音源错误交给 audio 的 error 事件
+            if (err?.name === 'NotAllowedError') setIsPlaying(false);
           });
           setIsPlaying(true);
         }
@@ -1196,16 +1249,18 @@ export default function MusicClient({ children: _children }: { children?: React.
             audioRef.current.play().catch(err => {
               console.error('播放失败:', err);
               setIsBuffering(false);
+              if (err?.name === 'NotAllowedError') setIsPlaying(false);
             });
             setIsPlaying(true);
           }
         } else {
           console.error('播放信息获取失败:', data);
+          reportPlaybackFailure(song, data.error?.message);
         }
       }
     } catch (error) {
       console.error('播放失败:', error);
-      setIsBuffering(false);
+      reportPlaybackFailure(song);
     } finally {
       endResolving();
     }
@@ -1260,6 +1315,7 @@ export default function MusicClient({ children: _children }: { children?: React.
   const togglePlay = () => {
     if (audioRef.current) {
       if (isPlaying) {
+        playIntentRef.current = false;
         audioRef.current.pause();
         setIsPlaying(false);
         if (isMusicRoomOwner) {
@@ -1286,10 +1342,18 @@ export default function MusicClient({ children: _children }: { children?: React.
           });
         }
       } else {
+        playIntentRef.current = true;
+        // 音源先前失败过（例如打开页面还原上一首时没取到）：直接 play() 只会被拒绝，重新解析一次才是「再试」
+        if (audioRef.current.error && currentSong) {
+          playSong(currentSong, currentSongIndex);
+          return;
+        }
         setIsBuffering(true);
         audioRef.current.play().catch(err => {
           console.error('播放失败:', err);
           setIsBuffering(false);
+          if (err?.name === 'NotAllowedError') setIsPlaying(false);
+          else if (err?.name !== 'AbortError') reportPlaybackFailure(currentSong);
         });
         setIsPlaying(true);
         if (isMusicRoomOwner) {
@@ -1789,6 +1853,15 @@ export default function MusicClient({ children: _children }: { children?: React.
       }
     };
 
+    const handleAudioError = () => {
+      // 没有来源（初始化、清空）、换歌途中被打断，或使用者没要求播放（打开页面还原上一首时）都不提示
+      if (!audio.getAttribute('src') || audio.error?.code === MediaError.MEDIA_ERR_ABORTED || !playIntentRef.current) {
+        setIsBuffering(false);
+        return;
+      }
+      reportPlaybackFailure(currentSongRef.current);
+    };
+
     audio.addEventListener('timeupdate', handleTimeUpdate);
     audio.addEventListener('loadstart', handleBufferingStart);
     audio.addEventListener('waiting', handleBufferingStart);
@@ -1797,7 +1870,7 @@ export default function MusicClient({ children: _children }: { children?: React.
     audio.addEventListener('canplaythrough', handleBufferingEnd);
     audio.addEventListener('playing', handleBufferingEnd);
     audio.addEventListener('pause', handleBufferingEnd);
-    audio.addEventListener('error', handleBufferingEnd);
+    audio.addEventListener('error', handleAudioError);
     audio.addEventListener('loadedmetadata', handleLoadedMetadata);
     audio.addEventListener('durationchange', handleDurationChange);
     audio.addEventListener('ended', handleEnded);
@@ -1811,7 +1884,7 @@ export default function MusicClient({ children: _children }: { children?: React.
       audio.removeEventListener('canplaythrough', handleBufferingEnd);
       audio.removeEventListener('playing', handleBufferingEnd);
       audio.removeEventListener('pause', handleBufferingEnd);
-      audio.removeEventListener('error', handleBufferingEnd);
+      audio.removeEventListener('error', handleAudioError);
       audio.removeEventListener('loadedmetadata', handleLoadedMetadata);
       audio.removeEventListener('durationchange', handleDurationChange);
       audio.removeEventListener('ended', handleEnded);
@@ -1825,7 +1898,7 @@ export default function MusicClient({ children: _children }: { children?: React.
       const activeLine = container.querySelector(`[data-index="${currentLyricIndex}"]`);
       if (activeLine) {
         activeLine.scrollIntoView({
-          behavior: 'smooth',
+          behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth',
           block: 'center',
         });
       }
@@ -1883,58 +1956,13 @@ export default function MusicClient({ children: _children }: { children?: React.
     }
   };
 
-  // 触摸/鼠标滑动音量调节（移动端兼容）
-  const handleVolumeSliderInteraction = (e: React.MouseEvent<HTMLDivElement> | React.TouchEvent<HTMLDivElement>) => {
-    e.preventDefault();
-    e.stopPropagation();
-
-    const slider = e.currentTarget;
-    const rect = slider.getBoundingClientRect();
-
-    const updateVolume = (clientY: number) => {
-      // 计算相对于滑块顶部的位置
-      const y = clientY - rect.top;
-      // 限制在滑块范围内
-      const clampedY = Math.max(0, Math.min(rect.height, y));
-      // 从上到下：0% -> 100%，从下到上：100% -> 0%
-      const percentage = 100 - (clampedY / rect.height) * 100;
-      const newVolume = Math.round(percentage);
-
-      setVolume(newVolume);
-      if (audioRef.current) {
-        audioRef.current.volume = newVolume / 100;
-      }
-    };
-
-    // 获取初始触摸/点击位置
-    const clientY = 'touches' in e ? e.touches[0]?.clientY || 0 : e.clientY;
-    updateVolume(clientY);
-
-    const handleMove = (moveEvent: MouseEvent | TouchEvent) => {
-      moveEvent.preventDefault();
-      const moveClientY = 'touches' in moveEvent ? moveEvent.touches[0]?.clientY || 0 : moveEvent.clientY;
-      updateVolume(moveClientY);
-    };
-
-    const handleEnd = () => {
-      document.removeEventListener('mousemove', handleMove);
-      document.removeEventListener('mouseup', handleEnd);
-      document.removeEventListener('touchmove', handleMove);
-      document.removeEventListener('touchend', handleEnd);
-    };
-
-    document.addEventListener('mousemove', handleMove);
-    document.addEventListener('mouseup', handleEnd);
-    document.addEventListener('touchmove', handleMove, { passive: false });
-    document.addEventListener('touchend', handleEnd);
-  };
-
   // PiP 窗口管理
   const togglePiPLyrics = () => {
     if (!('documentPictureInPicture' in window)) {
       setToast({
         message: '您的浏览器不支持画中画功能，请使用 Chrome 116+ 版本',
         type: 'error',
+        onClose: () => setToast(null),
       });
       // 降级方案：打开全屏歌词
       setShowLyrics(true);
@@ -1945,6 +1973,7 @@ export default function MusicClient({ children: _children }: { children?: React.
       setToast({
         message: '请先播放歌曲',
         type: 'info',
+        onClose: () => setToast(null),
       });
       return;
     }
@@ -2497,34 +2526,44 @@ export default function MusicClient({ children: _children }: { children?: React.
       )}
       {/* Header */}
       <header
+        ref={headerRef}
         className="fixed top-0 left-0 right-0 z-40 bg-zinc-950/95 backdrop-blur-md border-b border-white/10 px-4 md:px-6"
         style={{ paddingTop: 'env(safe-area-inset-top)' }}
       >
         <div className="w-full mx-auto flex items-center justify-between gap-3 md:gap-4 py-3">
-          <div className="flex items-center justify-between md:justify-start md:gap-6 w-full md:w-auto">
-            <div className="flex items-center gap-3">
-              <button
-                onClick={() => setShowSidebarDrawer(true)}
-                className="p-0 text-white transition-colors hover:text-green-400"
-                title="打开菜单"
-              >
-                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 6h16M4 12h16M4 18h16" />
-                </svg>
-              </button>
-              <div className="flex items-center justify-center text-green-500">
-                <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
-                  <path d="M18 3a1 1 0 00-1.196-.98l-10 2A1 1 0 006 5v9.114A4.369 4.369 0 005 14c-1.657 0-3 .895-3 2s1.343 2 3 2 3-.895 3-2V7.82l8-1.6v5.894A4.37 4.37 0 0015 12c-1.657 0-3 .895-3 2s1.343 2 3 2 3-.895 3-2V3z" />
-                </svg>
-              </div>
-              <span className="font-bold text-lg text-white">音乐</span>
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={() => setShowSidebarDrawer(true)}
+              className="-m-2 p-2 text-white transition-colors hover:text-green-400"
+              title="打开菜单"
+              aria-label="打开菜单"
+            >
+              <svg aria-hidden className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 6h16M4 12h16M4 18h16" />
+              </svg>
+            </button>
+            <div aria-hidden className="flex items-center justify-center text-green-500">
+              <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
+                <path d="M18 3a1 1 0 00-1.196-.98l-10 2A1 1 0 006 5v9.114A4.369 4.369 0 005 14c-1.657 0-3 .895-3 2s1.343 2 3 2 3-.895 3-2V7.82l8-1.6v5.894A4.37 4.37 0 0015 12c-1.657 0-3 .895-3 2s1.343 2 3 2 3-.895 3-2V3z" />
+              </svg>
             </div>
+            <span className="font-bold text-lg text-white">音乐</span>
           </div>
+          {/* 回主页原本要开抽屉再滑到底，顶栏常驻一个 */}
+          <Link
+            href="/"
+            aria-label="返回首页"
+            className="-my-2 inline-flex items-center gap-1.5 rounded-lg px-2 py-2 text-sm text-zinc-400 transition-colors hover:text-white"
+          >
+            <Home className="h-5 w-5" aria-hidden />
+            <span className="hidden sm:inline">首页</span>
+          </Link>
         </div>
       </header>
 
       {/* Main Content */}
-      <main className="pt-[calc(80px+env(safe-area-inset-top))] md:pt-[calc(76px+env(safe-area-inset-top))] pb-32 px-4 md:px-6">
+      <main ref={mainRef} className="pt-[calc(80px+env(safe-area-inset-top))] md:pt-[calc(76px+env(safe-area-inset-top))] pb-32 px-4 md:px-6">
         <div className="max-w-7xl mx-auto">
           {_children}
         </div>
@@ -2532,7 +2571,7 @@ export default function MusicClient({ children: _children }: { children?: React.
 
       {/* Player */}
       {showPlayer && currentSong && (
-        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 w-[95%] max-w-3xl z-50">
+        <div ref={miniPlayerRef} className="fixed bottom-6 left-1/2 -translate-x-1/2 w-[95%] max-w-3xl z-50">
           {showSpectrum && (
             <div className="pointer-events-none px-4">
               <AudioSpectrumCanvas bars={spectrumBars} compact />
@@ -2555,6 +2594,8 @@ export default function MusicClient({ children: _children }: { children?: React.
                 max="100"
                 value={progress}
                 onChange={handleProgressChange}
+                aria-label="播放进度"
+                aria-valuetext={`${formatTime(currentTime)} / ${formatTime(duration)}`}
                 className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
               />
             </div>
@@ -2562,9 +2603,11 @@ export default function MusicClient({ children: _children }: { children?: React.
             <div className="flex items-center justify-between gap-4 mt-1">
               {/* Song Info */}
               <div className="flex items-center gap-3 min-w-0 flex-1">
-                <div
-                  className="w-12 h-12 rounded-lg bg-zinc-800 overflow-hidden shrink-0 flex items-center justify-center cursor-pointer hover:opacity-80 transition-opacity"
+                <button
+                  type="button"
                   onClick={() => setShowLyrics(true)}
+                  aria-label="展开播放器"
+                  className="w-12 h-12 rounded-lg bg-zinc-800 overflow-hidden shrink-0 flex items-center justify-center cursor-pointer hover:opacity-80 transition-opacity"
                 >
                   {currentSong.pic ? (
                     <img
@@ -2581,7 +2624,7 @@ export default function MusicClient({ children: _children }: { children?: React.
                       <path d="M18 3a1 1 0 00-1.196-.98l-10 2A1 1 0 006 5v9.114A4.369 4.369 0 005 14c-1.657 0-3 .895-3 2s1.343 2 3 2 3-.895 3-2V7.82l8-1.6v5.894A4.37 4.37 0 0015 12c-1.657 0-3 .895-3 2s1.343 2 3 2 3-.895 3-2V3z" />
                     </svg>
                   )}
-                </div>
+                </button>
                 <div className="min-w-0 flex-1">
                   <div className="flex min-w-0 items-center gap-1.5">
                     <div className="min-w-0 truncate text-sm font-bold text-white">{currentSong.name}</div>
@@ -2593,13 +2636,15 @@ export default function MusicClient({ children: _children }: { children?: React.
 
               {/* Controls */}
               <div className="relative flex items-center gap-4">
-                <button onClick={playPrev} className="text-zinc-500 hover:text-white transition-colors">
+                <button type="button" onClick={playPrev} aria-label="上一首" className="-m-2 p-2 text-zinc-500 hover:text-white transition-colors">
                   <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
                     <path d="M6 6h2v12H6zm3.5 6l8.5 6V6z" />
                   </svg>
                 </button>
                 <button
+                  type="button"
                   onClick={togglePlay}
+                  aria-label={isPlaying ? '暂停' : '播放'}
                   className="w-10 h-10 rounded-full bg-green-500 text-white flex items-center justify-center hover:bg-green-600 transition-colors"
                 >
                   {isPlaying ? (
@@ -2612,20 +2657,21 @@ export default function MusicClient({ children: _children }: { children?: React.
                     </svg>
                   )}
                 </button>
-                <button onClick={playNext} className="text-zinc-500 hover:text-white transition-colors">
+                <button type="button" onClick={playNext} aria-label="下一首" className="-m-2 p-2 text-zinc-500 hover:text-white transition-colors">
                   <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
                     <path d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z" />
                   </svg>
                 </button>
               </div>
 
-              {/* Right Controls */}
-              <div className="flex items-center gap-3">
+              {/* Right Controls：窄于 sm 时收进大播放器，否则 320px 宽会把歌名挤到看不见 */}
+              <div className="hidden sm:flex items-center gap-3">
                 <div className="hidden sm:flex items-center gap-2">
                   <input
                     type="range"
                     value={volume}
                     onChange={handleVolumeChange}
+                    aria-label="音量"
                     className="w-16 h-1 bg-white/10 rounded-full appearance-none cursor-pointer"
                   />
                 </div>
@@ -2698,14 +2744,20 @@ export default function MusicClient({ children: _children }: { children?: React.
           }}
         >
           <div
+            ref={fullPlayerRef}
+            role="dialog"
+            aria-modal="true"
+            aria-label={`正在播放：${currentSong.name}`}
             className="relative w-full max-w-6xl h-[90vh] bg-zinc-900/95 rounded-2xl overflow-hidden border border-white/10 shadow-2xl flex flex-col"
             onClick={() => setShowVolumeSlider(false)}
           >
             <button
+              type="button"
               onClick={() => setShowLyrics(false)}
+              aria-label="关闭播放器"
               className="absolute top-2 right-2 md:top-4 md:right-4 z-10 w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 flex items-center justify-center transition-colors"
             >
-              <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <svg aria-hidden className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
               </svg>
             </button>
@@ -2722,11 +2774,13 @@ export default function MusicClient({ children: _children }: { children?: React.
                   </div>
                 )}
                 <div className="relative h-full flex flex-col items-center justify-center p-4 md:p-6 lg:p-8">
-                  <div
+                  <button
+                    type="button"
                     onClick={(e) => {
                       e.stopPropagation();
                       setMobileLyricsView((view) => (view === 'lyrics' ? 'vinyl' : 'lyrics'));
                     }}
+                    aria-label={mobileLyricsView === 'lyrics' ? '显示唱片' : '显示歌词'}
                     className="w-16 h-16 md:hidden rounded-xl overflow-hidden shadow-2xl mb-2"
                   >
                     {currentSong.pic ? (
@@ -2742,7 +2796,7 @@ export default function MusicClient({ children: _children }: { children?: React.
                         </svg>
                       </div>
                     )}
-                  </div>
+                  </button>
                   <div className="hidden md:block w-full">
                     <VinylTurntable cover={currentSong.pic} title={currentSong.name} isPlaying={isPlaying} />
                   </div>
@@ -2781,7 +2835,7 @@ export default function MusicClient({ children: _children }: { children?: React.
                         type="button"
                         data-index={index}
                         onClick={() => seekToLyric(line, index)}
-                        className={`block w-full appearance-none border-0 bg-transparent p-0 text-center transition-all duration-300 outline-none ring-0 focus:outline-none focus:ring-0 active:outline-none active:ring-0 ${
+                        className={`block w-full appearance-none border-0 bg-transparent p-0 text-center transition-all duration-300 ${
                           index === currentLyricIndex
                             ? 'text-white text-lg md:text-xl lg:text-2xl font-bold scale-110'
                             : index === currentLyricIndex - 1 || index === currentLyricIndex + 1
@@ -2817,13 +2871,15 @@ export default function MusicClient({ children: _children }: { children?: React.
             <div className="border-t border-white/5 p-3 md:p-4 shrink-0">
               {/* 上排：播放控制按钮 */}
               <div className="relative flex items-center justify-center gap-4 md:gap-6 mb-2 md:mb-3">
-                <button onClick={playPrev} className="text-zinc-500 hover:text-white transition-colors">
+                <button type="button" onClick={playPrev} aria-label="上一首" className="-m-2 p-2 text-zinc-500 hover:text-white transition-colors">
                   <svg className="w-5 h-5 md:w-6 md:h-6" fill="currentColor" viewBox="0 0 24 24">
                     <path d="M6 6h2v12H6zm3.5 6l8.5 6V6z" />
                   </svg>
                 </button>
                 <button
+                  type="button"
                   onClick={togglePlay}
+                  aria-label={isPlaying ? '暂停' : '播放'}
                   className="w-10 h-10 md:w-12 md:h-12 rounded-full bg-green-500 text-white flex items-center justify-center hover:bg-green-600 transition-colors"
                 >
                   {isPlaying ? (
@@ -2836,7 +2892,7 @@ export default function MusicClient({ children: _children }: { children?: React.
                     </svg>
                   )}
                 </button>
-                <button onClick={playNext} className="text-zinc-500 hover:text-white transition-colors">
+                <button type="button" onClick={playNext} aria-label="下一首" className="-m-2 p-2 text-zinc-500 hover:text-white transition-colors">
                   <svg className="w-5 h-5 md:w-6 md:h-6" fill="currentColor" viewBox="0 0 24 24">
                     <path d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z" />
                   </svg>
@@ -2853,21 +2909,22 @@ export default function MusicClient({ children: _children }: { children?: React.
               <div className="flex items-center justify-center gap-3 md:gap-4 mb-2 md:mb-3">
                 <button
                   onClick={() => setShowPlaylist(true)}
-                  className="text-zinc-500 hover:text-white transition-colors relative"
+                  className="-m-1.5 p-1.5 text-zinc-500 hover:text-white transition-colors relative"
                   title="播放列表"
+                  aria-label={`播放列表（${playlist.length} 首）`}
                 >
                   <svg className="w-4 h-4 md:w-5 md:h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" />
                   </svg>
                   {playlist.length > 0 && (
-                    <span className="absolute -top-1 -right-1 w-3 h-3 bg-green-500 rounded-full text-[8px] text-white flex items-center justify-center font-bold">
+                    <span aria-hidden className="absolute top-0.5 right-0.5 w-3 h-3 bg-green-500 rounded-full text-[8px] text-white flex items-center justify-center font-bold">
                       {playlist.length > 9 ? '9+' : playlist.length}
                     </span>
                   )}
                 </button>
                 <button
                   onClick={downloadSong}
-                  className="text-zinc-500 hover:text-white transition-colors"
+                  className="-m-1.5 p-1.5 text-zinc-500 hover:text-white transition-colors"
                   title="下载歌曲"
                 >
                   <svg className="w-4 h-4 md:w-5 md:h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -2876,8 +2933,9 @@ export default function MusicClient({ children: _children }: { children?: React.
                 </button>
                 <button
                   onClick={() => setShowQualityMenu(true)}
-                  className="px-2 py-0.5 rounded border text-amber-400 border-amber-500/50 bg-amber-900/20 text-[9px] md:text-[10px] font-mono min-w-[32px] text-center hover:bg-amber-900/30 transition-colors"
+                  className="px-2 py-0.5 rounded border border-amber-600/50 bg-amber-100 text-amber-700 text-xs font-mono min-w-[32px] text-center hover:bg-amber-200 transition-colors dark:border-amber-500/50 dark:bg-amber-900/20 dark:text-amber-400 dark:hover:bg-amber-900/30"
                   title="音质选择"
+                  aria-label={`音质：${getQualityLabel()}`}
                 >
                   {getQualityLabel()}
                 </button>
@@ -2886,7 +2944,7 @@ export default function MusicClient({ children: _children }: { children?: React.
                     e.stopPropagation();
                     setShowSleepTimerMenu(true);
                   }}
-                  className={`relative transition-colors ${
+                  className={`relative -m-1.5 p-1.5 transition-colors ${
                     sleepTimerEndAt ? 'text-green-500 hover:text-green-400' : 'text-zinc-500 hover:text-white'
                   }`}
                   title={sleepTimerEndAt ? `睡眠定时：${formatSleepTimer(sleepTimerRemaining)}` : '睡眠定时'}
@@ -2895,14 +2953,14 @@ export default function MusicClient({ children: _children }: { children?: React.
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 6v6l4 2m6-2a10 10 0 11-20 0 10 10 0 0120 0z" />
                   </svg>
                   {sleepTimerEndAt && (
-                    <span className="absolute -bottom-2 left-1/2 -translate-x-1/2 text-[8px] font-semibold leading-none text-green-400">
+                    <span className="absolute -bottom-0.5 left-1/2 -translate-x-1/2 text-[8px] font-semibold leading-none text-green-400">
                       {Math.max(1, Math.ceil(sleepTimerRemaining / 60))}
                     </span>
                   )}
                 </button>
                 <button
                   onClick={toggleMode}
-                  className="text-zinc-500 hover:text-white transition-colors"
+                  className="-m-1.5 p-1.5 text-zinc-500 hover:text-white transition-colors"
                   title={playMode === 'loop' ? '列表循环' : playMode === 'single' ? '单曲循环' : '随机播放'}
                 >
                   {playMode === 'loop' && (
@@ -2935,8 +2993,10 @@ export default function MusicClient({ children: _children }: { children?: React.
                       e.stopPropagation();
                       setShowVolumeSlider(!showVolumeSlider);
                     }}
-                    className="text-zinc-500 hover:text-white transition-colors"
+                    className="-m-1.5 p-1.5 text-zinc-500 hover:text-white transition-colors"
                     title="音量"
+                    aria-label="音量"
+                    aria-expanded={showVolumeSlider}
                   >
                     <svg className="w-4 h-4 md:w-5 md:h-5" fill="currentColor" viewBox="0 0 20 20">
                       <path fillRule="evenodd" d="M9.383 3.076A1 1 0 0110 4v12a1 1 0 01-1.707.707L4.586 13H2a1 1 0 01-1-1V8a1 1 0 011-1h2.586l3.707-3.707a1 1 0 011.09-.217zM14.657 2.929a1 1 0 011.414 0A9.972 9.972 0 0119 10a9.972 9.972 0 01-2.929 7.071 1 1 0 01-1.414-1.414A7.971 7.971 0 0017 10c0-2.21-.894-4.208-2.343-5.657a1 1 0 010-1.414zm-2.829 2.828a1 1 0 011.415 0A5.983 5.983 0 0115 10a5.984 5.984 0 01-1.757 4.243 1 1 0 01-1.415-1.415A3.984 3.984 0 0013 10a3.983 3.983 0 00-1.172-2.828 1 1 0 010-1.415z" clipRule="evenodd" />
@@ -2944,31 +3004,31 @@ export default function MusicClient({ children: _children }: { children?: React.
                   </button>
                   {/* 垂直音量条 - 桌面悬浮/移动端点击 */}
                   <div
-                    className={`absolute bottom-full left-1/2 -translate-x-1/2 pb-2 transition-opacity ${showVolumeSlider ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}
+                    className={`absolute bottom-full left-1/2 -translate-x-1/2 pb-2 transition-opacity ${showVolumeSlider ? 'visible opacity-100' : 'invisible opacity-0 pointer-events-none'}`}
                     onClick={(e) => e.stopPropagation()}
                   >
                     <div className="bg-zinc-800/95 backdrop-blur-sm rounded-lg p-3 shadow-xl border border-white/10">
                       <div className="flex flex-col items-center gap-2">
-                        <span className="text-xs text-zinc-400 font-mono">{volume}</span>
-                        <div
-                          className="h-24 w-6 bg-white/10 rounded-full relative cursor-pointer select-none"
-                          onMouseDown={handleVolumeSliderInteraction}
-                          onTouchStart={handleVolumeSliderInteraction}
-                        >
-                          <div
-                            className="absolute bottom-0 left-0 right-0 bg-green-500 rounded-full transition-all pointer-events-none"
-                            style={{ height: `${volume}%` }}
-                          />
-                        </div>
+                        <span aria-hidden className="text-xs text-zinc-400 font-mono">{volume}</span>
+                        {/* 原生滑杆：拖、点、键盘方向键都能调；writing-mode 让它直立，往上是大声 */}
+                        <input
+                          type="range"
+                          min="0"
+                          max="100"
+                          value={volume}
+                          onChange={handleVolumeChange}
+                          aria-label="音量"
+                          className="h-24 w-6 cursor-pointer accent-green-500 [direction:rtl] [writing-mode:vertical-lr]"
+                        />
                       </div>
                     </div>
                   </div>
                 </div>
-                <button onClick={(e) => { e.stopPropagation(); setShowAudioEffectsMenu(true); }} className={`transition-colors ${equalizerEnabled || loudnessEnabled || reverbEnabled || pitchRate !== 1 || surroundEnabled ? 'text-green-400' : 'text-zinc-500 hover:text-white'}`} title="均衡器和音效" aria-label="均衡器和音效"><SlidersHorizontal className="h-4 w-4 md:h-5 md:w-5" /></button>
+                <button onClick={(e) => { e.stopPropagation(); setShowAudioEffectsMenu(true); }} className={`-m-1.5 p-1.5 transition-colors ${equalizerEnabled || loudnessEnabled || reverbEnabled || pitchRate !== 1 || surroundEnabled ? 'text-green-400' : 'text-zinc-500 hover:text-white'}`} title="均衡器和音效" aria-label="均衡器和音效"><SlidersHorizontal className="h-4 w-4 md:h-5 md:w-5" /></button>
                 {/* PiP 歌词按钮 */}
                 <button
                   onClick={toggleSpectrum}
-                  className={`transition-colors ${
+                  className={`-m-1.5 p-1.5 transition-colors ${
                     showSpectrum ? 'text-green-500 hover:text-green-400' : 'text-zinc-500 hover:text-white'
                   }`}
                   title={showSpectrum ? '隐藏音谱图' : '显示音谱图'}
@@ -2989,7 +3049,7 @@ export default function MusicClient({ children: _children }: { children?: React.
                     e.stopPropagation();
                     togglePiPLyrics();
                   }}
-                  className={`transition-colors ${
+                  className={`-m-1.5 p-1.5 transition-colors ${
                     showPiPLyrics
                       ? 'text-green-500 hover:text-green-400'
                       : 'text-zinc-500 hover:text-white'
@@ -3010,7 +3070,7 @@ export default function MusicClient({ children: _children }: { children?: React.
                       setShowAddToPlaylistModal(true);
                     }
                   }}
-                  className="text-zinc-500 hover:text-red-500 transition-colors"
+                  className="-m-1.5 p-1.5 text-zinc-500 hover:text-red-500 transition-colors"
                   title="添加到歌单"
                 >
                   <svg className="w-4 h-4 md:w-5 md:h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -3046,6 +3106,8 @@ export default function MusicClient({ children: _children }: { children?: React.
                       max="100"
                       value={progress}
                       onChange={handleProgressChange}
+                      aria-label="播放进度"
+                      aria-valuetext={`${formatTime(currentTime)} / ${formatTime(duration)}`}
                       className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
                     />
                   </div>
@@ -3060,10 +3122,16 @@ export default function MusicClient({ children: _children }: { children?: React.
       {/* Playlist Modal */}
       {showPlaylist && (
         <div className="fixed inset-0 bg-black/90 backdrop-blur-sm z-[100] flex items-center justify-center p-4">
-          <div className={MUSIC_QUEUE_SHELL}>
+          <div
+            ref={playlistDialogRef}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="music-queue-title"
+            className={MUSIC_QUEUE_SHELL}
+          >
             <div className={MUSIC_QUEUE_HEAD}>
               <div className="flex items-center gap-2.5">
-                <h2 className={MUSIC_QUEUE_TITLE}>播放列表</h2>
+                <h2 id="music-queue-title" className={MUSIC_QUEUE_TITLE}>播放列表</h2>
                 <span className={MUSIC_COUNT}>{playlist.length} 首</span>
               </div>
               <div className="flex items-center gap-2">
@@ -3432,7 +3500,6 @@ export default function MusicClient({ children: _children }: { children?: React.
         isOpen={showSidebarDrawer}
         pathname={pathname}
         onClose={() => setShowSidebarDrawer(false)}
-        onNavigate={(href) => router.push(href)}
       />
 
       {/* Add to Playlist Modal */}

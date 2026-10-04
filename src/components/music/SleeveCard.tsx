@@ -1,11 +1,14 @@
 'use client';
 
+import { cn } from '@/lib/cn';
+
 import {
   MUSIC_FACE,
   MUSIC_FACE_BOTTOM,
   MUSIC_FACE_CAT,
   MUSIC_FACE_META,
   MUSIC_FACE_NAME,
+  MUSIC_FACE_TONES,
   MUSIC_FACE_TOP,
   MUSIC_SLEEVE,
   MUSIC_SLEEVE_DISC,
@@ -21,8 +24,8 @@ import {
  * 分支，卡面就是版面本身：左上 Side A、中间名次当目录号、下沿名字与更新频率。
  *
  * 别再加回铺图那条路。真想要图，只能拿榜单里第一首歌的专辑封面顶
- * （/leaderboard/list 的每首歌都带 img），代价是每个榜单多一次上游请求；
- * 在那之前，这张卡的样子就是它的设计，而不是"缺了张图"。
+ * （/leaderboard/list 的每首歌都带 img），代价是每个榜单多一次上游请求。
+ * 套面颜色按名次轮流取 MUSIC_FACE_TONES，整版才不会是同一个焦糖色。
  */
 export default function SleeveCard({
   rank,
@@ -40,6 +43,7 @@ export default function SleeveCard({
   onOpen: () => void;
 }) {
   const rankLabel = String(rank).padStart(2, '0');
+  const tone = MUSIC_FACE_TONES[(rank - 1) % MUSIC_FACE_TONES.length];
 
   return (
     <button type='button' onClick={onOpen} className={MUSIC_SLEEVE}>
@@ -48,10 +52,10 @@ export default function SleeveCard({
           <span className={MUSIC_SLEEVE_DISC_LABEL} />
         </span>
 
-        <span className={MUSIC_FACE}>
+        <span className={cn(MUSIC_FACE, tone.face)}>
           {top ? <span className={MUSIC_FACE_TOP}>{top}</span> : null}
           {/* 名次就是这张套面的编号：不用 aria-hidden，它本来就是要读的内容。 */}
-          <span className={MUSIC_FACE_CAT}>{rankLabel}</span>
+          <span className={cn(MUSIC_FACE_CAT, tone.cat)}>{rankLabel}</span>
           <span className={MUSIC_FACE_BOTTOM}>
             <span className={MUSIC_FACE_NAME}>{name}</span>
             {meta ? <span className={MUSIC_FACE_META}>{meta}</span> : null}

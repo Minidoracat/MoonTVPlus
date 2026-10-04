@@ -59,6 +59,9 @@ import { getSourceDisplayLabel, normalizeSource, SourcePill } from '@/lib/music/
 import type { MusicQuality, MusicSource, Song } from '@/lib/music/types';
 import type { MusicQueueItem, MusicSyncState } from '@/types/watch-room';
 
+// 桌面常驻侧栏的开关（'1' = 固定显示）。只在 ≥1024px 生效，手机一律是抽屉。
+const SIDEBAR_PINNED_KEY = 'moontv_music_sidebar_pinned';
+
 const SPECTRUM_BIN_COUNT = 96;
 const SPECTRUM_IDLE_LEVEL = 0.02;
 const SPECTRUM_EDGE_TRIM = 8;
@@ -449,6 +452,8 @@ export default function MusicClient({ children: _children }: { children?: React.
   const [customSleepHours, setCustomSleepHours] = useState(0); // 自定义睡眠定时小时
   const [customSleepMinutes, setCustomSleepMinutes] = useState(30); // 自定义睡眠定时分钟
   const [showSidebarDrawer, setShowSidebarDrawer] = useState(false); // 左侧抽屉菜单
+  const [isWideScreen, setIsWideScreen] = useState(false); // ≥1024px：汉堡钮切换常驻侧栏
+  const [sidebarPinned, setSidebarPinned] = useState(false); // 使用者选择固定侧栏（localStorage）
   const [showVolumeSlider, setShowVolumeSlider] = useState(false); // 音量滑块显示状态
   const [pendingSongToPlay, setPendingSongToPlay] = useState<{ platform: string; id: string } | null>(null); // 待播放的歌曲信息
   const [resolvingCount, setResolvingCount] = useState(0); // 当前解析中的歌曲数量
@@ -534,6 +539,7 @@ export default function MusicClient({ children: _children }: { children?: React.
   const headerRef = useRef<HTMLElement>(null);
   const mainRef = useRef<HTMLElement>(null);
   const miniPlayerRef = useRef<HTMLDivElement>(null);
+  const dockedSidebarRef = useRef<HTMLDivElement>(null);
   // 使用者是否要求在播：音源出错时据此决定要不要提示（Chrome 触发 error 前已把 paused 设回 true，不能拿它判断）
   const playIntentRef = useRef(false);
   const sleepHoursPickerRef = useRef<HTMLDivElement>(null);
@@ -973,11 +979,40 @@ export default function MusicClient({ children: _children }: { children?: React.
   useOverlayFocus(showLyrics, fullPlayerRef);
   useOverlayFocus(showPlaylist, playlistDialogRef);
 
+  useEffect(() => {
+    const mq = window.matchMedia('(min-width: 1024px)');
+    const update = () => setIsWideScreen(mq.matches);
+    update();
+    mq.addEventListener('change', update);
+    try {
+      setSidebarPinned(localStorage.getItem(SIDEBAR_PINNED_KEY) === '1');
+    } catch {
+      // 无痕模式读不到就当没固定
+    }
+    return () => mq.removeEventListener('change', update);
+  }, []);
+
+  const sidebarDocked = isWideScreen && sidebarPinned;
+  // 宽屏切换常驻侧栏并记住；窄屏开抽屉（抽屉不记，点了导览就收）
+  const toggleSidebar = () => {
+    if (!isWideScreen) {
+      setShowSidebarDrawer(true);
+      return;
+    }
+    const next = !sidebarPinned;
+    setSidebarPinned(next);
+    try {
+      localStorage.setItem(SIDEBAR_PINNED_KEY, next ? '1' : '0');
+    } catch {
+      // 写不进去就只在这次生效
+    }
+  };
+
   const overlayOpen = showLyrics || showPlaylist || showSidebarDrawer;
   // layout effect：关闭时 inert 必须先拿掉，useOverlayFocus（包括抽屉里那份）才能把焦点还给顶栏／迷你播放器的按钮
   useLayoutEffect(() => {
     if (!overlayOpen) return undefined;
-    const background = [headerRef.current, mainRef.current, miniPlayerRef.current].filter(
+    const background = [headerRef.current, mainRef.current, miniPlayerRef.current, dockedSidebarRef.current].filter(
       (el): el is HTMLElement => el !== null
     );
     background.forEach((el) => el.setAttribute('inert', ''));
@@ -2315,6 +2350,64 @@ export default function MusicClient({ children: _children }: { children?: React.
     };
   }, [playlist, playRecords, currentSong, quality, currentSource]);
 
+  // Media Session：锁定画面、耳机线控与 CarPlay「正在播放」显示歌名封面，并能切歌。
+  // 处理器只注册一次，经 ref 取最新的状态与函式；有 previoustrack／nexttrack 时，
+  // iOS 才会显示切歌钮而不是 ±15 秒。规格没有歌词栏位，所以这里不送歌词。
+  const mediaSessionRef = useRef({ isPlaying, togglePlay, playPrev, playNext });
+  mediaSessionRef.current = { isPlaying, togglePlay, playPrev, playNext };
+
+  useEffect(() => {
+    if (!('mediaSession' in navigator)) return undefined;
+    const handlers: Array<[MediaSessionAction, MediaSessionActionHandler]> = [
+      // 来电、拔耳机等系统暂停不会改到 isPlaying，所以同时看 audio 本身
+      ['play', () => {
+        const { isPlaying: playing, togglePlay: toggle } = mediaSessionRef.current;
+        if (!playing) toggle();
+        else audioRef.current?.play().catch(() => undefined);
+      }],
+      ['pause', () => {
+        const { isPlaying: playing, togglePlay: toggle } = mediaSessionRef.current;
+        if (playing) toggle();
+        else audioRef.current?.pause();
+      }],
+      ['previoustrack', () => mediaSessionRef.current.playPrev()],
+      ['nexttrack', () => mediaSessionRef.current.playNext()],
+    ];
+    for (const [action, handler] of handlers) {
+      try {
+        navigator.mediaSession.setActionHandler(action, handler);
+      } catch {
+        // 浏览器不支援这个动作就跳过
+      }
+    }
+    return () => {
+      for (const [action] of handlers) {
+        try {
+          navigator.mediaSession.setActionHandler(action, null);
+        } catch {
+          // 同上
+        }
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!('mediaSession' in navigator)) return;
+    navigator.mediaSession.metadata = currentSong
+      ? new MediaMetadata({
+          title: currentSong.name,
+          artist: currentSong.artist,
+          album: currentSong.album || '',
+          artwork: currentSong.pic ? [{ src: currentSong.pic }] : [],
+        })
+      : null;
+  }, [currentSong]);
+
+  useEffect(() => {
+    if (!('mediaSession' in navigator)) return;
+    navigator.mediaSession.playbackState = isPlaying ? 'playing' : 'paused';
+  }, [isPlaying]);
+
   return (
     // 底色和字色都不在这里兜底：`.music-theme` 的渐变底写在 app/music/music.css 里，
     // 那份进 SSR 样式表、首帧就在。别往这加 bg-* ——原来那个 bg-zinc-950 就是
@@ -2534,10 +2627,11 @@ export default function MusicClient({ children: _children }: { children?: React.
           <div className="flex items-center gap-3">
             <button
               type="button"
-              onClick={() => setShowSidebarDrawer(true)}
+              onClick={toggleSidebar}
               className="-m-2 p-2 text-white transition-colors hover:text-green-400"
-              title="打开菜单"
-              aria-label="打开菜单"
+              title={sidebarDocked ? '收起侧栏' : '打开菜单'}
+              aria-label={sidebarDocked ? '收起侧栏' : '打开菜单'}
+              aria-expanded={sidebarDocked || showSidebarDrawer}
             >
               <svg aria-hidden className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 6h16M4 12h16M4 18h16" />
@@ -2563,7 +2657,7 @@ export default function MusicClient({ children: _children }: { children?: React.
       </header>
 
       {/* Main Content */}
-      <main ref={mainRef} className="pt-[calc(80px+env(safe-area-inset-top))] md:pt-[calc(76px+env(safe-area-inset-top))] pb-32 px-4 md:px-6">
+      <main ref={mainRef} className={`pt-[calc(80px+env(safe-area-inset-top))] md:pt-[calc(76px+env(safe-area-inset-top))] pb-32 px-4 md:px-6 ${sidebarDocked ? 'lg:pl-[calc(15rem+1.5rem)]' : ''}`}>
         <div className="max-w-7xl mx-auto">
           {_children}
         </div>
@@ -2571,7 +2665,11 @@ export default function MusicClient({ children: _children }: { children?: React.
 
       {/* Player */}
       {showPlayer && currentSong && (
-        <div ref={miniPlayerRef} className="fixed bottom-6 left-1/2 -translate-x-1/2 w-[95%] max-w-3xl z-50">
+        <div
+          ref={miniPlayerRef}
+          // 固定侧栏时以剩下的内容区置中（侧栏宽 15rem）
+          className={`fixed bottom-6 -translate-x-1/2 max-w-3xl z-50 ${sidebarDocked ? 'left-[calc(50%+7.5rem)] w-[calc(95%-15rem)]' : 'left-1/2 w-[95%]'}`}
+        >
           {showSpectrum && (
             <div className="pointer-events-none px-4">
               <AudioSpectrumCanvas bars={spectrumBars} compact />
@@ -3494,6 +3592,15 @@ export default function MusicClient({ children: _children }: { children?: React.
         </div>
       )}
 
+      <div ref={dockedSidebarRef}>
+        <MusicSidebarDrawer
+          variant="docked"
+          currentSource={currentSource}
+          isOpen={sidebarDocked}
+          pathname={pathname}
+          onClose={toggleSidebar}
+        />
+      </div>
 
       <MusicSidebarDrawer
         currentSource={currentSource}

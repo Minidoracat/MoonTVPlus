@@ -12,8 +12,8 @@
  *     music-* 令牌里，不跟站内主题走；按钮、选中态、焦点环、正在播放那一道线
  *     走 music-theme（= var(--theme-primary)），换主题时跟着变。所以同一处
  *     如果需要"被点亮"，用 MUSIC_*_THEME 那组，别顺手拿 graphite。
- *     套面正中那个大号目录号是例外里的例外：它走 music-accent（方向自带的
- *     焦糖/炽橘）而**不是** music-theme——换站内主题，套面不该整体变色。
+ *     榜单套面是例外里的例外：底色与大号目录号走 MUSIC_FACE_TONES 的唱片套色票
+ *     而**不是** music-theme——换站内主题，套面不该整体变色。
  *
  * 二、**不复用 bg-white / bg-zinc-* / bg-gray-***。管理端主题层会对这些类名做
  *     !important 覆盖（src/styles/themes.ts），音乐区只能自成一套命名。
@@ -179,7 +179,7 @@ export const MUSIC_MENU =
   'absolute right-0 top-[calc(100%+6px)] z-[60] grid w-[168px] gap-0.5 rounded-[4px] border border-music-edge bg-music-paper p-1 shadow-[0_14px_32px_-14px_rgba(0,0,0,0.55)] dark:border-music-night-edge dark:bg-music-night-card';
 
 export const MUSIC_MENU_ITEM = cn(
-  'flex w-full cursor-pointer items-center gap-2.5 rounded-[3px] px-2 py-1.5 text-left font-music-mono text-[calc(11*var(--music-px))] text-music-ink transition-colors duration-150',
+  'flex w-full cursor-pointer items-center gap-2.5 rounded-[3px] px-2 py-1.5 text-left font-music-mono text-[calc(11*var(--music-px))] text-music-ink transition-colors duration-150 dark:text-music-night-ink',
   MUSIC_FOCUS
 );
 
@@ -295,12 +295,11 @@ export const MUSIC_SLEEVE_DISC_LABEL =
  * 永远不会有。所以别把套面当成"一个等着换图的框"：它是一张本来就没印画的套子，
  * 卡面就是版面本身（见 MUSIC_FACE_CAT 那段）。
  *
- * 底色用 music-art 而不是 music-card-2：卡纸得比套子本身深一档，上面印的字才
- * 站得住。不能再浅下去。
+ * 底色不再是一整版的卡纸色：每张卡按名次轮流套 MUSIC_FACE_TONES 的一种唱片套色
+ * （SleeveCard 负责挑），字一律压纯白。
  */
 export const MUSIC_FACE = cn(
-  'absolute inset-0 z-10 flex flex-col justify-between overflow-hidden rounded-[2px] p-2.5',
-  'bg-music-art dark:bg-music-night-art',
+  'absolute inset-0 z-10 flex flex-col justify-between overflow-hidden rounded-[2px] p-2.5 text-music-chip',
   // 第三条影子是往右投在唱片上的那道：套面的右缘压着唱片，唱片才像从套口里抽出来
   // 的，而不是"一张黑月牙贴在套子后边"。但它必须**贴着边**——原来写 10px offset /
   // 16px blur，等于拿 62% 的黑把整条月牙盖住：夜里盘面和页面本来就都是黑的，
@@ -308,6 +307,27 @@ export const MUSIC_FACE = cn(
   // "套口压着盘"，又不吃掉盘面。
   'shadow-[0_1px_2px_rgba(0,0,0,0.22),0_14px_24px_-16px_rgba(0,0,0,0.5),2px_0_4px_-2px_rgba(0,0,0,0.5),inset_2px_0_0_rgba(255,255,255,0.13),inset_5px_0_9px_-5px_rgba(0,0,0,0.5)]'
 );
+
+/**
+ * 套面色票。整版同一个焦糖色读起来很单调；按名次轮流换色，格子才有节奏，
+ * 也不必为了一张图替每个榜单多打一次上游请求。
+ *
+ * - 6 个色相彼此至少差 40°（玫瑰、天蓝、靛蓝、洋红、翠绿、琥珀）。别加回橘、蓝绿、
+ *   紫罗兰：它们跟琥珀、翠绿、靛蓝只差 20° 上下，排在隔壁就像同一色
+ * - 6 色在 2–5 栏格线里，左右、上下相邻一定是不同色；这个顺序让相邻两张的色相
+ *   至少差 40°（2 栏时 50°）。改顺序前先重算
+ * - 都是 800 → 950 的深色渐层，日夜两种主题共用（它是套子上的印刷，不是页面材质）
+ * - 字走 music-chip 纯白——不能写 text-white，music.css 在日间会把它改成墨色；
+ *   目录号用同色系 200 阶。实测榜名 7:1 以上、目录号 5.4:1 以上
+ */
+export const MUSIC_FACE_TONES = [
+  { face: 'bg-gradient-to-br from-rose-800 to-rose-950', cat: 'text-rose-200' },
+  { face: 'bg-gradient-to-br from-sky-800 to-sky-950', cat: 'text-sky-200' },
+  { face: 'bg-gradient-to-br from-indigo-800 to-indigo-950', cat: 'text-indigo-200' },
+  { face: 'bg-gradient-to-br from-fuchsia-800 to-fuchsia-950', cat: 'text-fuchsia-200' },
+  { face: 'bg-gradient-to-br from-emerald-800 to-emerald-950', cat: 'text-emerald-200' },
+  { face: 'bg-gradient-to-br from-amber-800 to-amber-950', cat: 'text-amber-200' },
+] as const;
 
 export const MUSIC_FACE_TOP =
   'relative z-[2] font-music-mono text-[calc(9*var(--music-px))] uppercase tracking-[0.12em] opacity-80';
@@ -333,8 +353,8 @@ export const MUSIC_FACE_BOTTOM = 'relative z-[2] mt-2 flex flex-col gap-1.5';
  * - **死字号也不怕**：两位数永远放得下，长榜名仍在下沿两行里收着。
  *
  * 下面那道短横把"编号"和名字分成两段，像印刷件上编号底下那条线。
- * 走方向的强调色（日间焦糖 #b45309 / 夜间炽橘 #fb923c）而**不是**主题色：
- * 它是版面记号，不是可点的东西——换了站内主题，套面不该整体变色。
+ * 颜色由 MUSIC_FACE_TONES 的 cat 给（同色系浅色），不是主题色：它是版面记号，
+ * 不是可点的东西——换了站内主题，套面不该整体变色。
  *
  * 两条位移上的规矩：
  * - **落在 30% 处，不贴左**：`ml-[30%]`。套面上沿的 "Side A" 和下沿的榜名都齐左，
@@ -345,7 +365,7 @@ export const MUSIC_FACE_BOTTOM = 'relative z-[2] mt-2 flex flex-col gap-1.5';
  *   才恒定。
  */
 export const MUSIC_FACE_CAT = cn(
-  'relative z-[2] ml-[30%] self-start font-music-mono text-[calc(44*var(--music-px-display))] font-semibold leading-none tracking-[-0.045em] text-music-accent [font-variant-numeric:tabular-nums] dark:text-music-night-accent',
+  'relative z-[2] ml-[30%] self-start font-music-mono text-[calc(44*var(--music-px-display))] font-semibold leading-none tracking-[-0.045em] [font-variant-numeric:tabular-nums]',
   'after:mt-[7px] after:block after:h-px after:w-[calc(24*var(--music-px-display))] after:bg-current after:opacity-35 after:content-[""]'
 );
 
@@ -585,6 +605,16 @@ export const MUSIC_DRAWER_SCRIM =
 
 export const MUSIC_DRAWER = cn(
   'absolute left-0 top-0 flex h-full w-72 max-w-[85vw] flex-col border-r border-music-edge bg-music-paper px-5 py-6 shadow-[20px_0_40px_rgba(0,0,0,0.35)]',
+  'dark:border-music-night-edge dark:bg-music-night'
+);
+
+/**
+ * 桌面常驻侧栏（汉堡钮切换、记在 localStorage）。贴在页面左侧，不是覆盖层：
+ * 没有遮罩、不抢焦点。顶栏 z-40 压在它上面，所以上缘直接留出顶栏高度。
+ * 宽度 w-60 要和 MusicClient 里内容区、迷你播放器让出的 15rem 一致。
+ */
+export const MUSIC_SIDEBAR_DOCKED = cn(
+  'fixed inset-y-0 left-0 z-30 flex w-60 flex-col border-r border-music-edge bg-music-paper px-4 pb-6 pt-[calc(4.5rem+env(safe-area-inset-top))]',
   'dark:border-music-night-edge dark:bg-music-night'
 );
 

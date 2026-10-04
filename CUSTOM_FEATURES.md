@@ -40,8 +40,9 @@
 | `src/components/RouteScrollReset.tsx` | 上游 v226 把重設擴到 `/books`；本 fork 的 `/manga` 有 `MANGA_BROWSE_STATE_KEY` 時不重設（交給瀏覽狀態還原） |
 | `src/lib/suwayomi.client.ts` | `chapterPagesCache`；`uploadDate` 轉數字；詳情 `sourceName` 退回伺服器來源名；列表與摘要查 `latestUploadedChapter { id pageCount }` 產生 `singleChapter`；`getSourceEgressForAdmin` |
 | `src/components/MangaCard.tsx` | 上游 v226 已刪，本 fork 保留：`block`、`showSource`／`meta`／`progress`；hover 只給 `(hover:hover)`、動畫 `motion-safe:` |
-| `src/app/music/MusicClient.tsx`（⚠ 上游 v226 剛改版，高頻衝突） | 第 15 節全部：頂欄「首页」連結、播放控制的 `aria-label`、封面縮圖改 `<button>`、大播放器／播放列表 `role="dialog"` + `useOverlayFocus` + Esc + 背景 `inert`（`useLayoutEffect`）、`reportPlaybackFailure`／`playIntentRef`、`togglePlay` 遇 `audio.error` 重新 `playSong`、原生直立音量滑桿、HQ 鈕淺色配色、迷你播放器右側控制 `hidden sm:flex` |
-| `src/components/music/MusicSidebarDrawer.tsx` | 導覽項目改 `next/link`、`role="dialog"`、Esc、`useOverlayFocus`；沒有 `onNavigate` prop |
+| `src/app/music/MusicClient.tsx`（⚠ 上游 v226 剛改版，高頻衝突） | 第 15、16 節全部：頂欄「首页」連結、播放控制的 `aria-label`、封面縮圖改 `<button>`、大播放器／播放列表 `role="dialog"` + `useOverlayFocus` + Esc + 背景 `inert`（`useLayoutEffect`，含常駐側欄）、`reportPlaybackFailure`／`playIntentRef`、`togglePlay` 遇 `audio.error` 重新 `playSong`、原生直立音量滑桿、HQ 鈕淺色配色、迷你播放器右側控制 `hidden sm:flex`；`SIDEBAR_PINNED_KEY`／`toggleSidebar`／`sidebarDocked`（內容區與迷你播放器讓出 15rem）；Media Session（`mediaSessionRef`、metadata、playbackState） |
+| `src/components/music/MusicSidebarDrawer.tsx` | 導覽項目改 `next/link`、`role="dialog"`、Esc、`useOverlayFocus`；`variant='docked'` 常駐版（不搶焦點、點導覽不收）；沒有 `onNavigate` prop |
+| `src/components/music/tokens.ts`、`src/components/music/SleeveCard.tsx` | `MUSIC_FACE_TONES` 6 色套面（依名次輪替，順序有算過）、`MUSIC_MENU_ITEM` 的 `dark:text-music-night-ink`、`MUSIC_SIDEBAR_DOCKED` |
 | `src/app/music/music.css` | 檔尾 `prefers-reduced-motion: reduce` 區塊 |
 
 ## 1. 全站繁體中文介面
@@ -263,6 +264,24 @@ OpenCC twp 不是冪等的（`算法`→`演算法`，再轉一次又多一個�
 - `Toast.tsx`（全站共用，約 12 個頁面／元件在用）：`role`（錯誤 `alert`、其他 `status`）、關閉鈕名稱；**錯誤不自動消失**，`duration` 只作用於成功與提示（呼叫端的錯誤 toast 已拿掉失效的 `duration`）；隱藏後 `pointer-events-none`，沒傳 `onClose` 的 toast 不會留下看不見的擋點擊層
 - 未做（評估報告列為待辦）：小於 12px 的徽章字、`transition-all`、音樂頁沒有 `<h1>`、迷你播放器進度條只有 4px 高
 
+## 16. 音樂：排行榜配色、常駐側欄、Media Session、CarPlay（2026-10-05）
+
+- 排行榜套面：原本整版同一個焦糖色，改成 `MUSIC_FACE_TONES` 6 色深色漸層依名次輪替（日夜共用），字一律 `text-music-chip`。
+  色相彼此差 40° 以上；2–5 欄格線相鄰兩張一定不同色、色相差 40° 以上（2 欄 50°）。實測榜名 7:1 以上、目錄號 5.4:1 以上
+- 音源下拉：選項文字在暗色主題沒有 `dark:` 色，墨色壓在深底上看不見；`MUSIC_MENU_ITEM` 補 `dark:text-music-night-ink`
+- 常駐側欄：寬度 ≥1024px 時漢堡鈕切換「固定在左側」，記在 `moontv_music_sidebar_pinned`；窄螢幕照舊開抽屜（不記）。
+  常駐版不是 dialog：沒遮罩、不搶焦點、點導覽不收起；其他覆蓋層開著時一樣設 inert
+- Media Session：鎖定畫面、耳機線控、CarPlay「正在播放」顯示歌名、歌手、專輯、封面，上一首／下一首可切歌。
+  處理器只註冊一次、經 ref 取最新函式；`play`／`pause` 同時看 `isPlaying` 與 audio 本身（系統中斷不會改到 `isPlaying`）。
+  **規格沒有歌詞欄位**，鎖定畫面與車機不會顯示歌詞
+- CarPlay（網頁做不到，走原生 Subsonic App）：
+  - lxserver 內建 Subsonic（`/rest`），用 `tailscale serve --bg --http=4533 --set-path=/rest http://127.0.0.1:9527/rest` 只開這一段給 tailnet（沒開 funnel）。要用主機名 `http://workspace-baota-1.taile8961b.ts.net:4533`，用 IP 會 404；拆掉：`tailscale serve --http=4533 off`
+  - iPhone 用 Amperfy（免費、開源、支援 CarPlay），後端選 Subsonic，帳號 `Minidoracat`，密碼是 `~/github/lxserver/data/users.json` 的 `password`（**不是** `.env` 的 `LX_USER_Minidoracat`，兩者不同）
+  - Amperfy 要關「Auto-cache played tracks and download upcoming ones」（預設開，每首會預抓 3 首）、不要按 Download；只從歌單、收藏、搜尋播放，「歌手」頁與 Recent／Random Albums 進去的是 QQ 歌曲，只會播佔位檔
+  - 周杰倫歌單已用 lxserver 網頁播放器 API 匯入 `Minidoracat`（`userlist_1791142166785`，190 首，原本是空的，備份在 `/root/backup/lxserver-Minidoracat-list-20261005-032918.json`）
+  - lxserver 本機修改：`subsonic.ts` 讀規格的 `maxBitRate`（原本只讀 `maxBitrate`，位元率上限無效、每首都要 FLAC），且上限 <1000 不再給 FLAC；XML 版 `getLyricsBySongId` 加 OpenSubsonic `lyricsList`（Amperfy 只認這個）；`parseLrc` 濾掉 `[ti:…]` 等 LRC 標籤
+  - 不支援：`getIndexes`、`star`／`unstar`、`createPlaylist`／`deletePlaylist`、Podcast；搜尋只找已加入歌單的歌，且要簡體單一關鍵字
+
 ## 設定鍵一覽（localStorage）
 
 | Key | 功能 | 預設 |
@@ -271,6 +290,7 @@ OpenCC twp 不是冪等的（`算法`→`演算法`，再轉一次又多一個�
 | `crossRegionTitleSearch` | 三地片名搜尋 | `true`（未設或非 `'false'` 即開） |
 | `searchTraditionalToSimplified` | 搜尋繁轉簡（上游既有，繁體介面啟用時連動開啟） | `false` |
 | `moontv_manga_chapter_order` | 漫畫章節排序（詳情頁與閱讀器共用） | 無值＝最早在前；`newest` 時最新在前 |
+| `moontv_music_sidebar_pinned` | 音樂頁桌面常駐側欄（≥1024px） | 無值＝收起；`'1'` 固定顯示 |
 
 ## 上游同步流程
 

@@ -237,6 +237,17 @@ OpenCC twp 不是冪等的（`算法`→`演算法`，再轉一次又多一個�
 - 即時進度：翻頁後 2 秒內寫入閱讀紀錄（原本 10 秒），切背景／離開時照舊立刻寫，POST 用 `keepalive` 讓 iOS 凍結頁面時也送得出去。
   詳情頁有紀錄時「继续阅读」是主按鈕、「从第一话开始」次要；章節列表中讀到一半（還沒到最後一頁）的那一話點下去續讀，其他話與讀完的照舊從第 1 頁
 
+## 14. 音樂：lxserver 部署（MoonTV 無程式改動；lxserver fork 有本機修改）
+
+- lxserver 在 `~/github/lxserver`（`docker compose up -d --build`，用 `Dockerfile.local`：依賴分層快取，只改原始碼約十幾秒；上游 Dockerfile 每次都重跑 `apk add`，此主機的 Alpine 鏡像要 10–15 分鐘），加入 `moontv-shared`；MoonTV 後台音樂設定 `BaseUrl = http://lxserver:9527`、Token 留空（MoonTV 不帶 `x-user-name`，lxserver 以公開使用者 `open` 用 `data/users/source/_open` 的音源）
+- 埠只綁 `127.0.0.1:9527`：lxserver 的 `/api/music/*` 不受 Web 播放器密碼保護，不可改綁 LAN
+- 播放連結靠第三方音源腳本（來源 `pdone/lx-music-source`，混淆過，灰色地帶，會失效）。2026-10-04 逐一實測（以音檔總大小 > 1MB 判定真音檔）：
+  - 只有 `Huibq_lxmusic源` 可用，且只有網易雲（wy）與酷我（kw）拿得到完整 320k 音檔；QQ／酷狗／咪咕回 158KB 佔位音檔（換 3 首歌結果相同）
+  - 野花、独家音源 v4／v6、六音、长青、幻音、ikun、野草、聚合 CF、全豆要：失敗或只有佔位檔。野花與独家音源 v4 是原本匯入的，保留檔案但停用；其餘已刪
+  - Huibq 會封 IP：2026-10-05 連續送約 200 個解析請求（逐首驗證歌單），前 16 首成功後回 `音源日志：block ip`，連原本可播的也失敗。不要批次驗證播放連結；需要抽查時一次幾首、隔開送
+  - 被封後 lxserver 對外改走主機 WARP：compose 設 `PROXY_ALL_ENABLED`／`PROXY_ALL_ADDRESS=http://host.docker.internal:40000`。上游只讓 musicSdk 吃這個設定，音源腳本的 `lx.request`（needle）不吃；本機改 `src/server/userApi.ts` 的 `createLxRequest` 共用 `request.js` 的 `getRequestAgent`（TLS 通道）。不要改用 `HTTP(S)_PROXY`：needle 會對 https 網址送明文絕對 URI，被 Huibq 後端（`lxmusicapi.onrender.com`）301 無限轉址
+- 腳本失效時：在 lxserver 管理後台（`127.0.0.1:9527`）換源，或用 `POST /api/custom-source/import`（header `x-frontend-auth` = `.env` 的 `FRONTEND_PASSWORD`）匯入；新匯入預設停用，要再 `toggle`
+
 ## 設定鍵一覽（localStorage）
 
 | Key | 功能 | 預設 |

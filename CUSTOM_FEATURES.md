@@ -20,7 +20,10 @@
 | `src/app/search/page.tsx`、`src/app/api/search/route.ts`、`src/app/api/search/ws/route.ts` | alias／人物模式；`privateOnly` 不送 alias |
 | `src/components/UserMenu.tsx` | 繁中開關、三地片名（恢復預設 = 開） |
 | `src/app/layout.tsx` | `<TraditionalChineseProvider />`、`<ActivityLogger />` |
-| `src/components/VideoCard.tsx` | 點擊先開詳情 |
+| `src/components/VideoCard.tsx` | 點擊先開詳情（`DetailPanel` 的 `onPlay`／`playLabel`、`LazyPanelBoundary`）；Netflix 榜單 `#rank` 徽章在左上，與上游 v226 右上評分徽章（flag／medal）並存 |
+| `src/components/DetailPanel.tsx` | `type` 不設預設值；`tmdbId && type` 時直接 `applyTmdbResult` 查詳情，其餘才走上游搜尋＋`pickBestTmdbResult`；`applyTmdbResult` 的 `mediaType` 退回 `'movie'`；TMDB 失敗改用豆瓣片名查（`fetchDoubanDataByTitle`）；播放鈕 |
+| `src/components/media/MediaShell.tsx` | 上游 v226 電子書庫外殼：`<LanguageToggle />` 掛在 `<ThemeToggle />` 前、根層 `min-h-dvh` |
+| `getTMDBImageUrl` | 本 fork 從 `src/lib/tmdb-image-base.ts` 匯出；上游新檔若從 `@/lib/tmdb.search` 引入要改路徑 |
 | `src/app/douban/page.tsx`、`src/components/DoubanSelector.tsx` | Netflix／TMDB 榜；同時留時刻表 |
 | `next.config.js` | **不要**把 server `opencc-js` alias 成 identity |
 | `docker-compose.yml` | 保留 `moontv-shared`（MoonTV 建立、Suwayomi 以 external 加入）與 core 的 `networks` |
@@ -30,11 +33,13 @@
 | `src/app/api/cron/[password]/route.ts` | `refreshRecordAndFavorites` 末尾的 `prewarmDoubanComments` |
 | `src/app/api/douban-recommendations/route.ts` | `!response.ok` 時轉發 `Retry-After` |
 | `jest.config.js` | `moduleNameMapper` 的 `^cheerio/slim$`（jest 27 不認 exports 子路徑） |
+| `src/app/manga/**`、`src/components/manga/**`、`src/components/MangaCard.tsx` | **整組保留本 fork 實作**。上游 v226 的「美化漫画展馆」改版（`components/media/*`、刪 `MangaCard`）與本 fork 漫畫客製大面積重疊，合併時漫畫檔一律取 ours；上游的頁碼跳轉／末頁指示由本 fork 閱讀器的 range 滑桿與 `isLastPageVisible` 涵蓋。上游 media 元件只用在電子書庫 |
 | `src/app/manga/page.tsx` | 捲動只讀寫 `document.body.scrollTop`；瀏覽狀態在 layout effect cleanup 存；`appendUniqueMangas`；`pickDefaultMangaSourceId`；卡片 href 用 `buildMangaDetailHref`；picker 的 `egress`；推荐類型的本日／本周／本月（`findMangaHotWindows`／`matchMangaHotWindow`） |
 | `src/app/manga/detail/page.tsx`、`src/app/manga/read/page.tsx` | `orderMangaChapters`、章節分批與 `prefetch={false}`、`MangaChapterOrderToggle`、`useOverlayFocus`；同目錄 `loading.tsx` 不可刪；閱讀器雙擊放大、第一頁問上一話、`startPage=last`；詳情頁讀到一半的那一話續讀、「继续阅读」為主按鈕 |
 | `src/app/manga/search/page.tsx`、`src/app/manga/shelf/page.tsx`、`src/components/manga/MangaHistoryCard.tsx`、`src/components/manga/MangaLayout.tsx` | 詳情連結一律 `buildMangaDetailHref`；MangaLayout 的 skip link 與源管理 `useOverlayFocus` |
+| `src/components/RouteScrollReset.tsx` | 上游 v226 把重設擴到 `/books`；本 fork 的 `/manga` 有 `MANGA_BROWSE_STATE_KEY` 時不重設（交給瀏覽狀態還原） |
 | `src/lib/suwayomi.client.ts` | `chapterPagesCache`；`uploadDate` 轉數字；詳情 `sourceName` 退回伺服器來源名；列表與摘要查 `latestUploadedChapter { id pageCount }` 產生 `singleChapter`；`getSourceEgressForAdmin` |
-| `src/components/MangaCard.tsx` | `block`、`showSource`／`meta`／`progress`；hover 只給 `(hover:hover)`、動畫 `motion-safe:` |
+| `src/components/MangaCard.tsx` | 上游 v226 已刪，本 fork 保留：`block`、`showSource`／`meta`／`progress`；hover 只給 `(hover:hover)`、動畫 `motion-safe:` |
 
 ## 1. 全站繁體中文介面
 
@@ -65,7 +70,7 @@ OpenCC twp 不是冪等的（`算法`→`演算法`，再轉一次又多一個�
 **修改的上游檔案**
 - `src/components/PageLayout.tsx`、`src/components/MobileHeader.tsx`、
   `src/app/login/page.tsx`、`src/app/register/page.tsx`、`src/app/oidc-register/page.tsx`、
-  `src/components/manga/MangaLayout.tsx`、`src/components/books/BooksLayout.tsx`
+  `src/components/manga/MangaLayout.tsx`、`src/components/media/MediaShell.tsx`（電子書庫外殼，v226 起取代 `BooksLayout` 的頂欄）
   — 各加 1 行 import + 在 `<ThemeToggle />` 旁掛 `<LanguageToggle />`（auth 頁外層 div 加 `flex items-center gap-2`）
 - `src/components/UserMenu.tsx`（⚠ 上游高頻改動檔，最大衝突點）：
   - import `TraditionalChineseProvider` 的 helpers

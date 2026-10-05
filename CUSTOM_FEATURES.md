@@ -250,6 +250,7 @@ OpenCC twp 不是冪等的（`算法`→`演算法`，再轉一次又多一個�
   - 野花、独家音源 v4／v6、六音、长青、幻音、ikun、野草、聚合 CF、全豆要：失敗或只有佔位檔。野花與独家音源 v4 是原本匯入的，保留檔案但停用；其餘已刪
   - Huibq 會封 IP：2026-10-05 連續送約 200 個解析請求（逐首驗證歌單），前 16 首成功後回 `音源日志：block ip`，連原本可播的也失敗。不要批次驗證播放連結；需要抽查時一次幾首、隔開送
   - 被封後 lxserver 對外改走主機 WARP：compose 設 `PROXY_ALL_ENABLED`／`PROXY_ALL_ADDRESS=http://host.docker.internal:40000`。上游只讓 musicSdk 吃這個設定，音源腳本的 `lx.request`（needle）不吃；本機改 `src/server/userApi.ts` 的 `createLxRequest` 共用 `request.js` 的 `getRequestAgent`（TLS 通道）。不要改用 `HTTP(S)_PROXY`：needle 會對 https 網址送明文絕對 URI，被 Huibq 後端（`lxmusicapi.onrender.com`）301 無限轉址
+  - 起臨時測試容器（`docker run`）不會讀 compose：要自己加 `-e PROXY_ALL_ENABLED=true -e PROXY_ALL_ADDRESS=http://host.docker.internal:40000 --add-host host.docker.internal:host-gateway`，否則直連已被封的主機 IP，解析一律 `block ip`。啟動紀錄要看到 `Music SDK Proxy: Enabled`
 - 腳本失效時：在 lxserver 管理後台（`127.0.0.1:9527`）換源，或用 `POST /api/custom-source/import`（header `x-frontend-auth` = `.env` 的 `FRONTEND_PASSWORD`）匯入；新匯入預設停用，要再 `toggle`
 
 ## 15. 音樂播放器無障礙與操作改善（2026-10-05 better-interface 評估）
@@ -281,7 +282,11 @@ OpenCC twp 不是冪等的（`算法`→`演算法`，再轉一次又多一個�
   - iPhone 用 Amperfy（免費、開源、支援 CarPlay），後端選 Subsonic，帳號 `Minidoracat`，密碼是 `~/github/lxserver/data/users.json` 的 `password`（**不是** `.env` 的 `LX_USER_Minidoracat`，兩者不同）
   - Amperfy 要關「Auto-cache played tracks and download upcoming ones」（預設開，每首會預抓 3 首）、不要按 Download；只從歌單、收藏、搜尋播放，「歌手」頁與 Recent／Random Albums 進去的是 QQ 歌曲，只會播佔位檔
   - 周杰倫歌單已用 lxserver 網頁播放器 API 匯入 `Minidoracat`（`userlist_1791142166785`，190 首，原本是空的，備份在 `/root/backup/lxserver-Minidoracat-list-20261005-032918.json`）
-  - lxserver 本機修改：`subsonic.ts` 讀規格的 `maxBitRate`（原本只讀 `maxBitrate`，位元率上限無效、每首都要 FLAC），且上限 <1000 不再給 FLAC；XML 版 `getLyricsBySongId` 加 OpenSubsonic `lyricsList`（Amperfy 只認這個）；`parseLrc` 濾掉 `[ti:…]` 等 LRC 標籤
+  - lxserver 本機修改（`subsonic.ts`）：
+    - 串流讀規格的 `maxBitRate`（原本只讀 `maxBitrate`，上限無效、每首都要 FLAC），上限 <1000 不給 FLAC；`format=mp3` 時也不給 FLAC，改給 320k MP3（Amperfy 串流與快取下載的預設都送 `format=mp3`）
+    - XML 版 `getLyricsBySongId` 加 OpenSubsonic `lyricsList`；`getOpenSubsonicExtensions` 改宣告規格名 `songLyrics`、XML 改成規格的 `<openSubsonicExtensions name>` 結構（Amperfy 沒看到 `songLyrics` 就不抓歌詞）；`parseLrc` 濾掉 `[ti:…]` 等 LRC 標籤
+  - 歌詞跳轉後不同步：Amperfy 用的 AudioStreaming 對 FLAC 依檔案大小等比例跳轉，播放進度會偏好幾秒（上游 [#133](https://github.com/dimitris-c/AudioStreaming/issues/133)，修正 PR [#141](https://github.com/dimitris-c/AudioStreaming/pull/141) 待合併）。
+    MP3 320k 是固定位元率，不受影響。Amperfy 的串流與快取格式都要維持預設 MP3（選 RAW 就是 FLAC）；修正前已快取的歌是 FLAC，要在 Settings → Library 刪除快取
   - 不支援：`getIndexes`、`star`／`unstar`、`createPlaylist`／`deletePlaylist`、Podcast；搜尋只找已加入歌單的歌，且要簡體單一關鍵字
 
 ## 設定鍵一覽（localStorage）

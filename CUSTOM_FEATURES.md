@@ -21,7 +21,7 @@
 | `src/components/UserMenu.tsx` | 繁中開關、三地片名（恢復預設 = 開） |
 | `src/app/layout.tsx` | `<TraditionalChineseProvider />`、`<ActivityLogger />` |
 | `src/components/VideoCard.tsx` | 點擊先開詳情（`DetailPanel` 的 `onPlay`／`playLabel`、`LazyPanelBoundary`）；Netflix 榜單 `#rank` 徽章在左上，與上游 v226 右上評分徽章（flag／medal）並存 |
-| `src/components/DetailPanel.tsx` | `type` 不設預設值；`tmdbId && type` 時直接 `applyTmdbResult` 查詳情，其餘才走上游搜尋＋`pickBestTmdbResult`；`applyTmdbResult` 的 `mediaType` 退回 `'movie'`；TMDB 失敗改用豆瓣片名查（`fetchDoubanDataByTitle`）；播放鈕 |
+| `src/components/DetailPanel.tsx` | `type` 不設預設值；`tmdbId && type` 時直接 `applyTmdbResult` 查詳情，其餘才走上游搜尋＋`pickBestTmdbResult`；`applyTmdbResult` 的 `mediaType` 退回 `'movie'`；TMDB 失敗改用豆瓣片名查（`fetchDoubanDataByTitle`）；播放鈕（兩個錯誤區塊也要放 `{playButton}`，查不到詳情時仍可播，`DetailPanel.test.tsx` 守著） |
 | `src/components/media/MediaShell.tsx` | 上游 v226 電子書庫外殼：`<LanguageToggle />` 掛在 `<ThemeToggle />` 前、根層 `min-h-dvh` |
 | `getTMDBImageUrl` | 本 fork 從 `src/lib/tmdb-image-base.ts` 匯出；上游新檔若從 `@/lib/tmdb.search` 引入要改路徑 |
 | `src/app/douban/page.tsx`、`src/components/DoubanSelector.tsx` | Netflix／TMDB 榜；同時留時刻表 |

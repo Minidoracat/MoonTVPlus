@@ -1755,6 +1755,8 @@ const DetailPanel: React.FC<DetailPanelProps> = ({
             <div className='p-6'>
               <div className='text-center mb-6'>
                 <p className='text-red-500 dark:text-red-400'>{error}</p>
+                {/* 播放不依赖详情资料：查不到详情时也要能播 */}
+                {playButton}
               </div>
 
               {/* 数据源显示和切换 - 错误时也显示 */}
@@ -2368,6 +2370,8 @@ const DetailPanel: React.FC<DetailPanelProps> = ({
             <div className='p-6'>
               <div className='text-center mb-6'>
                 <p className='text-red-500 dark:text-red-400'>{error}</p>
+                {/* 播放不依赖详情资料：查不到详情时也要能播 */}
+                {playButton}
               </div>
 
               {/* 数据源显示和切换 - 错误时也显示 */}

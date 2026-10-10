@@ -84,13 +84,16 @@ const ProxyImage: React.FC<ProxyImageProps> = ({
     onError?.(e);
   };
 
+  // loading 必須是第一個寫入的屬性：WebKit 在寫入 src 的當下就決定要不要延後載入，
+  // React 18 又依 props 順序寫屬性。排在 src 後面時 Safari 會忽略 loading="lazy"，
+  // 一進漫畫就把整話（單行本一百多頁）同時下載，後面的請求全被卡住。
   return (
     <img
+      loading={loading}
+      decoding={decoding}
       {...props}
       ref={imgRef}
       src={currentSrc}
-      loading={loading}
-      decoding={decoding}
       onError={handleError}
     />
   );

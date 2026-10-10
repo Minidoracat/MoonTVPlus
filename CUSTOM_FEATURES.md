@@ -40,6 +40,8 @@
 | `src/components/RouteScrollReset.tsx` | 上游 v226 把重設擴到 `/books`；本 fork 的 `/manga` 有 `MANGA_BROWSE_STATE_KEY` 時不重設（交給瀏覽狀態還原） |
 | `src/lib/suwayomi.client.ts` | `chapterPagesCache`；`uploadDate` 轉數字；詳情 `sourceName` 退回伺服器來源名；列表與摘要查 `latestUploadedChapter { id pageCount }` 產生 `singleChapter`；`getSourceEgressForAdmin` |
 | `src/components/MangaCard.tsx` | 上游 v226 已刪，本 fork 保留：`block`、`showSource`／`meta`／`progress`；hover 只給 `(hover:hover)`、動畫 `motion-safe:` |
+| `src/components/ProxyImage.tsx` | `<img>` 的 `loading`／`decoding` 寫在 `{...props}` 與 `src` 前面（Safari 才會懶載入，見第 17 節） |
+| `src/lib/db.client.ts` | 閱讀紀錄 POST 的 `keepalive`（第 13 節）；`handleDatabaseOperationFailure` 遇網路錯誤改顯示「网络连接中断，同步失败」（第 17 節） |
 | `src/app/music/MusicClient.tsx`（⚠ 上游 v226 剛改版，高頻衝突） | 第 15、16 節全部：頂欄「首页」連結、播放控制的 `aria-label`、封面縮圖改 `<button>`、大播放器／播放列表 `role="dialog"` + `useOverlayFocus` + Esc + 背景 `inert`（`useLayoutEffect`，含常駐側欄）、`reportPlaybackFailure`／`playIntentRef`、`togglePlay` 遇 `audio.error` 重新 `playSong`、原生直立音量滑桿、HQ 鈕淺色配色、迷你播放器右側控制 `hidden sm:flex`；`SIDEBAR_PINNED_KEY`／`toggleSidebar`／`sidebarDocked`（內容區與迷你播放器讓出 15rem）；Media Session（`mediaSessionRef`、metadata、playbackState） |
 | `src/components/music/MusicSidebarDrawer.tsx` | 導覽項目改 `next/link`、`role="dialog"`、Esc、`useOverlayFocus`；`variant='docked'` 常駐版（不搶焦點、點導覽不收）；沒有 `onNavigate` prop |
 | `src/components/music/tokens.ts`、`src/components/music/SleeveCard.tsx` | `MUSIC_FACE_TONES` 6 色套面（依名次輪替，順序有算過）、`MUSIC_MENU_ITEM` 的 `dark:text-music-night-ink`、`MUSIC_SIDEBAR_DOCKED` |
@@ -289,6 +291,20 @@ OpenCC twp 不是冪等的（`算法`→`演算法`，再轉一次又多一個�
     MP3 320k 是固定位元率，不受影響。Amperfy 的串流與快取格式都要維持預設 MP3（選 RAW 就是 FLAC）；修正前已快取的歌是 FLAC，要在 Settings → Library 刪除快取
   - 不支援：`getIndexes`、`star`／`unstar`、`createPlaylist`／`deletePlaylist`、Podcast；搜尋只找已加入歌單的歌，且要簡體單一關鍵字
 
+## 17. 圖片懶載入在 Safari 生效、網路失敗提示（2026-10-11）
+
+- 修改上游：`src/components/ProxyImage.tsx`（`<img>` 的 `loading`、`decoding` 寫在 `{...props}` 與 `src` 前面）、`src/app/manga/read/page.tsx`（頁面清單與章節列表的網路失敗訊息、頁面清單失敗時的「重试」）、
+  `src/lib/db.client.ts`（`handleDatabaseOperationFailure` 遇網路錯誤顯示「网络连接中断，同步失败」）；新增 `src/components/ProxyImage.test.tsx`
+- 起因：包子漫畫把單行本夾在話中間（轉生成蜘蛛又怎樣！第76話 → 第11卷 174 頁 → 第77話）。WebKit 在寫入 `src` 的當下就決定要不要延後載入，React 18 依 props 順序寫屬性，
+  `loading` 排在 `src` 後面時 iPhone 上所有 `loading="lazy"` 都無效：一進單行本就同時發出 174 張圖片請求（Suwayomi 第一次抓每秒約 2 張），
+  換下一話的頁面清單與存進度請求卡了約 2 分鐘，最後顯示 Safari 原文 `Load failed` 與「資料庫操作失敗」
+- 必守：`ProxyImage` 的 `loading` 要是 `<img>` 第一個寫入的屬性；`ProxyImage.test.tsx` 擋這個退回
+- 副作用：全站 `ProxyImage` 在 iPhone 上也變成真正的懶載入，畫面外（含水平捲動列）的封面捲到才抓
+- 實測（2026-10-11，Playwright WebKit 26.0、iPhone 13 模擬、水平模式、正式資料）：進第11卷 8 秒內，舊版請求 174/174 張圖（2.6 秒內全發），修正版 6 張（第 1–6 頁）；
+  修正版從章節列表換第77話，頁面清單 0.3 秒、第一張圖 0.5 秒回來；頁面清單請求被中斷時顯示「网络连接中断，没能取得本话页面」與「重试」，恢復後按重試 0.6 秒出圖
+- 測試注意：WebKit 的 `keepalive` fetch 與 `sendBeacon` 不經過 Playwright `route`，攔截擋不住寫入。用 owner 帳號測閱讀器後要檢查並還原 `u:<帳號>:manga:history`
+  （Kvrocks WAL `db/*.log` 留有最近寫入的原值）與 `activity_log:<帳號>`
+
 ## 設定鍵一覽（localStorage）
 
 | Key | 功能 | 預設 |
@@ -304,7 +320,7 @@ OpenCC twp 不是冪等的（`算法`→`演算法`，再轉一次又多一個�
 ```bash
 git fetch upstream
 git merge --no-ff upstream/main   # 保留既有 v223/v224 merge boundary；rerere 已啟用
-pnpm typecheck && pnpm test -- src/lib/title-alias.test.ts src/lib/search-title-match.test.ts src/components/DoubanSelector.test.ts src/lib/tmdb.client.test.ts src/lib/netflix-top10.test.ts src/lib/playback-auto-next.test.ts --runInBand
+pnpm typecheck && pnpm test -- src/lib/title-alias.test.ts src/lib/search-title-match.test.ts src/components/DoubanSelector.test.ts src/lib/tmdb.client.test.ts src/lib/netflix-top10.test.ts src/lib/playback-auto-next.test.ts src/components/ProxyImage.test.tsx --runInBand
 ```
 
 

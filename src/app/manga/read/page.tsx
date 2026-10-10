@@ -221,6 +221,8 @@ export default function MangaReadPage() {
   const [pages, setPages] = useState<string[]>([]);
   const [pagesLoading, setPagesLoading] = useState(() => Boolean(chapterId));
   const [pagesError, setPagesError] = useState('');
+  /** 本話頁面清單載入失敗時按「重试」遞增，讓載入 effect 重跑 */
+  const [pagesRetryToken, setPagesRetryToken] = useState(0);
   const [activePage, setActivePage] = useState(0);
   const [progressDraft, setProgressDraft] = useState<number | null>(null);
   const [readMode, setReadMode] = useState<ReadMode>('vertical');
@@ -813,7 +815,14 @@ export default function MangaReadPage() {
         if (cancelled) return;
         if (err instanceof DOMException && err.name === 'AbortError') return;
         setPages([]);
-        setPagesError(err instanceof Error ? err.message : '无法载入章节内容');
+        // fetch 在網路層失敗一律是 TypeError，Safari 的原文只有 "Load failed"
+        setPagesError(
+          err instanceof TypeError
+            ? '网络连接中断，没能取得本话页面'
+            : err instanceof Error
+            ? err.message
+            : '无法载入章节内容'
+        );
         historyRestorePendingRef.current = false;
         setHistoryRestorePending(false);
       })
@@ -825,7 +834,7 @@ export default function MangaReadPage() {
       cancelled = true;
       controller.abort();
     };
-  }, [chapterId, mangaId, sourceId]);
+  }, [chapterId, mangaId, sourceId, pagesRetryToken]);
 
   useEffect(() => {
     mangaDetailOwnerRef.current = '';
@@ -866,7 +875,11 @@ export default function MangaReadPage() {
         if (err instanceof DOMException && err.name === 'AbortError') return;
         mangaDetailOwnerRef.current = mangaDetailRequestKey;
         setMangaDetailError(
-          err instanceof Error ? err.message : '无法载入作品章节列表'
+          err instanceof TypeError
+            ? '网络连接中断'
+            : err instanceof Error
+            ? err.message
+            : '无法载入作品章节列表'
         );
       })
       .finally(() => {
@@ -2293,12 +2306,23 @@ export default function MangaReadPage() {
             >
               {pagesError}
             </p>
-            <Link
-              href={detailHref}
-              className='mt-4 inline-flex min-h-11 items-center rounded-2xl bg-sky-600 px-4 text-sm font-medium text-white transition-colors duration-200 hover:bg-sky-500'
-            >
-              返回作品详情
-            </Link>
+            <div className='mt-4 flex flex-wrap items-center justify-center gap-3'>
+              {chapterId && mangaId && sourceId && (
+                <button
+                  type='button'
+                  onClick={() => setPagesRetryToken((token) => token + 1)}
+                  className='inline-flex min-h-11 items-center rounded-2xl bg-sky-600 px-4 text-sm font-medium text-white transition-colors duration-200 hover:bg-sky-500'
+                >
+                  重试
+                </button>
+              )}
+              <Link
+                href={detailHref}
+                className='inline-flex min-h-11 items-center rounded-2xl bg-sky-600 px-4 text-sm font-medium text-white transition-colors duration-200 hover:bg-sky-500'
+              >
+                返回作品详情
+              </Link>
+            </div>
           </div>
         ) : pagesLoading || historyRestorePending ? (
           <>

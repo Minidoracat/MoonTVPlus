@@ -594,7 +594,10 @@ async function handleDatabaseOperationFailure(
   error: any
 ): Promise<void> {
   console.error(`数据库操作失败 (${dataType}):`, error);
-  triggerGlobalError(`数据库操作失败`);
+  // fetch 在網路層失敗一律是 TypeError（Safari 的訊息是 Load failed），不是資料庫出錯
+  triggerGlobalError(
+    error instanceof TypeError ? '网络连接中断，同步失败' : '数据库操作失败'
+  );
 
   try {
     // 使用 Promise 缓存防止并发重复请求

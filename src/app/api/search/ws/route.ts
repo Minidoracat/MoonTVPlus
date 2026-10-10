@@ -29,7 +29,7 @@ export async function GET(request: NextRequest) {
 
   const { searchParams } = new URL(request.url);
   const query = searchParams.get('q');
-  const includeSpecialSources = searchParams.get('special') === '1';
+  const specialOnly = searchParams.get('special') === '1';
   const privateOnly = searchParams.get('privateOnly') === '1';
 
   if (!query) {
@@ -47,11 +47,15 @@ export async function GET(request: NextRequest) {
   const config = await getConfig();
   const apiSites = privateOnly
     ? []
-    : await getAvailableApiSites(authInfo.username, includeSpecialSources);
-  const [canAccessOpenList, canAccessEmby] = await Promise.all([
+    : await getAvailableApiSites(authInfo.username, specialOnly);
+  const [hasOpenListPermission, hasEmbyPermission] = await Promise.all([
     hasFeaturePermission(authInfo.username, 'private_library'),
     hasFeaturePermission(authInfo.username, 'emby'),
   ]);
+  // 特殊源入口（/under）只搜影视源：私人影库（OpenList/Emby）不参与搜索。
+  // 否则 0 个特殊源时也会去搜私人影库，既串味又要白等 20s 超时。
+  const canAccessOpenList = hasOpenListPermission && !specialOnly;
+  const canAccessEmby = hasEmbyPermission && !specialOnly;
 
   // 三地片名别名扩展（豆瓣又名）：异步解析，不阻塞 SSE 流的建立与其他源搜索
   const aliasMode =

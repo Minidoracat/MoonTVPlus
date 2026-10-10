@@ -37,7 +37,8 @@ jest.mock('@/lib/db.client', () => ({
 
 jest.mock('@/lib/special-source.client', () => ({
   appendSpecialSourceParam: (url: string) => url,
-  isSpecialSourcesEnabledOnDevice: jest.fn(() => false),
+  isSpecialSourceContext: jest.fn(() => false),
+  SPECIAL_SOURCE_PATH: '/under',
 }));
 
 jest.mock('@/components/PageLayout', () => ({
@@ -65,6 +66,7 @@ function mockNullComponent() {
 
 jest.mock('@/components/AcgSearch', mockNullComponent);
 jest.mock('@/components/CapsuleSwitch', mockNullComponent);
+jest.mock('@/components/ContinueWatching', mockNullComponent);
 jest.mock('@/components/DetailPanel', mockNullComponent);
 jest.mock('@/components/ImageViewer', mockNullComponent);
 jest.mock('@/components/ProxyImage', mockNullComponent);

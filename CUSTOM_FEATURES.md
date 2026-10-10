@@ -17,7 +17,7 @@
 | `src/app/globals.css` | PWA／mobile 控制列 safe-area |
 | `src/lib/ios-pwa.ts` | 整檔本地 |
 | `src/components/PwaSafariPrompt.tsx` | 整檔本地 |
-| `src/app/search/page.tsx`、`src/app/api/search/route.ts`、`src/app/api/search/ws/route.ts` | alias／人物模式；`privateOnly` 不送 alias |
+| `src/components/SearchPageClient.tsx`、`src/app/api/search/route.ts`、`src/app/api/search/ws/route.ts` | alias／人物模式；`privateOnly` 不送 alias。上游 v226.1 把搜尋頁本體從 `src/app/search/page.tsx` 搬到 `SearchPageClient.tsx`（`/search` 與 `/under` 共用，page 只剩 `<Suspense>` 包裝）；搜尋網址一律走 `buildSearchUrl`，前綴用 `searchBase`，不可寫死 `/search` |
 | `src/components/UserMenu.tsx` | 繁中開關、三地片名（恢復預設 = 開） |
 | `src/app/layout.tsx` | `<TraditionalChineseProvider />`、`<ActivityLogger />` |
 | `src/components/VideoCard.tsx` | 點擊先開詳情（`DetailPanel` 的 `onPlay`／`playLabel`、`LazyPanelBoundary`）；Netflix 榜單 `#rank` 徽章在左上，與上游 v226 右上評分徽章（flag／medal）並存 |
@@ -97,9 +97,10 @@ OpenCC twp 不是冪等的（`算法`→`演算法`，再轉一次又多一個�
 **修改的上游檔案**
 - `src/app/api/search/route.ts` — `alias=1` 參數、`queriesPromise` 並行解析、回應加 `aliases` 欄位、改呼叫 `searchFromApiWithQueries`。v225 起 `privateOnly=1` 時強制跳過別名解析（別名只 fan-out 公開 CMS）。
 - `src/app/api/search/ws/route.ts` — 同上 + SSE `aliases` 事件；完成事件必須走本地 `maybeEmitComplete()`（設 `streamClosed`），不可退回上游分散的 `maybeComplete`。
-- `src/app/search/page.tsx` — 請求帶 `&alias=1`、`searchAliases` state/ref、
+- `src/components/SearchPageClient.tsx`（v226.1 前在 `src/app/search/page.tsx`）— 請求帶 `&alias=1`、`searchAliases` state/ref、
   `titleContainsQuery` 精確搜尋過濾接受別名命中、`SearchCachePayload` 加選用 `aliases` 欄位；
   片名/人物模式切換與上游「高级」面板、`privateOnly=1` 並存。只搜私人影庫時不送 alias。
+  `/under`（特殊源入口）同樣有片名/人物切換與 alias，請求另帶 `special=1`、只搜特殊源；`src/app/search/page.test.tsx` 經 page 包裝測這個元件
 - `src/components/UserMenu.tsx` — 通用設置區「三地片名搜索」開關（state / 載入 / handler / UI / 重置）
 
 ## 4. 點選影片先開詳情
@@ -332,7 +333,7 @@ OpenCC twp 不是冪等的（`算法`→`演算法`，再轉一次又多一個�
 ```bash
 git fetch upstream
 git merge --no-ff upstream/main   # 保留既有 v223/v224 merge boundary；rerere 已啟用
-pnpm typecheck && pnpm test -- src/lib/title-alias.test.ts src/lib/search-title-match.test.ts src/components/DoubanSelector.test.ts src/lib/tmdb.client.test.ts src/lib/netflix-top10.test.ts src/lib/playback-auto-next.test.ts src/components/ProxyImage.test.tsx --runInBand
+pnpm typecheck && pnpm test -- src/lib/title-alias.test.ts src/lib/search-title-match.test.ts src/components/DoubanSelector.test.ts src/lib/tmdb.client.test.ts src/lib/netflix-top10.test.ts src/lib/playback-auto-next.test.ts src/components/ProxyImage.test.tsx src/app/search/page.test.tsx --runInBand
 ```
 
 

@@ -6,12 +6,14 @@ import {
   getHorizontalPageIndex,
   getHorizontalPageOffset,
   getHorizontalPageStride,
+  getMangaVolumeSkipTarget,
   getMangaZoomLayout,
   getNextMangaChapter,
   getPreviousMangaChapter,
   getReaderProgress,
   getReaderStartPage,
   isMangaChapterInProgress,
+  isMangaVolumeChapter,
   isVerticalRestoreWindowSettled,
   orderMangaChapters,
   shouldEagerLoadVerticalRestorePage,
@@ -102,6 +104,46 @@ describe('reader chapter navigation', () => {
     ).toEqual(expected);
     expect(getNextMangaChapter(sourceList, 'c10')?.id).toBe('leave');
     expect(getNextMangaChapter(sourceList, 'misparsed 2')?.id).toBe('c11');
+  });
+});
+
+describe('單行本夾在話中間', () => {
+  // 單行本在 Suwayomi 多半沒有話數（-1），排序時照來源順序留在原位
+  const item = (id: string, name: string, chapterNumber = -1): MangaChapter => ({
+    id,
+    mangaId: 'manga',
+    name,
+    chapterNumber,
+  });
+  const sourceList = [
+    item('75', '第75話', 75),
+    item('76', '第76話', 76),
+    item('v11', '第11卷'),
+    item('v12', '第12卷'),
+    item('77', '第77話', 77),
+    item('v13', '第13卷'),
+  ];
+
+  it('只把純單行本名稱當單行本；同時寫了話數的是一般章節', () => {
+    expect(
+      ['第11卷', '第 3 冊', '第十二卷', 'Vol.2', '单行本'].map(isMangaVolumeChapter)
+    ).toEqual([true, true, true, true, true]);
+    expect(
+      ['第77話', '第11卷 第77話', 'Vol.3 Ch.20', '卷土重来', 'Evolution 3'].map(
+        isMangaVolumeChapter
+      )
+    ).toEqual([false, false, false, false, false]);
+  });
+
+  it('從話要進單行本時，回傳跳過連續單行本之後的第一話', () => {
+    expect(getMangaVolumeSkipTarget(sourceList, '76')?.id).toBe('77');
+  });
+
+  it('下一個不是單行本、正在看單行本、或單行本後面沒有話時不問', () => {
+    expect(getMangaVolumeSkipTarget(sourceList, '75')).toBeNull();
+    expect(getMangaVolumeSkipTarget(sourceList, 'v11')).toBeNull();
+    expect(getMangaVolumeSkipTarget(sourceList, '77')).toBeNull();
+    expect(getMangaVolumeSkipTarget(sourceList, 'missing')).toBeNull();
   });
 });
 

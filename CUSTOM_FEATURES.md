@@ -35,7 +35,7 @@
 | `jest.config.js` | `moduleNameMapper` 的 `^cheerio/slim$`（jest 27 不認 exports 子路徑） |
 | `src/app/manga/**`、`src/components/manga/**`、`src/components/MangaCard.tsx` | **整組保留本 fork 實作**。上游 v226 的「美化漫画展馆」改版（`components/media/*`、刪 `MangaCard`）與本 fork 漫畫客製大面積重疊，合併時漫畫檔一律取 ours；上游的頁碼跳轉／末頁指示由本 fork 閱讀器的 range 滑桿與 `isLastPageVisible` 涵蓋。上游 media 元件只用在電子書庫 |
 | `src/app/manga/page.tsx` | 捲動只讀寫 `document.body.scrollTop`；瀏覽狀態在 layout effect cleanup 存；`appendUniqueMangas`；`pickDefaultMangaSourceId`；卡片 href 用 `buildMangaDetailHref`；picker 的 `egress`；推荐類型的本日／本周／本月（`findMangaHotWindows`／`matchMangaHotWindow`） |
-| `src/app/manga/detail/page.tsx`、`src/app/manga/read/page.tsx` | `orderMangaChapters`、章節分批與 `prefetch={false}`、`MangaChapterOrderToggle`、`useOverlayFocus`；同目錄 `loading.tsx` 不可刪；閱讀器雙擊放大、第一頁問上一話、`startPage=last`；詳情頁讀到一半的那一話續讀、「继续阅读」為主按鈕 |
+| `src/app/manga/detail/page.tsx`、`src/app/manga/read/page.tsx` | `orderMangaChapters`、章節分批與 `prefetch={false}`、`MangaChapterOrderToggle`、`useOverlayFocus`；同目錄 `loading.tsx` 不可刪；閱讀器雙擊放大、第一頁問上一話、`startPage=last`、下一話遇到單行本先問（`getMangaVolumeSkipTarget`）；詳情頁讀到一半的那一話續讀、「继续阅读」為主按鈕 |
 | `src/app/manga/search/page.tsx`、`src/app/manga/shelf/page.tsx`、`src/components/manga/MangaHistoryCard.tsx`、`src/components/manga/MangaLayout.tsx` | 詳情連結一律 `buildMangaDetailHref`；MangaLayout 的 skip link 與源管理 `useOverlayFocus` |
 | `src/components/RouteScrollReset.tsx` | 上游 v226 把重設擴到 `/books`；本 fork 的 `/manga` 有 `MANGA_BROWSE_STATE_KEY` 時不重設（交給瀏覽狀態還原） |
 | `src/lib/suwayomi.client.ts` | `chapterPagesCache`；`uploadDate` 轉數字；詳情 `sourceName` 退回伺服器來源名；列表與摘要查 `latestUploadedChapter { id pageCount }` 產生 `singleChapter`；`getSourceEgressForAdmin` |
@@ -302,8 +302,20 @@ OpenCC twp 不是冪等的（`算法`→`演算法`，再轉一次又多一個�
 - 副作用：全站 `ProxyImage` 在 iPhone 上也變成真正的懶載入，畫面外（含水平捲動列）的封面捲到才抓
 - 實測（2026-10-11，Playwright WebKit 26.0、iPhone 13 模擬、水平模式、正式資料）：進第11卷 8 秒內，舊版請求 174/174 張圖（2.6 秒內全發），修正版 6 張（第 1–6 頁）；
   修正版從章節列表換第77話，頁面清單 0.3 秒、第一張圖 0.5 秒回來；頁面清單請求被中斷時顯示「网络连接中断，没能取得本话页面」與「重试」，恢復後按重試 0.6 秒出圖
-- 測試注意：WebKit 的 `keepalive` fetch 與 `sendBeacon` 不經過 Playwright `route`，攔截擋不住寫入。用 owner 帳號測閱讀器後要檢查並還原 `u:<帳號>:manga:history`
-  （Kvrocks WAL `db/*.log` 留有最近寫入的原值）與 `activity_log:<帳號>`
+- 測試注意：WebKit 的 `keepalive` fetch（閱讀紀錄 POST 都帶）與 `sendBeacon` 不經過 Playwright `route`，攔截擋不住寫入。
+  用正式 kvrocks 跑會改到站長的 `u:<帳號>:manga:history` 與 `activity_log:<帳號>`（Kvrocks WAL `db/*.log` 留有最近寫入的原值可還原）。
+  改用拋棄式 kvrocks：`docker run -d --name kvrocks-e2e --network moontvplus_default -p 127.0.0.1:6667:6666 apache/kvrocks:latest`，
+  只複製 `admin:config`（`redis-cli -p 6666 --raw GET admin:config | head -c -1 | redis-cli -p 6667 -x SET admin:config`），
+  e2e 容器帶 `-e KVROCKS_URL=redis://kvrocks-e2e:6666`，並 `docker network connect moontv-shared` 才連得到 Suwayomi
+
+## 18. 下一話遇到夾在話中間的單行本先問（2026-10-11）
+
+- 本 fork 檔案：`src/lib/manga-reader.ts`（`isMangaVolumeChapter`、`getMangaVolumeSkipTarget`，測試在 `manga-reader.test.ts`）；修改：`src/app/manga/read/page.tsx`（`askBeforeVolume`、單行本彈窗）
+- 單行本判斷看名稱：「第11卷」「第 3 冊」「Vol.2」「单行本」；名稱同時寫了話數（「第11卷 第77話」「Vol.3 Ch.20」）是一般章節
+- 只在「正在看話、下一個是單行本、後面還有話」時問：章末與讀完彈窗的「下一话」改開彈窗，選「跳到第N話」（主按鈕，跳過連續的單行本）、「看单行本」或「留在本话」，Suwayomi 知道頁數時顯示「共 N 页」。
+  正在看單行本時照舊直接進下一個（連著看單行本不必每卷被問）；章節列表點選不問
+- 實測（2026-10-11，WebKit 26.0、iPhone 13 模擬、水平模式、拋棄式 kvrocks）：第76話章末按「下一话：第11卷」跳出「第11卷（共 174 页）是单行本」，Esc 可關；選跳到第77話後第11卷的圖片請求 0 張；
+  第11卷章末直接進第77話、第75話直接進第76話，都不問
 
 ## 設定鍵一覽（localStorage）
 

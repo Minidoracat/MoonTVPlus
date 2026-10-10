@@ -47,6 +47,7 @@ import {
   buildMangaShelfItem,
   getHorizontalPageIndex,
   getHorizontalPageOffset,
+  getMangaVolumeSkipTarget,
   getNextMangaChapter,
   getPreviousMangaChapter,
   getReaderProgress,
@@ -261,6 +262,8 @@ export default function MangaReadPage() {
   /** 第一頁再往前時的「回到上一話？」 */
   const [showPreviousChapterPrompt, setShowPreviousChapterPrompt] =
     useState(false);
+  /** 下一話是夾在話中間的單行本時，先問要看單行本還是跳到後面那一話 */
+  const [showVolumePrompt, setShowVolumePrompt] = useState(false);
 
   const verticalPageRefs = useRef<Array<HTMLDivElement | null>>([]);
   const horizontalContainerRef = useRef<HTMLDivElement | null>(null);
@@ -991,6 +994,7 @@ export default function MangaReadPage() {
   useEffect(() => {
     setShowChapterComplete(false);
     setShowPreviousChapterPrompt(false);
+    setShowVolumePrompt(false);
   }, [activePage, chapterId, readMode]);
 
   useEffect(() => {
@@ -1451,6 +1455,10 @@ export default function MangaReadPage() {
     () => getNextMangaChapter(ownedMangaDetail?.chapters || [], chapterId),
     [chapterId, ownedMangaDetail?.chapters]
   );
+  const volumeSkipChapter = useMemo<MangaChapter | null>(
+    () => getMangaVolumeSkipTarget(ownedMangaDetail?.chapters || [], chapterId),
+    [chapterId, ownedMangaDetail?.chapters]
+  );
 
   const chapterList = useMemo(
     () => orderMangaChapters(ownedMangaDetail?.chapters || []),
@@ -1525,6 +1533,15 @@ export default function MangaReadPage() {
       startAt,
     });
 
+  /** 「下一話」遇到夾在話中間的單行本先問，不直接進去 */
+  const askBeforeVolume = (event: MouseEvent<HTMLAnchorElement>) => {
+    if (!volumeSkipChapter) return;
+    event.preventDefault();
+    setShowChapterComplete(false);
+    setControlsVisible(false);
+    setShowVolumePrompt(true);
+  };
+
   const detailHref = buildMangaDetailHref({
     mangaId,
     sourceId,
@@ -1549,6 +1566,7 @@ export default function MangaReadPage() {
         ) : nextChapter ? (
           <Link
             href={chapterReadHref(nextChapter)}
+            onClick={askBeforeVolume}
             className='inline-flex min-h-12 w-full items-center justify-center rounded-2xl bg-sky-500 px-5 text-sm font-semibold text-white transition-colors hover:bg-sky-400'
           >
             下一话：{nextChapter.name}
@@ -1662,10 +1680,12 @@ export default function MangaReadPage() {
   const chapterPanelRef = useRef<HTMLDivElement>(null);
   const completePanelRef = useRef<HTMLDivElement>(null);
   const previousPanelRef = useRef<HTMLDivElement>(null);
+  const volumePanelRef = useRef<HTMLDivElement>(null);
   useOverlayFocus(settingsOpen, settingsPanelRef);
   useOverlayFocus(chapterListOpen, chapterPanelRef);
   useOverlayFocus(showChapterComplete, completePanelRef);
   useOverlayFocus(showPreviousChapterPrompt, previousPanelRef);
+  useOverlayFocus(showVolumePrompt, volumePanelRef);
 
   // 本話載好後在背景預熱下一話的內頁清單（伺服器端快取），讀完按下一話不必再等來源站
   const nextChapterId = nextChapter?.id;
@@ -1686,7 +1706,8 @@ export default function MangaReadPage() {
       settingsOpen ||
       chapterListOpen ||
       showChapterComplete ||
-      showPreviousChapterPrompt
+      showPreviousChapterPrompt ||
+      showVolumePrompt
     ) {
       return;
     }
@@ -1736,7 +1757,8 @@ export default function MangaReadPage() {
       event.touches.length !== 1 ||
       !readerReady ||
       showChapterComplete ||
-      showPreviousChapterPrompt
+      showPreviousChapterPrompt ||
+      showVolumePrompt
     ) {
       return;
     }
@@ -1780,6 +1802,7 @@ export default function MangaReadPage() {
         else if (chapterListOpen) setChapterListOpen(false);
         else if (showChapterComplete) setShowChapterComplete(false);
         else if (showPreviousChapterPrompt) setShowPreviousChapterPrompt(false);
+        else if (showVolumePrompt) setShowVolumePrompt(false);
         else if (immersiveMode) applyImmersiveMode(false);
         else return;
         event.preventDefault();
@@ -1797,6 +1820,7 @@ export default function MangaReadPage() {
         chapterListOpen ||
         showChapterComplete ||
         showPreviousChapterPrompt ||
+        showVolumePrompt ||
         !readerReady
       )
         return;
@@ -2203,6 +2227,7 @@ export default function MangaReadPage() {
                   nextChapter && (
                     <Link
                       href={chapterReadHref(nextChapter)}
+                      onClick={askBeforeVolume}
                       className='rounded-2xl bg-sky-600 px-4 py-3 text-sm font-medium text-white transition hover:bg-sky-700'
                     >
                       下一话：{nextChapter.name}
@@ -2281,6 +2306,56 @@ export default function MangaReadPage() {
                   type='button'
                   className='rounded-2xl border border-gray-200 px-4 py-3 text-sm font-medium text-gray-700 transition hover:bg-gray-50 dark:border-gray-700 dark:text-gray-200 dark:hover:bg-gray-900'
                   onClick={() => setShowPreviousChapterPrompt(false)}
+                >
+                  留在本话
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {showVolumePrompt && nextChapter && volumeSkipChapter && (
+          <div
+            className='fixed inset-0 z-30 flex items-center justify-center bg-black/60 px-4'
+            onClick={() => setShowVolumePrompt(false)}
+          >
+            <div
+              ref={volumePanelRef}
+              role='dialog'
+              aria-labelledby='manga-reader-volume-title'
+              className='w-full max-w-sm rounded-3xl border border-gray-200 bg-white p-6 text-center shadow-xl dark:border-gray-700 dark:bg-gray-950'
+              onClick={(event) => event.stopPropagation()}
+            >
+              <h2
+                id='manga-reader-volume-title'
+                className='text-lg font-semibold text-gray-900 dark:text-gray-100'
+              >
+                下一话是单行本
+              </h2>
+              <div className='mt-2 text-sm text-gray-500 dark:text-gray-400'>
+                {nextChapter.name}
+                {nextChapter.pageCount && nextChapter.pageCount > 0
+                  ? `（共 ${nextChapter.pageCount} 页）`
+                  : ''}
+                是单行本，要看单行本，还是跳到{volumeSkipChapter.name}？
+              </div>
+              <div className='mt-6 flex flex-col gap-3'>
+                <Link
+                  href={chapterReadHref(volumeSkipChapter)}
+                  className='rounded-2xl bg-sky-600 px-4 py-3 text-sm font-medium text-white transition hover:bg-sky-700'
+                >
+                  跳到{volumeSkipChapter.name}
+                </Link>
+                <Link
+                  href={chapterReadHref(nextChapter)}
+                  className='rounded-2xl border border-gray-200 px-4 py-3 text-sm font-medium text-gray-700 transition hover:bg-gray-50 dark:border-gray-700 dark:text-gray-200 dark:hover:bg-gray-900'
+                >
+                  看单行本：{nextChapter.name}
+                </Link>
+                <button
+                  type='button'
+                  className='rounded-2xl border border-gray-200 px-4 py-3 text-sm font-medium text-gray-700 transition hover:bg-gray-50 dark:border-gray-700 dark:text-gray-200 dark:hover:bg-gray-900'
+                  onClick={() => setShowVolumePrompt(false)}
                 >
                   留在本话
                 </button>

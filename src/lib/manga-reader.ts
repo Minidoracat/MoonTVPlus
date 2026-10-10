@@ -56,6 +56,43 @@ export function getPreviousMangaChapter(
   return index > 0 ? ordered[index - 1] : null;
 }
 
+/** 「第11卷」「第 3 冊」「Vol.2」「单行本」這類單行本名稱 */
+const MANGA_VOLUME_NAME =
+  /第\s*[\d零〇一二两三四五六七八九十百千]+\s*[卷冊册]|\bvol(?:ume)?\.?\s*\d|单行本|單行本/i;
+/** 名稱同時寫了話數就是一般章節（「第11卷 第77話」「Vol.3 Ch.20」） */
+const MANGA_CHAPTER_MARK = /[話话回章]|\bch(?:apter)?\.?\s*\d/i;
+
+export function isMangaVolumeChapter(name: string): boolean {
+  return MANGA_VOLUME_NAME.test(name) && !MANGA_CHAPTER_MARK.test(name);
+}
+
+/**
+ * 有些來源把單行本夾在話中間（包子漫畫：第76話 → 第11卷 → 第77話）。正在看「話」、
+ * 下一個是單行本、後面也還有話可以跳時，回傳要跳去的那一話，「下一話」先問要看哪個；
+ * 其餘情況回 null 照舊直接進下一個（連著看單行本的人不必每卷都被問）。
+ */
+export function getMangaVolumeSkipTarget(
+  chapters: MangaChapter[],
+  chapterId: string
+): MangaChapter | null {
+  const ordered = orderMangaChapters(chapters);
+  const index = ordered.findIndex((chapter) => chapter.id === chapterId);
+  const next = ordered[index + 1];
+  if (
+    index < 0 ||
+    !next ||
+    isMangaVolumeChapter(ordered[index].name) ||
+    !isMangaVolumeChapter(next.name)
+  ) {
+    return null;
+  }
+  return (
+    ordered
+      .slice(index + 2)
+      .find((chapter) => !isMangaVolumeChapter(chapter.name)) ?? null
+  );
+}
+
 /**
  * 這一話有讀到一半的紀錄（還沒到最後一頁）。詳情頁章節列表點它要接著讀 —— 那一列就寫著
  * 「上次看到第 N 页」；讀完的話與其他話照舊從第 1 頁開始，不會一點進去就跳到尾頁。

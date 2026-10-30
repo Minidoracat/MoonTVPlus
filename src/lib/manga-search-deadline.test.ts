@@ -206,7 +206,7 @@ describe('searchManga fan-out', () => {
           : Promise.resolve({ source, results: [itemFor('fast')] })
       );
 
-    const pending = client.searchManga('x');
+    const pending = client.searchManga('x', undefined, 1, 'shown');
     await advance(PER_SOURCE_SEARCH_TIMEOUT_MS, 2);
     const result = await pending;
 
@@ -231,7 +231,7 @@ describe('searchManga fan-out', () => {
           : Promise.resolve({ source, results: [itemFor('fast')] })
       );
 
-    const pending = client.searchManga('x');
+    const pending = client.searchManga('x', undefined, 1, 'shown');
     await advance(PER_SOURCE_SEARCH_TIMEOUT_MS, 2);
     const result = await pending;
 
@@ -253,7 +253,7 @@ describe('searchManga fan-out', () => {
         Promise.resolve({ source, results: [duplicate] })
       );
 
-    const result = await client.searchManga('x');
+    const result = await client.searchManga('x', undefined, 1, 'shown');
 
     expect(result.results).toHaveLength(1);
     expect(result.failedSources).toHaveLength(0);
@@ -270,7 +270,7 @@ describe('searchManga fan-out', () => {
           : Promise.reject(new Error('上游 500'))
       );
 
-    const pending = client.searchManga('x');
+    const pending = client.searchManga('x', undefined, 1, 'shown');
     await advance(PER_SOURCE_SEARCH_TIMEOUT_MS, 2);
     const result = await pending;
 

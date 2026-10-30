@@ -26,6 +26,7 @@ import {
 import { MangaChapter, MangaDetail, MangaReadRecord, MangaShelfItem } from '@/lib/manga.types';
 
 import MangaChapterOrderToggle from '@/components/manga/MangaChapterOrderToggle';
+import { MANGA_SAFE_MODE_MESSAGE, MangaSafeModeOffButton } from '@/components/manga/MangaSafeMode';
 import ProxyImage from '@/components/ProxyImage';
 
 import MangaDetailSkeleton from './loading';
@@ -104,7 +105,11 @@ export default function MangaDetailPage() {
         // 403（來源被管理員停用）或其他錯誤不可當成 MangaDetail 塞進 state，
         // 否則會顯示一個沒有章節、沒有標題的壞頁面。書架裡的舊項目就會走到這。
         if (!res.ok) {
-          throw new Error(data?.error || '无法载入漫画详情');
+          throw new Error(
+            data?.code === 'safe_mode'
+              ? MANGA_SAFE_MODE_MESSAGE
+              : data?.error || '无法载入漫画详情'
+          );
         }
         setDetail(data);
       })
@@ -238,6 +243,9 @@ export default function MangaDetailPage() {
         >
           返回
         </Link>
+        {detailError === MANGA_SAFE_MODE_MESSAGE && (
+          <MangaSafeModeOffButton className='ml-3 mt-4 inline-flex min-h-11 items-center rounded-2xl border border-gray-300 px-4 text-sm font-medium text-gray-700 transition-colors duration-200 hover:bg-gray-100 dark:border-gray-700 dark:text-gray-200 dark:hover:bg-gray-800' />
+        )}
       </div>
     );
   }

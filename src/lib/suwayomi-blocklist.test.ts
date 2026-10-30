@@ -22,6 +22,10 @@ import {
   matchesSourceLang,
 } from '@/lib/manga.types';
 import { SuwayomiClient } from '@/lib/suwayomi.client';
+import {
+  MangaSafeModeError,
+  MangaSourceForbiddenError,
+} from '@/lib/suwayomi-errors';
 
 const SOURCES = [
   { id: 'a', name: 'Safe A', lang: 'zh' },
@@ -29,7 +33,11 @@ const SOURCES = [
   { id: 'c', name: 'Safe C', lang: 'zh' },
 ];
 
-function setPolicy(sourceIds: string[], disabledSourceIds: string[]): void {
+function setPolicy(
+  sourceIds: string[],
+  disabledSourceIds: string[],
+  maxSources = 10
+): void {
   (getConfig as jest.Mock).mockResolvedValue({
     SuwayomiConfig: {
       Enabled: true,
@@ -38,7 +46,7 @@ function setPolicy(sourceIds: string[], disabledSourceIds: string[]): void {
       DefaultLang: 'zh',
       SourceIds: sourceIds,
       DisabledSourceIds: disabledSourceIds,
-      MaxSources: 10,
+      MaxSources: maxSources,
     },
   } as AdminConfig);
 }
@@ -49,11 +57,11 @@ function setPolicy(sourceIds: string[], disabledSourceIds: string[]): void {
  * 用 `text()` 而不是 `json()`：`suwayomiFetch` 刻意在自己的 deadline 範圍內
  * 把 body 讀成字串再交給呼叫端解析（見該函式的說明）。
  */
-function mockSourcesOk(): jest.Mock {
+function mockSourcesOk(nodes: object[] = SOURCES): jest.Mock {
   const fetchMock = jest.fn(async (_url: string, init?: RequestInit) => {
     const body = String((init as { body?: unknown })?.body ?? '');
     const payload = body.includes('sources')
-      ? { data: { sources: { nodes: SOURCES } } }
+      ? { data: { sources: { nodes } } }
       : { data: {} };
     return {
       ok: true,
@@ -163,31 +171,146 @@ describe('assertSourceAllowed 對被停用的來源必須拒絕', () => {
 
   it('黑名單內的來源：getSourceFilters 拒絕', async () => {
     setPolicy([], ['b']);
-    await expect(client.getSourceFilters('b')).rejects.toThrow();
+    await expect(client.getSourceFilters('b', 'shown')).rejects.toThrow();
   });
 
   it('黑名單內的來源：getRecommendedManga 拒絕', async () => {
     setPolicy([], ['b']);
     await expect(
-      client.getRecommendedManga('b', 'POPULAR', 1)
+      client.getRecommendedManga('b', 'POPULAR', 1, [], '', 'shown')
     ).rejects.toThrow();
   });
 
   it('未被停用的來源不可被誤擋', async () => {
     setPolicy([], ['b']);
     // 會往下走到實際查詢（mock 回空 data），關鍵是不能是授權錯誤
-    await expect(client.getSourceFilters('a')).resolves.toEqual([]);
+    await expect(client.getSourceFilters('a', 'shown')).resolves.toEqual([]);
   });
 
   it('getSearchSources 指定被停用的來源 → 拒絕', async () => {
     setPolicy([], ['b']);
-    await expect(client.getSearchSources('b')).rejects.toThrow();
+    await expect(client.getSearchSources('b', 'shown')).rejects.toThrow();
   });
 
   it('getSearchSources 多選時濾掉被停用的來源', async () => {
     setPolicy([], ['b']);
-    const ids = (await client.getSearchSources(['a', 'b'])).map((s) => s.id);
+    const ids = (await client.getSearchSources(['a', 'b'], 'shown')).map((s) => s.id);
     expect(ids).toEqual(['a']);
+  });
+});
+
+describe('成人源只放行 adult === shown', () => {
+  // n 靠上游的 NSFW 標記、j 靠站名關鍵字，兩種判斷都要擋
+  const WITH_ADULT = [
+    { id: 'n', name: 'Night', lang: 'zh', contentWarning: 'NSFW' },
+    { id: 'a', name: 'Safe A', lang: 'zh' },
+    { id: 'j', name: '禁漫天堂', lang: 'zh' },
+  ];
+  let client: SuwayomiClient;
+  const originalFetch = global.fetch;
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    (isDegradedConfigObject as jest.Mock).mockReturnValue(false);
+    client = new SuwayomiClient();
+    mockSourcesOk(WITH_ADULT);
+    setPolicy([], []);
+  });
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+  });
+
+  it('none：成人源回一般的來源不可用，不透露是成人源', async () => {
+    for (const id of ['n', 'j']) {
+      const error = await client.getSourceFilters(id, 'none').catch((e) => e);
+      expect(error).toBeInstanceOf(MangaSourceForbiddenError);
+      expect(error).not.toBeInstanceOf(MangaSafeModeError);
+    }
+  });
+
+  it('hidden：成人源回安全模式錯誤', async () => {
+    await expect(client.getSourceFilters('n', 'hidden')).rejects.toBeInstanceOf(
+      MangaSafeModeError
+    );
+    await expect(
+      client.getRecommendedManga('j', 'POPULAR', 1, [], '', 'hidden')
+    ).rejects.toBeInstanceOf(MangaSafeModeError);
+  });
+
+  it('shown：成人源照常放行', async () => {
+    await expect(client.getSourceFilters('n', 'shown')).resolves.toEqual([]);
+    await expect(client.getSourceFilters('j', 'shown')).resolves.toEqual([]);
+  });
+
+  it('一般來源不受 adult 影響', async () => {
+    for (const adult of ['none', 'hidden', 'shown'] as const) {
+      await expect(client.getSourceFilters('a', adult)).resolves.toEqual([]);
+    }
+  });
+
+  it('getSearchSources：指定與預設兩條路徑都濾掉成人源，除非 shown', async () => {
+    const ids = async (
+      sourceId: string[] | undefined,
+      adult: 'none' | 'hidden' | 'shown'
+    ) => (await client.getSearchSources(sourceId, adult)).map((s) => s.id);
+
+    expect(await ids(['n', 'a', 'j'], 'none')).toEqual(['a']);
+    expect(await ids(['n', 'a', 'j'], 'hidden')).toEqual(['a']);
+    expect(await ids(['n', 'a', 'j'], 'shown')).toEqual(['n', 'a', 'j']);
+    expect(await ids(undefined, 'none')).toEqual(['a']);
+    expect(await ids(undefined, 'shown')).toEqual(['n', 'a', 'j']);
+  });
+
+  it('getSearchSources：成人源在切 MaxSources 之前就濾掉，不佔名額', async () => {
+    setPolicy([], [], 1);
+    expect(
+      (await client.getSearchSources(['n', 'a'], 'none')).map((s) => s.id)
+    ).toEqual(['a']);
+    expect(
+      (await client.getSearchSources(undefined, 'none')).map((s) => s.id)
+    ).toEqual(['a']);
+  });
+
+  it('getSearchSources：只指定成人源又不是 shown → 拒絕', async () => {
+    await expect(
+      client.getSearchSources(['n', 'j'], 'hidden')
+    ).rejects.toBeInstanceOf(MangaSourceForbiddenError);
+  });
+
+  it('getAdultSourceIds：被全站停用的成人源也算', async () => {
+    setPolicy([], ['n']);
+    expect(Array.from(await client.getAdultSourceIds()).sort()).toEqual([
+      'j',
+      'n',
+    ]);
+  });
+
+  it('getAdultSourceIds：上游失敗沿用上次成功的結果', async () => {
+    const first = await client.getAdultSourceIds();
+    expect(first.size).toBe(2);
+    const failing = jest.fn(async () => {
+      throw new Error('down');
+    });
+    global.fetch = failing as unknown as typeof global.fetch;
+    // 跳過快取 TTL，逼它真的重抓一次
+    const nowSpy = jest
+      .spyOn(Date, 'now')
+      .mockReturnValue(Date.now() + 10 * 60_000);
+    try {
+      expect(await client.getAdultSourceIds()).toEqual(first);
+      expect(failing).toHaveBeenCalled();
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it('getAdultSourceIds：從沒成功過就丟錯，不回空集合', async () => {
+    global.fetch = jest.fn(async () => {
+      throw new Error('down');
+    }) as unknown as typeof global.fetch;
+
+    await expect(client.getAdultSourceIds()).rejects.toThrow();
   });
 });
 

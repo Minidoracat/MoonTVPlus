@@ -147,7 +147,7 @@ describe('realUrl 舊 schema 降級', () => {
     const detail = await client.getMangaDetail({
       mangaId: '1307',
       sourceId: SOURCE_ID,
-    });
+    }, 'shown');
 
     expect(detail.title).toBe('上游标题');
     expect(detail.realUrl).toBeUndefined();
@@ -160,10 +160,10 @@ describe('realUrl 舊 schema 降級', () => {
   });
 
   it('降級結果記在 per-server capability 上，第二部漫畫不再重撞', async () => {
-    await client.getMangaDetail({ mangaId: '1307', sourceId: SOURCE_ID });
+    await client.getMangaDetail({ mangaId: '1307', sourceId: SOURCE_ID }, 'shown');
     requestBodies = [];
 
-    await client.getMangaDetail({ mangaId: '1308', sourceId: SOURCE_ID });
+    await client.getMangaDetail({ mangaId: '1308', sourceId: SOURCE_ID }, 'shown');
 
     const detailBodies = requestBodies.filter((b) => b.includes(DETAIL_OP));
     const chapterBodies = requestBodies.filter((b) => b.includes(CHAPTERS_OP));
@@ -180,7 +180,7 @@ describe('realUrl 舊 schema 降級', () => {
     const detail = await client.getMangaDetail({
       mangaId: '1307',
       sourceId: SOURCE_ID,
-    });
+    }, 'shown');
 
     expect(detail.realUrl).toBe('https://source.example/manga/1307');
     expect(detail.chapters[0].realUrl).toBe(
@@ -199,7 +199,7 @@ describe('realUrl 舊 schema 降級', () => {
     const detail = await client.getMangaDetail({
       mangaId: '1307',
       sourceId: SOURCE_ID,
-    });
+    }, 'shown');
 
     expect(detail.realUrl).toBe('https://source.example/manga/1307');
     expect(detail.chapters[0].realUrl).toBeUndefined();
@@ -221,7 +221,7 @@ describe('realUrl 舊 schema 降級', () => {
       failFullQueryWith = mode;
 
       await expect(
-        client.getMangaDetail({ mangaId: '1307', sourceId: SOURCE_ID })
+        client.getMangaDetail({ mangaId: '1307', sourceId: SOURCE_ID }, 'shown')
       ).rejects.toThrow();
       // 真錯原樣上拋，不得偷偷再發一次 legacy 把錯誤蓋掉
       expect(requestBodies.filter((b) => b.includes(DETAIL_OP))).toHaveLength(
@@ -234,7 +234,7 @@ describe('realUrl 舊 schema 降級', () => {
       const detail = await client.getMangaDetail({
         mangaId: '1307',
         sourceId: SOURCE_ID,
-      });
+      }, 'shown');
       expect(detail.realUrl).toBe('https://source.example/manga/1307');
       expect(requestBodies.filter((b) => b.includes(DETAIL_OP))[0]).toContain(
         'realUrl'
@@ -257,7 +257,7 @@ describe('realUrl 舊 schema 降級', () => {
     }) as unknown as typeof global.fetch;
 
     await expect(
-      client.getMangaDetail({ mangaId: '1307', sourceId: SOURCE_ID })
+      client.getMangaDetail({ mangaId: '1307', sourceId: SOURCE_ID }, 'shown')
     ).rejects.toThrow(/FieldUndefined/);
     expect(requestBodies.filter((b) => b.includes(DETAIL_OP))).toHaveLength(2);
   });

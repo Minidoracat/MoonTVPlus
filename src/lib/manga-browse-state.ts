@@ -2,6 +2,8 @@ import type { MangaFilterSelection, MangaSearchItem } from './manga.types';
 import { parseMangaFilterSelections } from './manga-filter-params';
 
 export const MANGA_BROWSE_STATE_KEY = 'manga_browse_state';
+/** /manga/search 的關鍵字與來源選擇；切換安全模式時要一起清掉 */
+export const MANGA_SEARCH_STATE_KEY = 'manga_search_state';
 
 export interface MangaBrowseState {
   listHref: string;

@@ -24,6 +24,7 @@ import {
   MangaShelfItem,
   MangaSource,
 } from '@/lib/manga.types';
+import { MANGA_SEARCH_STATE_KEY } from '@/lib/manga-browse-state';
 import { buildMangaDetailHref } from '@/lib/manga-reader';
 import {
   type MangaCreatorFilter,
@@ -50,7 +51,6 @@ import { useMangaChapterSummaryQueue } from '@/hooks/useMangaChapterSummaryQueue
 import MangaSourceMultiPicker from '@/components/manga/MangaSourceMultiPicker';
 import MangaCard from '@/components/MangaCard';
 
-const MANGA_SEARCH_STATE_KEY = 'manga_search_state';
 const MANGA_SOURCE_PLAN_TIMEOUT_MS = 3000;
 
 /*

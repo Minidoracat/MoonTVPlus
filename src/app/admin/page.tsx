@@ -143,7 +143,7 @@ const buttonStyles = {
     'px-2 py-1 text-xs font-medium bg-gray-400 dark:bg-gray-600 cursor-not-allowed text-white rounded-md transition-colors',
   // 开关按钮样式
   toggleOn: 'bg-green-600 dark:bg-green-600',
-  toggleOff: 'bg-gray-200 dark:bg-gray-700',
+  toggleOff: 'bg-gray-500 dark:bg-gray-500',
   toggleThumb: 'bg-white',
   toggleThumbOn: 'translate-x-6',
   toggleThumbOff: 'translate-x-1',
@@ -703,6 +703,7 @@ const UserConfig = ({
     tags?: string[];
     created_at?: number;
     oidcSub?: string;
+    mangaAdult?: boolean;
   }> = !hasOldUserData && usersV2 ? usersV2 : config?.UserConfig?.Users || [];
 
   // 使用 useMemo 计算全选状态，避免每次渲染都重新计算
@@ -1164,6 +1165,14 @@ const UserConfig = ({
     });
   };
 
+  const handleSetMangaAdult = async (username: string, allowed: boolean) => {
+    await withLoading(`setMangaAdult_${username}`, () =>
+      handleUserAction('setMangaAdult', username, undefined, undefined, {
+        allowed,
+      })
+    );
+  };
+
   // 通用请求函数
   const handleUserAction = async (
     action:
@@ -1173,10 +1182,12 @@ const UserConfig = ({
       | 'setAdmin'
       | 'cancelAdmin'
       | 'changePassword'
-      | 'deleteUser',
+      | 'deleteUser'
+      | 'setMangaAdult',
     targetUsername: string,
     targetPassword?: string,
-    userGroup?: string
+    userGroup?: string,
+    extraBody?: Record<string, unknown>
   ) => {
     try {
       const res = await fetch('/api/admin/user', {
@@ -1186,6 +1197,7 @@ const UserConfig = ({
           targetUsername,
           ...(targetPassword ? { targetPassword } : {}),
           ...(userGroup ? { userGroup } : {}),
+          ...extraBody,
           action,
         }),
       });
@@ -1729,6 +1741,12 @@ const UserConfig = ({
                     scope='col'
                     className='px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider'
                   >
+                    成人漫画
+                  </th>
+                  <th
+                    scope='col'
+                    className='px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider'
+                  >
                     用户组
                   </th>
                   <th
@@ -1753,7 +1771,7 @@ const UserConfig = ({
                     <tbody>
                       <tr>
                         <td
-                          colSpan={8}
+                          colSpan={9}
                           className='px-6 py-8 text-center text-gray-500 dark:text-gray-400'
                         >
                           加载中...
@@ -1778,7 +1796,7 @@ const UserConfig = ({
                     <tbody>
                       <tr>
                         <td
-                          colSpan={8}
+                          colSpan={9}
                           className='px-6 py-8 text-center text-gray-500 dark:text-gray-400'
                         >
                           {trimmedUserSearch
@@ -1882,6 +1900,52 @@ const UserConfig = ({
                             >
                               {!user.banned ? '正常' : '已封禁'}
                             </span>
+                          </td>
+                          <td className='px-6 py-4 whitespace-nowrap'>
+                            {user.role === 'owner' ? (
+                              <span className='text-sm text-gray-500 dark:text-gray-400'>
+                                始终可见
+                              </span>
+                            ) : role === 'owner' ||
+                              (role === 'admin' &&
+                                (user.role === 'user' ||
+                                  user.username === currentUsername)) ? (
+                              <button
+                                type='button'
+                                role='switch'
+                                aria-checked={Boolean(user.mangaAdult)}
+                                aria-label={`允许 ${user.username} 查看成人漫画源`}
+                                onClick={() =>
+                                  handleSetMangaAdult(
+                                    user.username,
+                                    !user.mangaAdult
+                                  )
+                                }
+                                disabled={isLoading(
+                                  `setMangaAdult_${user.username}`
+                                )}
+                                className={`relative inline-flex h-6 w-11 items-center rounded-full disabled:opacity-50 ${
+                                  user.mangaAdult
+                                    ? buttonStyles.toggleOn
+                                    : buttonStyles.toggleOff
+                                }`}
+                              >
+                                <span
+                                  aria-hidden='true'
+                                  className={`h-4 w-4 rounded-full ${
+                                    buttonStyles.toggleThumb
+                                  } motion-safe:transition-transform ${
+                                    user.mangaAdult
+                                      ? buttonStyles.toggleThumbOn
+                                      : buttonStyles.toggleThumbOff
+                                  }`}
+                                />
+                              </button>
+                            ) : (
+                              <span className='text-sm text-gray-900 dark:text-gray-100'>
+                                {user.mangaAdult ? '可见' : '不可见'}
+                              </span>
+                            )}
                           </td>
                           <td className='px-6 py-4 whitespace-nowrap'>
                             <div className='flex items-center space-x-2'>

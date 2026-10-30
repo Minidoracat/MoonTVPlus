@@ -3,7 +3,7 @@ import { createHash } from 'crypto';
 import { NextRequest, NextResponse } from 'next/server';
 import sharp from 'sharp';
 
-import { getAuthorizedUsername, mangaErrorResponse } from '../_utils';
+import { getMangaViewer, mangaErrorResponse } from '../_utils';
 import { readAllBounded } from '@/lib/bounded-read';
 import { acceptsWebp } from '@/lib/http-accept';
 import { resolveMangaImageUrl } from '@/lib/manga-image-path';
@@ -60,8 +60,8 @@ const UNIVERSALLY_DECODABLE = new Set([
 ]);
 
 export async function GET(request: NextRequest) {
-  const username = await getAuthorizedUsername(request);
-  if (username instanceof NextResponse) return username;
+  const viewer = await getMangaViewer(request);
+  if (viewer instanceof NextResponse) return viewer;
 
   try {
     const pathOrUrl = new URL(request.url).searchParams.get('path')?.trim();
@@ -76,7 +76,7 @@ export async function GET(request: NextRequest) {
     );
     // path 裡的 mangaId 是客戶端給的，必須反查真正的來源再驗白名單，
     // 否則被停用來源的封面／內頁仍可直接讀出
-    await suwayomiClient.assertMangaAllowed(mangaId);
+    await suwayomiClient.assertMangaAllowed(mangaId, viewer.adult);
 
     // 上游（Suwayomi）不提供 ETag 也不提供 Last-Modified，只給
     // `Cache-Control: max-age=86400`，所以無法轉送它的 validator。

@@ -68,6 +68,59 @@ export interface MangaSource {
 }
 
 /**
+ * 這位使用者看不看得到漫畫成人源：
+ * - none：管理員沒開放。看不到，也看不出有成人源存在。
+ * - shown：已開放，安全模式關。
+ * - hidden：已開放，安全模式開。看到的與 none 相同，只有錯誤會帶 safe_mode。
+ */
+export type MangaAdultView = 'none' | 'shown' | 'hidden';
+
+/** 站名本身就是成人站、但上游沒標 NSFW 的來源。全部小寫，比對前把站名轉小寫。 */
+const ADULT_SOURCE_MARKERS = [
+  '禁漫',
+  '绅士',
+  '紳士',
+  '哔咔',
+  '18漫',
+  'cartoon18',
+  'hanman',
+  'hanime',
+  'boylove',
+  '香香腐宅',
+  '肉漫',
+  '一耽',
+  '六漫画',
+  '六漫畫',
+  'picacomic',
+  'wnacg',
+  'jcomic',
+  'noyacg',
+  'toptoon',
+  '頂通',
+  '巴卡',
+  'h-comic',
+  'hcomic',
+];
+
+export function isAdultSourceName(name?: string): boolean {
+  const text = (name || '').toLowerCase();
+  return ADULT_SOURCE_MARKERS.some((marker) => text.includes(marker));
+}
+
+/**
+ * 成人源判斷。**唯一的判斷來源**：選源分類、源管理的「成人」標籤、伺服器權限
+ * 都用這一份。只改一邊，就會出現「面板沒標成人、使用者卻被擋」或反過來。
+ */
+export function isAdultMangaSource(
+  source: Pick<MangaSource, 'name' | 'displayName' | 'contentWarning'>
+): boolean {
+  return (
+    source.contentWarning === 'NSFW' ||
+    isAdultSourceName(`${source.name || ''} ${source.displayName || ''}`)
+  );
+}
+
+/**
  * Suwayomi source meta 的 key：主機上的 Suwayomi 對外分流（egress/warp_route.py）
  * 把每個來源目前走 WARP 還是直連寫在這裡，管理面板唯讀顯示。
  */

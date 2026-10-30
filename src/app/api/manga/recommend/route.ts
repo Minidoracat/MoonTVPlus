@@ -8,14 +8,14 @@ import {
 import { MangaRecommendType } from '@/lib/manga.types';
 import { suwayomiClient } from '@/lib/suwayomi.client';
 
-import { getAuthorizedUsername, mangaErrorResponse } from '../_utils';
+import { getMangaViewer, mangaErrorResponse } from '../_utils';
 
 export const runtime = 'nodejs';
 
 
 export async function GET(request: NextRequest) {
-  const username = await getAuthorizedUsername(request);
-  if (username instanceof NextResponse) return username;
+  const viewer = await getMangaViewer(request);
+  if (viewer instanceof NextResponse) return viewer;
 
   try {
     const { searchParams } = new URL(request.url);
@@ -72,7 +72,8 @@ export async function GET(request: NextRequest) {
       type,
       parsedPage.page,
       filters,
-      keyword
+      keyword,
+      viewer.adult
     );
     return NextResponse.json(result);
   } catch (error) {

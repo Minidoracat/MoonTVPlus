@@ -69,60 +69,60 @@ describe('降級設定下的授權（fail closed）', () => {
     });
 
     it('getSearchSources（指定單一來源）要拒絕，且不得外連', async () => {
-      await expect(client.getSearchSources('123')).rejects.toThrow(FORBIDDEN);
+      await expect(client.getSearchSources('123', 'shown')).rejects.toThrow(FORBIDDEN);
       expect(fetchMock).not.toHaveBeenCalled();
     });
 
     it('getSearchSources（多來源）要拒絕', async () => {
-      await expect(client.getSearchSources(['123', '456'])).rejects.toThrow(
+      await expect(client.getSearchSources(['123', '456'], 'shown')).rejects.toThrow(
         FORBIDDEN
       );
       expect(fetchMock).not.toHaveBeenCalled();
     });
 
     it('getSearchSources（未指定＝全部來源）要拒絕', async () => {
-      await expect(client.getSearchSources()).rejects.toThrow(FORBIDDEN);
+      await expect(client.getSearchSources(undefined, 'shown')).rejects.toThrow(FORBIDDEN);
       expect(fetchMock).not.toHaveBeenCalled();
     });
 
     it('searchManga 要拒絕（經由 getSearchSources）', async () => {
-      await expect(client.searchManga('海', '123')).rejects.toThrow(FORBIDDEN);
+      await expect(client.searchManga('海', '123', 1, 'shown')).rejects.toThrow(FORBIDDEN);
       expect(fetchMock).not.toHaveBeenCalled();
     });
 
     it('getSourceFilters 要拒絕', async () => {
-      await expect(client.getSourceFilters('123')).rejects.toThrow(FORBIDDEN);
+      await expect(client.getSourceFilters('123', 'shown')).rejects.toThrow(FORBIDDEN);
       expect(fetchMock).not.toHaveBeenCalled();
     });
 
     it('getRecommendedManga 要拒絕', async () => {
       await expect(
-        client.getRecommendedManga('123', 'POPULAR', 1)
+        client.getRecommendedManga('123', 'POPULAR', 1, [], '', 'shown')
       ).rejects.toThrow(FORBIDDEN);
       expect(fetchMock).not.toHaveBeenCalled();
     });
 
     it('assertMangaAllowed 要拒絕（圖片代理入口）', async () => {
-      await expect(client.assertMangaAllowed('1307')).rejects.toThrow();
+      await expect(client.assertMangaAllowed('1307', 'shown')).rejects.toThrow();
       expect(fetchMock).not.toHaveBeenCalled();
     });
 
     it('getMangaDetail 要拒絕，且不得先送 manga(id:) 查詢', async () => {
       await expect(
-        client.getMangaDetail({ mangaId: '1307', sourceId: '123' })
+        client.getMangaDetail({ mangaId: '1307', sourceId: '123' }, 'shown')
       ).rejects.toThrow(FORBIDDEN);
       expect(fetchMock).not.toHaveBeenCalled();
     });
 
     it('getChapterSummaries 要拒絕，且不得先讀 summary cache 或外連', async () => {
       await expect(
-        client.getChapterSummaries([{ mangaId: '1307', sourceId: '123' }])
+        client.getChapterSummaries([{ mangaId: '1307', sourceId: '123' }], 'shown')
       ).rejects.toThrow(FORBIDDEN);
       expect(fetchMock).not.toHaveBeenCalled();
     });
 
     it('getChapterPages 要拒絕，且不得先送 ChapterSource 反查', async () => {
-      await expect(client.getChapterPages('6505')).rejects.toThrow(FORBIDDEN);
+      await expect(client.getChapterPages('6505', 'shown')).rejects.toThrow(FORBIDDEN);
       expect(fetchMock).not.toHaveBeenCalled();
     });
 
@@ -140,7 +140,7 @@ describe('降級設定下的授權（fail closed）', () => {
     it('不因政策未知而拒絕，會往下走到實際查詢', async () => {
       // fetch 被 mock 成失敗，所以預期的是「上游錯誤」而非授權錯誤。
       // 關鍵是不能是 FORBIDDEN —— 那代表正常運作被 policyKnown 誤擋。
-      await expect(client.getSearchSources('123')).rejects.not.toThrow(
+      await expect(client.getSearchSources('123', 'shown')).rejects.not.toThrow(
         FORBIDDEN
       );
       expect(fetchMock).toHaveBeenCalled();
@@ -235,8 +235,8 @@ describe('getMangaDetail 的詳情快取', () => {
 
   it('併發的相同請求合併成一發上游', async () => {
     await Promise.all([
-      client.getMangaDetail({ mangaId: MANGA_ID, sourceId: SOURCE_ID }),
-      client.getMangaDetail({ mangaId: MANGA_ID, sourceId: SOURCE_ID }),
+      client.getMangaDetail({ mangaId: MANGA_ID, sourceId: SOURCE_ID }, 'shown'),
+      client.getMangaDetail({ mangaId: MANGA_ID, sourceId: SOURCE_ID }, 'shown'),
     ]);
     expect(requestBodies.filter((b) => b.includes(DETAIL_QUERY))).toHaveLength(
       1
@@ -247,8 +247,8 @@ describe('getMangaDetail 的詳情快取', () => {
   });
 
   it('TTL 內重複請求不再打上游', async () => {
-    await client.getMangaDetail({ mangaId: MANGA_ID, sourceId: SOURCE_ID });
-    await client.getMangaDetail({ mangaId: MANGA_ID, sourceId: SOURCE_ID });
+    await client.getMangaDetail({ mangaId: MANGA_ID, sourceId: SOURCE_ID }, 'shown');
+    await client.getMangaDetail({ mangaId: MANGA_ID, sourceId: SOURCE_ID }, 'shown');
     expect(requestBodies.filter((b) => b.includes(DETAIL_QUERY))).toHaveLength(
       1
     );
@@ -258,14 +258,14 @@ describe('getMangaDetail 的詳情快取', () => {
   });
 
   it('5 分钟后在背景重新读取来源事实（呼叫端先拿到 stale）', async () => {
-    await client.getMangaDetail({ mangaId: MANGA_ID, sourceId: SOURCE_ID });
+    await client.getMangaDetail({ mangaId: MANGA_ID, sourceId: SOURCE_ID }, 'shown');
     const now = Date.now();
     const dateSpy = jest
       .spyOn(Date, 'now')
       .mockReturnValue(now + 5 * 60_000 + 1);
     try {
       // 過期的這次不阻塞呼叫端：兩份事實由背景那一輪重抓
-      await client.getMangaDetail({ mangaId: MANGA_ID, sourceId: SOURCE_ID });
+      await client.getMangaDetail({ mangaId: MANGA_ID, sourceId: SOURCE_ID }, 'shown');
       // 背景鏈全是 microtask，排空即等於跑完（stale-while-revalidate 的
       // 完整行為另見 suwayomi-detail-swr.test.ts）
       for (let tick = 0; tick < 50; tick += 1) {
@@ -288,11 +288,11 @@ describe('getMangaDetail 的詳情快取', () => {
       sourceId: SOURCE_ID,
       sourceName: '呼叫端来源名',
       description: '呼叫端简介',
-    });
+    }, 'shown');
     const withoutFallback = await client.getMangaDetail({
       mangaId: MANGA_ID,
       sourceId: SOURCE_ID,
-    });
+    }, 'shown');
 
     expect(withFallback.description).toBe('呼叫端简介');
     expect(withFallback.sourceName).toBe('呼叫端来源名');
@@ -306,11 +306,11 @@ describe('getMangaDetail 的詳情快取', () => {
   });
 
   it('命中快取仍要驗權：來源被移出白名單後必須拒絕', async () => {
-    await client.getMangaDetail({ mangaId: MANGA_ID, sourceId: SOURCE_ID });
+    await client.getMangaDetail({ mangaId: MANGA_ID, sourceId: SOURCE_ID }, 'shown');
     setConfigState(false, ['999']);
 
     await expect(
-      client.getMangaDetail({ mangaId: MANGA_ID, sourceId: SOURCE_ID })
+      client.getMangaDetail({ mangaId: MANGA_ID, sourceId: SOURCE_ID }, 'shown')
     ).rejects.toThrow();
     // 拒絕是由每次都跑的授權檢查造成，不是因為快取失效重打上游
     expect(requestBodies.filter((b) => b.includes(DETAIL_QUERY))).toHaveLength(
@@ -321,14 +321,14 @@ describe('getMangaDetail 的詳情快取', () => {
   it('上游失敗不留快取，下次重新嘗試', async () => {
     chaptersFail = true;
     await expect(
-      client.getMangaDetail({ mangaId: MANGA_ID, sourceId: SOURCE_ID })
+      client.getMangaDetail({ mangaId: MANGA_ID, sourceId: SOURCE_ID }, 'shown')
     ).rejects.toThrow();
 
     chaptersFail = false;
     const detail = await client.getMangaDetail({
       mangaId: MANGA_ID,
       sourceId: SOURCE_ID,
-    });
+    }, 'shown');
     expect(detail.chapters).toHaveLength(1);
     expect(requestBodies.filter((b) => b.includes(DETAIL_QUERY))).toHaveLength(
       2
@@ -339,7 +339,7 @@ describe('getMangaDetail 的詳情快取', () => {
     const absolute = await client.getMangaDetail({
       mangaId: MANGA_ID,
       sourceId: SOURCE_ID,
-    });
+    }, 'shown');
     expect(absolute.realUrl).toBe('https://source.example/manga/1307');
     expect(absolute.chapters[0].realUrl).toBe(
       'https://source.example/chapter/1'
@@ -351,7 +351,7 @@ describe('getMangaDetail 的詳情快取', () => {
     const relative = await relativeClient.getMangaDetail({
       mangaId: MANGA_ID,
       sourceId: SOURCE_ID,
-    });
+    }, 'shown');
     expect(relative.realUrl).toBeUndefined();
     expect(relative.chapters[0].realUrl).toBeUndefined();
 
@@ -361,7 +361,7 @@ describe('getMangaDetail 的詳情快取', () => {
     const script = await scriptClient.getMangaDetail({
       mangaId: MANGA_ID,
       sourceId: SOURCE_ID,
-    });
+    }, 'shown');
     expect(script.realUrl).toBeUndefined();
     expect(script.chapters[0].realUrl).toBeUndefined();
   });
@@ -465,12 +465,12 @@ describe('getChapterSummaries 的摘要補抓', () => {
       },
     };
 
-    await expect(client.getChapterSummaries(items)).resolves.toEqual(expected);
+    await expect(client.getChapterSummaries(items, 'shown')).resolves.toEqual(expected);
     expect(requestBodies.filter((body) => body.includes(SUMMARY_QUERY))).toHaveLength(2);
     expect(requestBodies.filter((body) => body.includes(CHAPTERS_QUERY))).toHaveLength(1);
 
     const requestCount = requestBodies.length;
-    await expect(client.getChapterSummaries(items)).resolves.toEqual(expected);
+    await expect(client.getChapterSummaries(items, 'shown')).resolves.toEqual(expected);
     expect(requestBodies).toHaveLength(requestCount);
   });
 
@@ -478,7 +478,7 @@ describe('getChapterSummaries 的摘要補抓', () => {
     await expect(
       client.getChapterSummaries([
         { sourceId: SOURCE_ID, mangaId: STALE_ID },
-      ])
+      ], 'shown')
     ).resolves.toEqual({
       [`${SOURCE_ID}+${STALE_ID}`]: { count: 3, latestName: '第 3 话' },
     });
@@ -491,7 +491,7 @@ describe('getChapterSummaries 的摘要補抓', () => {
     await expect(
       client.getChapterSummaries([
         { sourceId: SOURCE_ID, mangaId: BLOCKED_ID },
-      ])
+      ], 'shown')
     ).resolves.toEqual({});
     expect(requestBodies.some((body) => body.includes('fetchChapters'))).toBe(
       false
@@ -505,7 +505,7 @@ describe('getChapterSummaries 的摘要補抓', () => {
     await expect(
       client.getChapterSummaries([
         { sourceId: SOURCE_ID, mangaId: MISMATCH_ID },
-      ])
+      ], 'shown')
     ).resolves.toEqual({});
     expect(requestBodies.some((body) => body.includes('fetchChapters'))).toBe(
       false
@@ -554,25 +554,25 @@ describe('getChapterPages 的內頁快取', () => {
   const pageFetches = () => requestBodies.filter((b) => b.includes(PAGES_QUERY)).length;
 
   it('同一話在 TTL 內不再打上游，併發請求也只發一次', async () => {
-    const [first] = await Promise.all([client.getChapterPages('1'), client.getChapterPages('1')]);
-    const again = await client.getChapterPages('1');
+    const [first] = await Promise.all([client.getChapterPages('1', 'shown'), client.getChapterPages('1', 'shown')]);
+    const again = await client.getChapterPages('1', 'shown');
     expect(again).toEqual(first);
     expect(first[0]).toContain('/api/manga/image');
     expect(pageFetches()).toBe(1);
   });
 
   it('命中快取仍要驗權：來源被移出白名單後必須拒絕', async () => {
-    await client.getChapterPages('1');
+    await client.getChapterPages('1', 'shown');
     setConfigState(false, ['999']);
-    await expect(client.getChapterPages('1')).rejects.toThrow();
+    await expect(client.getChapterPages('1', 'shown')).rejects.toThrow();
     expect(pageFetches()).toBe(1);
   });
 
   it('上游回空清單不快取，下次重新抓', async () => {
     pages = [];
-    await expect(client.getChapterPages('1')).resolves.toEqual([]);
+    await expect(client.getChapterPages('1', 'shown')).resolves.toEqual([]);
     pages = ['/api/v1/manga/1307/chapter/1/page/0'];
-    await expect(client.getChapterPages('1')).resolves.toHaveLength(1);
+    await expect(client.getChapterPages('1', 'shown')).resolves.toHaveLength(1);
     expect(pageFetches()).toBe(2);
   });
 });

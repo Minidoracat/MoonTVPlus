@@ -8,7 +8,8 @@ import './globals.css';
 
 import { parseAuthInfo } from '@/lib/auth';
 import { getConfig } from '@/lib/config';
-import { getUserFeatureAccess } from '@/lib/permissions';
+import type { MangaAdultView } from '@/lib/manga.types';
+import { getMangaAdultView, getUserFeatureAccess } from '@/lib/permissions';
 import { listEnabledSourceScripts } from '@/lib/source-script';
 
 import ActivityLogger from '../components/ActivityLogger';
@@ -147,10 +148,13 @@ export default async function RootLayout({
   // 入口开关是本机 cookie，与存储模式无关，所以 localstorage 模式也要注入；
   // getConfig() 有模块级缓存，generateMetadata 里已经调过一次，这里不产生额外读取。
   const specialSourceApis = (await getConfig()).SpecialSourceApis || [];
+  const localOwner = process.env.USERNAME || 'localstorage-owner';
   let userFeatureAccess =
     storageType === 'localstorage'
-      ? await getUserFeatureAccess(process.env.USERNAME || 'localstorage-owner')
+      ? await getUserFeatureAccess(localOwner)
       : await getUserFeatureAccess(null);
+  let mangaAdultView: MangaAdultView =
+    storageType === 'localstorage' ? await getMangaAdultView(localOwner) : 'none';
   let customCategories = [] as {
     name: string;
     type: 'movie' | 'tv';
@@ -160,6 +164,7 @@ export default async function RootLayout({
     const cookieStore = await cookies();
     const authInfo = parseAuthInfo(cookieStore.get('auth')?.value);
     userFeatureAccess = await getUserFeatureAccess(authInfo?.username);
+    mangaAdultView = await getMangaAdultView(authInfo?.username);
 
     const config = await getConfig();
     siteName = config.SiteConfig.SiteName;
@@ -362,6 +367,7 @@ export default async function RootLayout({
     MUSIC_ENABLED: musicFeatureEnabled && userFeatureAccess.music,
     MUSIC_PROXY_ENABLED: musicProxyEnabled,
     SUWAYOMI_ENABLED: suwayomiEnabled && userFeatureAccess.manga,
+    MANGA_ADULT: suwayomiEnabled && userFeatureAccess.manga ? mangaAdultView : 'none',
     BOOKS_ENABLED: booksEnabled && userFeatureAccess.books,
     NETDISK_SEARCH_ENABLED: userFeatureAccess.netdisk_search,
     MAGNET_SEARCH_ENABLED: userFeatureAccess.magnet_search,

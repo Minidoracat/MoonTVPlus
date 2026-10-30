@@ -8,6 +8,7 @@ import {
   type FeaturePermissionKey,
   sanitizeFeaturePermissions,
 } from '@/lib/feature-permissions';
+import type { MangaAdultView } from '@/lib/manga.types';
 
 export type FeatureAccessMap = Record<FeaturePermissionKey, boolean>;
 
@@ -76,6 +77,32 @@ export async function getUserFeatureAccess(username?: string | null): Promise<Fe
     return username === process.env.USERNAME
       ? createFullFeatureAccessMap()
       : createEmptyFeatureAccessMap();
+  }
+}
+
+/**
+ * 這位使用者看不看得到漫畫成人源，以及有沒有開安全模式。
+ * 站長一律開放；其他人（含管理員）要管理員在使用者列表逐一開放，沒開就是 none。
+ */
+export async function getMangaAdultView(
+  username?: string | null
+): Promise<MangaAdultView> {
+  if (!username) return 'none';
+  // localstorage 模式只有站長一人，伺服器端也沒有地方存安全模式
+  if ((process.env.NEXT_PUBLIC_STORAGE_TYPE || 'localstorage') === 'localstorage') {
+    return 'shown';
+  }
+  try {
+    const info = await db.getUserInfoV2(username);
+    const isOwner = username === process.env.USERNAME;
+    if (!isOwner && (!info || info.banned || info.mangaAdult !== true)) {
+      return 'none';
+    }
+    return info?.mangaSafeMode ? 'hidden' : 'shown';
+  } catch (error) {
+    // 讀不到就當沒開放：DB 故障時寧可藏起來，也不能露出
+    console.error('[Permissions] Failed to load manga adult view:', error);
+    return 'none';
   }
 }
 

@@ -9,6 +9,8 @@ interface CachedUserInfo {
   enabledApis?: string[];
   created_at: number;
   playrecord_migrated?: boolean;
+  mangaAdult?: boolean;
+  mangaSafeMode?: boolean;
   cachedAt: number;
 }
 

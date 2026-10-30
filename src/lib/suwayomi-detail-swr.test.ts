@@ -148,7 +148,7 @@ describe('詳情快取的 stale-while-revalidate', () => {
   });
 
   const load = () =>
-    client.getMangaDetail({ mangaId: MANGA_ID, sourceId: SOURCE_ID });
+    client.getMangaDetail({ mangaId: MANGA_ID, sourceId: SOURCE_ID }, 'shown');
 
   it('過期後先回 stale，背景那一發 resolve 之後才換成新值', async () => {
     expect((await load()).title).toBe('旧标题');

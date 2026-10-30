@@ -16,7 +16,12 @@
 
 import { clearAuthCookie,getAuthInfoFromBrowserCookie } from './auth';
 import { normalizeEpisodeFilterConfig } from './episode-filter';
-import { MangaChapterSummary, MangaReadRecord, MangaShelfItem } from './manga.types';
+import {
+  MangaAdultView,
+  MangaChapterSummary,
+  MangaReadRecord,
+  MangaShelfItem,
+} from './manga.types';
 import {
   filterRecordsBySpecialSourceContext,
   isSpecialSourceContext,
@@ -33,6 +38,14 @@ function triggerGlobalError(message: string) {
       })
     );
   }
+}
+
+/** layout 注入的漫畫成人源可見狀態；伺服器端或沒有注入時一律 none */
+export function currentMangaAdultView(): MangaAdultView {
+  if (typeof window === 'undefined') return 'none';
+  const view = (window as Window & { RUNTIME_CONFIG?: { MANGA_ADULT?: unknown } })
+    .RUNTIME_CONFIG?.MANGA_ADULT;
+  return view === 'shown' || view === 'hidden' ? view : 'none';
 }
 
 // ---- 类型 ----
@@ -92,8 +105,9 @@ interface CacheData<T> {
 interface UserCacheStore {
   playRecords?: CacheData<Record<string, PlayRecord>>;
   favorites?: CacheData<Record<string, Favorite>>;
-  mangaShelf?: CacheData<Record<string, MangaShelfItem>>;
-  mangaReadRecords?: CacheData<Record<string, MangaReadRecord>>;
+  // 寫入時的成人源可見狀態；與目前不同就當沒有快取
+  mangaShelf?: CacheData<Record<string, MangaShelfItem>> & { view?: MangaAdultView };
+  mangaReadRecords?: CacheData<Record<string, MangaReadRecord>> & { view?: MangaAdultView };
   searchHistory?: CacheData<string[]>;
   skipConfigs?: CacheData<Record<string, SkipConfig>>;
   danmakuFilterConfig?: CacheData<DanmakuFilterConfig>;
@@ -383,7 +397,8 @@ class HybridCacheManager {
     const userCache = this.getUserCache(username);
     const cached = userCache.mangaShelf;
 
-    if (cached && this.isCacheValid(cached)) {
+    // 換了安全模式狀態（或在別台裝置切換）時，舊快取裡的漫畫不能先閃出來
+    if (cached && this.isCacheValid(cached) && cached.view === currentMangaAdultView()) {
       return cached.data;
     }
 
@@ -395,7 +410,7 @@ class HybridCacheManager {
     if (!username) return;
 
     const userCache = this.getUserCache(username);
-    userCache.mangaShelf = this.createCacheData(data);
+    userCache.mangaShelf = { ...this.createCacheData(data), view: currentMangaAdultView() };
     this.saveUserCache(username, userCache);
   }
 
@@ -413,7 +428,7 @@ class HybridCacheManager {
     const userCache = this.getUserCache(username);
     const cached = userCache.mangaReadRecords;
 
-    if (cached && this.isCacheValid(cached)) {
+    if (cached && this.isCacheValid(cached) && cached.view === currentMangaAdultView()) {
       return cached.data;
     }
 
@@ -425,7 +440,7 @@ class HybridCacheManager {
     if (!username) return;
 
     const userCache = this.getUserCache(username);
-    userCache.mangaReadRecords = this.createCacheData(data);
+    userCache.mangaReadRecords = { ...this.createCacheData(data), view: currentMangaAdultView() };
     this.saveUserCache(username, userCache);
   }
 

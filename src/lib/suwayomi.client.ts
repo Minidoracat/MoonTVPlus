@@ -5,9 +5,11 @@ import { createHash } from 'crypto';
 import { getConfig, isDegradedConfigObject } from './config';
 import {
   buildFilterChangeInputs,
+  isAdultMangaSource,
   isMangaSourceAllowed,
   MANGA_DISABLE_ALL_SENTINEL,
   MANGA_EGRESS_META_KEY,
+  MangaAdultView,
   MangaChapter,
   MangaChapterSummary,
   MangaDetail,
@@ -33,6 +35,7 @@ import {
 import { orderMangaChapters } from './manga-reader';
 import {
   isSuwayomiUnknownFieldError,
+  MangaSafeModeError,
   MangaSourceForbiddenError,
 } from './suwayomi-errors';
 import { normalizeApiBaseUrl } from './url';
@@ -706,6 +709,17 @@ export class SuwayomiClient {
       value?: { sourceId: string; pages: string[] };
     }
   >();
+  /**
+   * 成人源 id 集合（getAdultSourceIds）。上游失敗時沿用上次成功的結果，
+   * 所以只記一份、帶伺服器位址；換伺服器後舊集合不算數。
+   */
+  private static readonly ADULT_SOURCE_IDS_TTL_MS = 60_000;
+  private adultSourceIds?: {
+    serverBaseUrl: string;
+    at: number;
+    value: Set<string>;
+  };
+  private adultSourceIdsInflight?: Promise<Set<string>>;
 
   /** Map 以插入序疊代，重設 key 前先 delete 即可把它移到尾端 */
   private static capMap(map: Map<string, unknown>, max: number): void {
@@ -846,6 +860,47 @@ export class SuwayomiClient {
   }
 
   /**
+   * 成人源的 id，給書架、歷史、通知、排程這些只帶 sourceId 的紀錄做讀取時過濾。
+   * 用不套政策的完整清單：被全站停用的成人源，舊紀錄一樣要藏。
+   * 上游失敗時沿用上次成功的結果；從沒成功過就丟錯（寧可讀不到也不露出）。
+   */
+  async getAdultSourceIds(): Promise<Set<string>> {
+    const resolved = await resolveSuwayomiConfig(this.options);
+    const last =
+      this.adultSourceIds?.serverBaseUrl === resolved.serverBaseUrl
+        ? this.adultSourceIds
+        : undefined;
+    if (last && Date.now() - last.at < SuwayomiClient.ADULT_SOURCE_IDS_TTL_MS) {
+      return last.value;
+    }
+    if (!this.adultSourceIdsInflight) {
+      this.adultSourceIdsInflight = this.fetchSources(undefined, resolved, true)
+        .then((sources) => {
+          const value = new Set(
+            sources
+              .filter((source) => isAdultMangaSource(source))
+              .map((source) => source.id)
+          );
+          this.adultSourceIds = {
+            serverBaseUrl: resolved.serverBaseUrl,
+            at: Date.now(),
+            value,
+          };
+          return value;
+        })
+        .finally(() => {
+          this.adultSourceIdsInflight = undefined;
+        });
+    }
+    try {
+      return await this.adultSourceIdsInflight;
+    } catch (error) {
+      if (last) return last.value;
+      throw error;
+    }
+  }
+
+  /**
    * 各來源目前走 WARP 還是直連（主機分流腳本寫在 source meta）。
    * 僅限管理面板：出口主機屬於基礎設施資訊，不給一般使用者路徑。
    */
@@ -977,7 +1032,8 @@ ${fields}
   }
 
   async getSearchSources(
-    sourceId?: string | string[]
+    sourceId: string | string[] | undefined,
+    adult: MangaAdultView
   ): Promise<Array<{ id: string; displayName?: string; name?: string }>> {
     const resolved = await resolveSuwayomiConfig(this.options);
     // 這條路不走 assertSourceAllowed（它自己比對 getSources()），
@@ -997,7 +1053,10 @@ ${fields}
     if (requested.length > 0) {
       // getSources() 已套用 admin 的 SourceIds 允許清單；
       // 不在清單內的 id 一律丟掉，避免用 URL 直接繞過管理員限制。
-      const known = await this.getSources();
+      // 成人源只給 shown；兩條路徑都在切 maxSources 之前濾，否則成人源會佔掉名額。
+      const known = (await this.getSources()).filter(
+        (item) => adult === 'shown' || !isAdultMangaSource(item)
+      );
       const byId = new Map(known.map((item) => [item.id, item]));
       const allowed = requested.filter((id) => byId.has(id));
 
@@ -1016,10 +1075,9 @@ ${fields}
     }
 
     try {
-      return (await this.getSources(resolved.defaultLang)).slice(
-        0,
-        resolved.maxSources
-      );
+      return (await this.getSources(resolved.defaultLang))
+        .filter((item) => adult === 'shown' || !isAdultMangaSource(item))
+        .slice(0, resolved.maxSources);
     } catch (error) {
       // fail-closed 的授權錯誤絕不可被 fallback 吞掉 ——
       // 否則「政策不可信」或「剛被停用」會被降級成「來源清單暫時取不到」，
@@ -1038,10 +1096,14 @@ ${fields}
           '无法读取来源限制设置，已暂时拒绝访问'
         );
       }
+      // 這裡沒有來源名稱可判斷，成人源改用 id 集合；它也取不到就整個丟錯
+      const adultIds =
+        adult === 'shown' ? new Set<string>() : await this.getAdultSourceIds();
       const usable = fresh.sourceIds.filter(
         (id) =>
           id !== MANGA_DISABLE_ALL_SENTINEL &&
-          isMangaSourceAllowed(id, fresh.sourceIds, fresh.disabledSourceIds)
+          isMangaSourceAllowed(id, fresh.sourceIds, fresh.disabledSourceIds) &&
+          !adultIds.has(id)
       );
       if (usable.length === 0) {
         throw new MangaSourceForbiddenError();
@@ -1239,10 +1301,11 @@ ${fields}
 
   async searchManga(
     keyword: string,
-    sourceId?: string | string[],
-    page = 1
+    sourceId: string | string[] | undefined,
+    page: number,
+    adult: MangaAdultView
   ): Promise<MangaSearchResult> {
-    const sources = await this.getSearchSources(sourceId);
+    const sources = await this.getSearchSources(sourceId, adult);
     const results: MangaSearchItem[] = [];
     const failedSources: MangaSearchFailure[] = [];
     const measurements: MangaSourceMeasurement[] = [];
@@ -1308,11 +1371,13 @@ ${fields}
   }
 
   /**
-   * 確認 sourceId 在 admin 的允許清單內（getSources 已套用 SourceIds）。
+   * 確認 sourceId 在 admin 的允許清單內（getSources 已套用 SourceIds），
+   * 且成人源只放行 adult === 'shown' 的檢視者。
    * 所有以 sourceId 對外發請求的入口都要先過這道，否則使用者可用 URL 繞過管理員限制。
    */
   private async assertSourceAllowed(
-    sourceId: string
+    sourceId: string,
+    adult: MangaAdultView
   ): Promise<MangaSource | undefined> {
     // getSources() 自己會在政策不可信時丟 MangaSourceForbiddenError，
     // 所以這裡不需要（也不該）再讀一次全域旗標——那會有 TOCTOU。
@@ -1320,6 +1385,12 @@ ${fields}
     const matched = known.find((item) => item.id === sourceId);
     if (!matched) {
       throw new MangaSourceForbiddenError();
+    }
+    // 沒開放的人只拿到一般的「来源不可用」，不透露這是成人源
+    if (adult !== 'shown' && isAdultMangaSource(matched)) {
+      throw adult === 'hidden'
+        ? new MangaSafeModeError()
+        : new MangaSourceForbiddenError();
     }
     return matched;
   }
@@ -1329,9 +1400,12 @@ ${fields}
    * Suwayomi 沒有跨來源的「日/週/月排行」API，排行只存在於個別來源的 filter 裡；
    * 沒有 filters 的來源會回空陣列，呼叫端應隱藏分類 UI。
    */
-  async getSourceFilters(sourceId: string): Promise<MangaSourceFilterOption[]> {
+  async getSourceFilters(
+    sourceId: string,
+    adult: MangaAdultView
+  ): Promise<MangaSourceFilterOption[]> {
     if (!sourceId) return [];
-    await this.assertSourceAllowed(sourceId);
+    await this.assertSourceAllowed(sourceId, adult);
 
     const query = `
       query GetSourceFilters($id: LongString!) {
@@ -1595,10 +1669,11 @@ ${fields}
    */
   async getRecommendedManga(
     sourceId: string,
-    type: MangaRecommendType = 'POPULAR',
-    page = 1,
-    filters: MangaFilterSelection[] = [],
-    keyword = ''
+    type: MangaRecommendType,
+    page: number,
+    filters: MangaFilterSelection[],
+    keyword: string,
+    adult: MangaAdultView
   ): Promise<MangaRecommendResult> {
     if (!sourceId) {
       return { mangas: [], hasNextPage: false };
@@ -1631,7 +1706,7 @@ ${fields}
     `;
 
     // 授權必須在快取之前 —— 這是整個設計安全的關鍵。
-    const matchedSource = await this.assertSourceAllowed(sourceId);
+    const matchedSource = await this.assertSourceAllowed(sourceId, adult);
 
     // 快取 key 刻意**不含**政策與使用者。
     //
@@ -1786,7 +1861,8 @@ ${fields}
   }
 
   async getChapterSummaries(
-    items: Array<{ sourceId: string; mangaId: string }>
+    items: Array<{ sourceId: string; mangaId: string }>,
+    adult: MangaAdultView
   ): Promise<Record<string, ChapterSummary>> {
     const controller = new AbortController();
     const summaries: Record<string, ChapterSummary> = {};
@@ -1813,7 +1889,7 @@ ${fields}
       for (const sourceId of Array.from(
         new Set(uniqueItems.map((item) => item.sourceId))
       )) {
-        await this.assertSourceAllowed(sourceId);
+        await this.assertSourceAllowed(sourceId, adult);
       }
 
       const readCachedSummary = (
@@ -1871,7 +1947,7 @@ ${fields}
         const trueSourceId = manga?.sourceId ? String(manga.sourceId) : '';
         if (!manga || !trueSourceId) return undefined;
         if (trueSourceId !== item.sourceId) return undefined;
-        await this.assertSourceAllowed(trueSourceId);
+        await this.assertSourceAllowed(trueSourceId, adult);
 
         const cacheKey = `${snapshot.serverBaseUrl}::${trueSourceId}::${item.mangaId}`;
         const populated = readCachedSummary(cacheKey);
@@ -2215,7 +2291,7 @@ ${fields}
    * 以 mangaId 驗證來源白名單（供圖片代理這類只有 mangaId 的入口使用）。
    * 來源一律由伺服器解析，不接受呼叫端傳入。
    */
-  async assertMangaAllowed(mangaId: string): Promise<void> {
+  async assertMangaAllowed(mangaId: string, adult: MangaAdultView): Promise<void> {
     const resolved = await resolveSuwayomiConfig(this.options);
     // 政策未知時要在「送出任何上游請求之前」就拒絕。若先 resolveMangaSource
     // 再擋，等於讓使用者在授權不明的狀態下驅動任意 manga(id:) 查詢。
@@ -2233,7 +2309,7 @@ ${fields}
         : (await this.resolveMangaSource(mangaId, resolved)).sourceId;
     // assertSourceAllowed 仍然每次都跑：它讀的是（已快取的）來源清單，
     // 管理員改 SourceIds 後會在 SOURCES_TTL_MS 內生效。
-    await this.assertSourceAllowed(sourceId);
+    await this.assertSourceAllowed(sourceId, adult);
   }
 
   /**
@@ -2243,10 +2319,11 @@ ${fields}
    */
   private async fetchMangaDetailFacts(
     snapshot: ResolvedSuwayomiConfig,
-    mangaId: string
+    mangaId: string,
+    adult: MangaAdultView
   ): Promise<MangaDetailFacts> {
     const resolvedSource = await this.resolveMangaSource(mangaId, snapshot);
-    await this.assertSourceAllowed(resolvedSource.sourceId);
+    await this.assertSourceAllowed(resolvedSource.sourceId, adult);
     return {
       // key 與 value 同源，跨伺服器汙染在資料流上就不可能發生
       serverBaseUrl: snapshot.serverBaseUrl,
@@ -2267,9 +2344,14 @@ ${fields}
   private refreshMangaDetailFacts(
     key: string,
     snapshot: ResolvedSuwayomiConfig,
-    mangaId: string
+    mangaId: string,
+    adult: MangaAdultView
   ): void {
-    const refresh: Promise<void> = this.fetchMangaDetailFacts(snapshot, mangaId)
+    const refresh: Promise<void> = this.fetchMangaDetailFacts(
+      snapshot,
+      mangaId,
+      adult
+    )
       .then((value) => {
         // compare-and-set：容量汰除或後續呼叫可能已讓這個 key 指向別的一輪，
         // 較舊的 refresh 不可覆寫較新的結果
@@ -2313,11 +2395,13 @@ ${fields}
    * 快取裡只有伺服器事實 —— 授權完全不在裡面：政策門由呼叫端在進來之前
    * 用最新的 config 擋，assertSourceAllowed 在這裡（冷啟動與背景更新都在
    * 送 getChapters 之前）與 getMangaDetail 尾端各跑一次，所以無論回的是
-   * 新值還是 stale 值，都不會跳過任何一道檢查。
+   * 新值還是 stale 值，都不會跳過任何一道檢查。冷啟動／背景更新以觸發者的
+   * adult 驗權，併發等同一發的其他檢視者仍由尾端那次用自己的 adult 把關。
    */
   private loadMangaDetailFacts(
     snapshot: ResolvedSuwayomiConfig,
-    mangaId: string
+    mangaId: string,
+    adult: MangaAdultView
   ): Promise<MangaDetailFacts> {
     const key = `${snapshot.serverBaseUrl}::${mangaId}`;
     const now = Date.now();
@@ -2330,7 +2414,7 @@ ${fields}
         !hit.refresh &&
         (!hit.retryAt || now >= hit.retryAt)
       ) {
-        this.refreshMangaDetailFacts(key, snapshot, mangaId);
+        this.refreshMangaDetailFacts(key, snapshot, mangaId, adult);
       }
       return Promise.resolve(hit.value);
     }
@@ -2339,7 +2423,8 @@ ${fields}
 
     const inflight: Promise<MangaDetailFacts> = this.fetchMangaDetailFacts(
       snapshot,
-      mangaId
+      mangaId,
+      adult
     )
       .then((value) => {
         // compare-and-set：容量汰除或後續呼叫可能已讓這個 key 指向別的
@@ -2370,16 +2455,19 @@ ${fields}
     return inflight;
   }
 
-  async getMangaDetail(input: {
-    mangaId: string;
-    sourceId: string;
-    title?: string;
-    cover?: string;
-    sourceName?: string;
-    description?: string;
-    author?: string;
-    status?: string;
-  }): Promise<MangaDetail> {
+  async getMangaDetail(
+    input: {
+      mangaId: string;
+      sourceId: string;
+      title?: string;
+      cover?: string;
+      sourceName?: string;
+      description?: string;
+      author?: string;
+      status?: string;
+    },
+    adult: MangaAdultView
+  ): Promise<MangaDetail> {
     // 政策門與 snapshot 合併成同一次 resolve：檢查的與使用的是同一份 config，
     // 兩次 resolve 之間沒有縫。政策未知要在送出任何上游請求之前擋掉，
     // 快取命中也一樣要先過這道。
@@ -2389,7 +2477,7 @@ ${fields}
         '无法读取来源限制设置，已暂时拒绝访问'
       );
     }
-    let facts = await this.loadMangaDetailFacts(snapshot, input.mangaId);
+    let facts = await this.loadMangaDetailFacts(snapshot, input.mangaId, adult);
 
     // 這一輪期間 admin 可能換掉 ServerURL。facts 本身自洽（整輪綁同一台），
     // 但回給使用者的內容應該屬於「現在這台」——否則後續用 chapterId 發的
@@ -2397,13 +2485,13 @@ ${fields}
     // 回傳第二輪的自洽事實即可，快取仍零汙染（key 與 value 同源）。
     const fresh = await resolveSuwayomiConfig(this.options);
     if (fresh.policyKnown && fresh.serverBaseUrl !== facts.serverBaseUrl) {
-      facts = await this.loadMangaDetailFacts(fresh, input.mangaId);
+      facts = await this.loadMangaDetailFacts(fresh, input.mangaId, adult);
     }
 
     // 授權永遠最後、永遠用最新政策：重試之後才驗，保證真正回傳的
     // trueSourceId 過的是當下白名單。管理員停用來源後會在 SOURCES_TTL_MS
     // 內生效，不受 5 分鐘詳情內容 TTL 影響。
-    const source = await this.assertSourceAllowed(facts.trueSourceId);
+    const source = await this.assertSourceAllowed(facts.trueSourceId, adult);
 
     const manga = facts.manga;
     return {
@@ -2428,7 +2516,7 @@ ${fields}
     };
   }
 
-  async getChapterPages(chapterId: string): Promise<string[]> {
+  async getChapterPages(chapterId: string, adult: MangaAdultView): Promise<string[]> {
     // 政策未知要在送出任何上游請求之前擋掉（含下面的 ChapterSource 反查）
     await this.assertPolicyKnown();
     const resolved = await resolveSuwayomiConfig(this.options);
@@ -2440,8 +2528,9 @@ ${fields}
         : hit?.inflight
         ? await hit.inflight
         : null;
+    // 快取不分使用者：命中或等別人那一發，都要用自己的 adult 再驗一次
     if (cached) {
-      await this.assertSourceAllowed(cached.sourceId);
+      await this.assertSourceAllowed(cached.sourceId, adult);
       return cached.pages;
     }
 
@@ -2471,7 +2560,7 @@ ${fields}
         throw new MangaSourceForbiddenError('无法确认该章节的来源，已拒绝访问');
       }
       const sourceId = String(chapterSourceId);
-      await this.assertSourceAllowed(sourceId);
+      await this.assertSourceAllowed(sourceId, adult);
 
       const mutation = `
         mutation GET_CHAPTER_PAGES_FETCH($input: FetchChapterPagesInput!) {

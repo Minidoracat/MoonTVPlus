@@ -2,13 +2,13 @@ import { NextRequest, NextResponse } from 'next/server';
 
 import { suwayomiClient } from '@/lib/suwayomi.client';
 
-import { getAuthorizedUsername, mangaErrorResponse } from '../_utils';
+import { getMangaViewer, mangaErrorResponse } from '../_utils';
 
 export const runtime = 'nodejs';
 
 export async function GET(request: NextRequest) {
-  const username = await getAuthorizedUsername(request);
-  if (username instanceof NextResponse) return username;
+  const viewer = await getMangaViewer(request);
+  if (viewer instanceof NextResponse) return viewer;
 
   try {
     const { searchParams } = new URL(request.url);
@@ -19,16 +19,19 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: '缺少 mangaId 或 sourceId' }, { status: 400 });
     }
 
-    const detail = await suwayomiClient.getMangaDetail({
-      mangaId,
-      sourceId,
-      title: searchParams.get('title') || undefined,
-      cover: searchParams.get('cover') || undefined,
-      sourceName: searchParams.get('sourceName') || undefined,
-      description: searchParams.get('description') || undefined,
-      author: searchParams.get('author') || undefined,
-      status: searchParams.get('status') || undefined,
-    });
+    const detail = await suwayomiClient.getMangaDetail(
+      {
+        mangaId,
+        sourceId,
+        title: searchParams.get('title') || undefined,
+        cover: searchParams.get('cover') || undefined,
+        sourceName: searchParams.get('sourceName') || undefined,
+        description: searchParams.get('description') || undefined,
+        author: searchParams.get('author') || undefined,
+        status: searchParams.get('status') || undefined,
+      },
+      viewer.adult
+    );
 
     return NextResponse.json(detail);
   } catch (error) {

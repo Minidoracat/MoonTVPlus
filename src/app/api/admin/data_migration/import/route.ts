@@ -294,6 +294,14 @@ export async function POST(req: NextRequest) {
 
               console.log(`用户 ${username} 导入成功 (Redis)`);
             }
+
+            // 漫畫成人源授權與安全模式：建立使用者的各後端方法都不帶這兩欄，建完再補
+            if (userV2?.mangaAdult || userV2?.mangaSafeMode) {
+              await db.updateUserInfoV2(username, {
+                mangaAdult: !!userV2.mangaAdult,
+                mangaSafeMode: !!userV2.mangaSafeMode,
+              });
+            }
           } else {
             console.log(`跳过用户 ${username}：没有passwordV2`);
             return false;

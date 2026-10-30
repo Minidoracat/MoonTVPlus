@@ -1,4 +1,8 @@
-import type { MangaSource, MangaSourceProbeSummary } from '@/lib/manga.types';
+import {
+  type MangaSource,
+  type MangaSourceProbeSummary,
+  isAdultMangaSource,
+} from '@/lib/manga.types';
 
 export type MangaSourceCategoryId =
   | 'all'
@@ -15,32 +19,6 @@ export interface MangaSourceCategory {
 const RECENT_STORAGE_KEY = 'moontv_manga_recent_source_ids';
 const RECENT_LIMIT = 8;
 
-const ADULT_MARKERS = [
-  '禁漫',
-  '绅士',
-  '紳士',
-  '哔咔',
-  '18漫',
-  'cartoon18',
-  'hanman',
-  'hanime',
-  'boylove',
-  '香香腐宅',
-  '肉漫',
-  '一耽',
-  '六漫画',
-  '六漫畫',
-  'picacomic',
-  'wnacg',
-  'jcomic',
-  'noyacg',
-  'toptoon',
-  '頂通',
-  '巴卡',
-  'h-comic',
-  'hcomic',
-];
-
 export function getMangaSourceLabel(source: MangaSource): string {
   return source.displayName || source.name || source.id;
 }
@@ -48,11 +26,7 @@ export function getMangaSourceLabel(source: MangaSource): string {
 export function getMangaSourceCategory(
   source: MangaSource
 ): Exclude<MangaSourceCategoryId, 'all' | 'recent'> {
-  const text = `${source.name || ''} ${source.displayName || ''}`.toLowerCase();
-  const adultByName = ADULT_MARKERS.some((marker) =>
-    text.includes(marker.toLowerCase())
-  );
-  if (source.contentWarning === 'NSFW' || adultByName) return 'adult';
+  if (isAdultMangaSource(source)) return 'adult';
   if (source.contentWarning === 'SAFE') return 'safe';
   return 'mixed';
 }

@@ -619,6 +619,8 @@ export class DbManager {
     playrecord_migrated?: boolean;
     favorite_migrated?: boolean;
     skip_migrated?: boolean;
+    mangaAdult?: boolean;
+    mangaSafeMode?: boolean;
   } | null> {
     if (typeof (this.storage as any).getUserInfoV2 === 'function') {
       return (this.storage as any).getUserInfoV2(userName);
@@ -634,6 +636,8 @@ export class DbManager {
       tags?: string[];
       oidcSub?: string;
       enabledApis?: string[];
+      mangaAdult?: boolean;
+      mangaSafeMode?: boolean;
     }
   ): Promise<void> {
     if (typeof (this.storage as any).updateUserInfoV2 === 'function') {
@@ -675,6 +679,8 @@ export class DbManager {
       oidcSub?: string;
       enabledApis?: string[];
       created_at: number;
+      mangaAdult?: boolean;
+      mangaSafeMode?: boolean;
     }>;
     total: number;
   }> {

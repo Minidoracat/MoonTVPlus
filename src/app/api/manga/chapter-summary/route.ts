@@ -2,13 +2,13 @@ import { NextRequest, NextResponse } from 'next/server';
 
 import { suwayomiClient } from '@/lib/suwayomi.client';
 
-import { getAuthorizedUsername, mangaErrorResponse } from '../_utils';
+import { getMangaViewer, mangaErrorResponse } from '../_utils';
 
 export const runtime = 'nodejs';
 
 export async function POST(request: NextRequest) {
-  const username = await getAuthorizedUsername(request);
-  if (username instanceof NextResponse) return username;
+  const viewer = await getMangaViewer(request);
+  if (viewer instanceof NextResponse) return viewer;
 
   let body: unknown;
   try {
@@ -46,7 +46,7 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    const summaries = await suwayomiClient.getChapterSummaries(items);
+    const summaries = await suwayomiClient.getChapterSummaries(items, viewer.adult);
     return NextResponse.json({ summaries });
   } catch (error) {
     return mangaErrorResponse(error);

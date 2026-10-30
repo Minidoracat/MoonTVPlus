@@ -23,9 +23,14 @@ import {
 } from '@/lib/live';
 import { resolveMangaImageUrl } from '@/lib/manga-image-path';
 import { orderMangaChapters } from '@/lib/manga-reader';
-import { MangaChapter, MangaShelfItem } from '@/lib/manga.types';
+import {
+  MangaAdultView,
+  MangaChapter,
+  MangaShelfItem,
+} from '@/lib/manga.types';
 import { refreshNetflixTop10 } from '@/lib/netflix-top10';
 import { startOpenListRefresh } from '@/lib/openlist-refresh';
+import { getMangaAdultView } from '@/lib/permissions';
 import {
   getSuwayomiConfig,
   loginWithSimpleAuth,
@@ -33,6 +38,8 @@ import {
   suwayomiClient,
 } from '@/lib/suwayomi.client';
 import { SearchResult } from '@/lib/types';
+
+import { hideAdultRecords } from '../../manga/_utils';
 
 export const runtime = 'nodejs';
 const MAX_INLINE_MANGA_COVERS = 3;
@@ -43,7 +50,10 @@ function buildSuwayomiBasicAuthHeader(username: string, password: string): strin
   return `Basic ${Buffer.from(`${username}:${password}`).toString('base64')}`;
 }
 
-async function fetchMangaCoverAsDataUri(coverUrl?: string): Promise<string | undefined> {
+async function fetchMangaCoverAsDataUri(
+  coverUrl: string | undefined,
+  adult: MangaAdultView
+): Promise<string | undefined> {
   if (!coverUrl) return undefined;
 
   try {
@@ -70,7 +80,7 @@ async function fetchMangaCoverAsDataUri(coverUrl?: string): Promise<string | und
     );
     // 這裡會附上管理員憑證，所以同樣要反查真正的來源驗白名單，
     // 否則被停用來源的封面仍會被抓出來塞進通知信
-    await suwayomiClient.assertMangaAllowed(mangaId);
+    await suwayomiClient.assertMangaAllowed(mangaId, adult);
 
     let headers: HeadersInit | undefined;
     if (config.authMode === 'basic_auth') {
@@ -396,22 +406,26 @@ async function refreshRecordAndFavorites() {
     };
 
     const getMangaDetail = async (
-      item: MangaShelfItem
+      item: MangaShelfItem,
+      adult: MangaAdultView
     ): Promise<{ chapters: MangaChapter[]; shelfItem: Partial<MangaShelfItem> } | null> => {
       const key = `${item.sourceId}+${item.mangaId}`;
       let promise = mangaDetailCache.get(key);
       if (!promise) {
         promise = suwayomiClient
-          .getMangaDetail({
-            mangaId: item.mangaId,
-            sourceId: item.sourceId,
-            title: item.title,
-            cover: item.cover,
-            sourceName: item.sourceName,
-            description: item.description,
-            author: item.author,
-            status: item.status,
-          })
+          .getMangaDetail(
+            {
+              mangaId: item.mangaId,
+              sourceId: item.sourceId,
+              title: item.title,
+              cover: item.cover,
+              sourceName: item.sourceName,
+              description: item.description,
+              author: item.author,
+              status: item.status,
+            },
+            adult
+          )
           .then((detail) => {
             const chapters = orderMangaChapters(detail.chapters || []);
 
@@ -644,7 +658,10 @@ async function refreshRecordAndFavorites() {
 
       // 漫画书架
       try {
-        const shelf = await db.getAllMangaShelf(user);
+        // 沒開放或開著安全模式的人，成人源的書架項目整個略過：不抓詳情、不發通知也不寄信。
+        // 成人源 id 取不到時這裡會丟錯，整個書架這輪都不處理，寧可漏通知也不露出。
+        const view = await getMangaAdultView(user);
+        const shelf = await hideAdultRecords(await db.getAllMangaShelf(user), view);
         const totalShelfItems = Object.keys(shelf).length;
         let processedShelfItems = 0;
         const now = Date.now();
@@ -653,7 +670,7 @@ async function refreshRecordAndFavorites() {
 
         for (const [key, item] of Object.entries(shelf)) {
           try {
-            const detail = await getMangaDetail(item);
+            const detail = await getMangaDetail(item, view);
             if (!detail) {
               continue;
             }
@@ -726,7 +743,7 @@ async function refreshRecordAndFavorites() {
 
               const inlineCover =
                 inlinedCoverCount < MAX_INLINE_MANGA_COVERS
-                  ? await fetchMangaCoverAsDataUri(detail.shelfItem.cover || item.cover)
+                  ? await fetchMangaCoverAsDataUri(detail.shelfItem.cover || item.cover, view)
                   : undefined;
               if (inlineCover) {
                 inlinedCoverCount++;

@@ -3,7 +3,7 @@
 import { CheckCircle2, RefreshCw, XCircle } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
-import type { MangaSourceEgress } from '@/lib/manga.types';
+import { type MangaSourceEgress,isAdultMangaSource } from '@/lib/manga.types';
 
 /** 單一能力（熱門／搜尋）的探測結果 */
 export interface AdminMangaSourceProbeOutcome {
@@ -635,7 +635,7 @@ export default function MangaSourceManagerPanel({
                   </div>
                   <div className='mt-0.5 flex flex-wrap items-center gap-2 text-xs text-gray-500 dark:text-gray-400'>
                     <span>{source.lang || '—'}</span>
-                    {source.contentWarning === 'NSFW' && (
+                    {isAdultMangaSource(source) && (
                       <span className='rounded bg-pink-100 px-1.5 py-0.5 text-pink-700 dark:bg-pink-900/30 dark:text-pink-300'>
                         成人
                       </span>

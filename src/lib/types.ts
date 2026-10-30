@@ -229,6 +229,8 @@ export interface IStorage {
     last_movie_request_time?: number;
     email?: string; // 用户邮箱
     emailNotifications?: boolean; // 是否接收邮件通知
+    mangaAdult?: boolean; // 管理員授權可見成人漫畫源
+    mangaSafeMode?: boolean; // 漫畫安全模式（隱藏成人源）
   } | null>;
 
   // 用户邮箱相关

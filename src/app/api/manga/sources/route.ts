@@ -5,13 +5,14 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getAuthInfoFromCookie } from '@/lib/auth';
 import { readMangaProbeCache } from '@/lib/manga-probe-cache.server';
 import {
+  isAdultMangaSource,
   toMangaSourceProbeSummary,
   type MangaSourceEgress,
   type MangaSourceProbeSummary,
 } from '@/lib/manga.types';
 import { getSuwayomiConfig, suwayomiClient } from '@/lib/suwayomi.client';
 
-import { getAuthorizedUsername, mangaErrorResponse } from '../_utils';
+import { getMangaViewer, mangaErrorResponse } from '../_utils';
 
 /** BCP-47 樣式的語言標籤；用來擋掉會被當成快取 key 的任意字串 */
 const LANG_PATTERN = /^[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8})*$/;
@@ -19,8 +20,8 @@ const LANG_PATTERN = /^[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8})*$/;
 export const runtime = 'nodejs';
 
 export async function GET(request: NextRequest) {
-  const username = await getAuthorizedUsername(request);
-  if (username instanceof NextResponse) return username;
+  const viewer = await getMangaViewer(request);
+  if (viewer instanceof NextResponse) return viewer;
 
   try {
     const rawLang = new URL(request.url).searchParams.get('lang');
@@ -51,7 +52,7 @@ export async function GET(request: NextRequest) {
     // 出口屬於基礎設施資訊，只給管理員（cookie 的 role 有簽章，middleware 驗過）
     const role = getAuthInfoFromCookie(request)?.role;
     const isAdmin = role === 'owner' || role === 'admin';
-    const [sources, probeCache, egressMap] = await Promise.all([
+    const [allSources, probeCache, egressMap] = await Promise.all([
       suwayomiClient.getSources(lang),
       readMangaProbeCache(),
       // 只是附加資訊：讀不到（沒部署分流、舊版 Suwayomi）就不顯示，不能拖垮列表
@@ -61,6 +62,11 @@ export async function GET(request: NextRequest) {
             .catch(() => new Map<string, MangaSourceEgress>())
         : null,
     ]);
+    // 成人源只給 shown；探測摘要與出口都以這份清單為準，藏起來的來源不留痕跡
+    const sources =
+      viewer.adult === 'shown'
+        ? allSources
+        : allSources.filter((source) => !isAdultMangaSource(source));
     // maxSources = 單次搜尋實際查詢的來源上限，前端用來提示多選超限
     //
     // policyVersion = 兩份來源清單的短 hash。前端用它當 sessionStorage

@@ -145,7 +145,7 @@ describe('詳情載入的 snapshot 貫穿與伺服器切換', () => {
     const detail = await client.getMangaDetail({
       mangaId: MANGA_ID,
       sourceId: SOURCE_ID,
-    });
+    }, 'shown');
 
     // 每一輪的 chapters 都跟著同一輪的 manga 走：不存在 A 漫畫配 B 章節
     const rounds = calls.filter(
@@ -163,14 +163,14 @@ describe('詳情載入的 snapshot 貫穿與伺服器切換', () => {
   });
 
   it('切換後不會命中舊伺服器的快取', async () => {
-    await client.getMangaDetail({ mangaId: MANGA_ID, sourceId: SOURCE_ID });
+    await client.getMangaDetail({ mangaId: MANGA_ID, sourceId: SOURCE_ID }, 'shown');
     currentServer = SERVER_B;
     calls = [];
 
     const detail = await client.getMangaDetail({
       mangaId: MANGA_ID,
       sourceId: SOURCE_ID,
-    });
+    }, 'shown');
 
     expect(detail.title).toBe('B 标题');
     expect(calls.filter((call) => call.operation === 'detail')).toHaveLength(1);
@@ -187,7 +187,7 @@ describe('詳情載入的 snapshot 貫穿與伺服器切換', () => {
     const detail = await client.getMangaDetail({
       mangaId: MANGA_ID,
       sourceId: SOURCE_ID,
-    });
+    }, 'shown');
 
     expect(detail.title).toBe('B 标题');
     expect(detail.chapters[0].name).toBe('B 第 1 话');
@@ -204,7 +204,7 @@ describe('詳情載入的 snapshot 貫穿與伺服器切換', () => {
     };
 
     await expect(
-      client.getMangaDetail({ mangaId: MANGA_ID, sourceId: SOURCE_ID })
+      client.getMangaDetail({ mangaId: MANGA_ID, sourceId: SOURCE_ID }, 'shown')
     ).rejects.toThrow();
     // 確實重跑了 B 那一輪，拒絕來自對 B 事實的授權判斷
     expect(
@@ -219,7 +219,7 @@ describe('詳情載入的 snapshot 貫穿與伺服器切換', () => {
     };
 
     await expect(
-      client.getMangaDetail({ mangaId: MANGA_ID, sourceId: SOURCE_ID })
+      client.getMangaDetail({ mangaId: MANGA_ID, sourceId: SOURCE_ID }, 'shown')
     ).rejects.toThrow(FORBIDDEN);
     expect(calls.filter((call) => call.operation === 'detail')).toHaveLength(1);
   });

@@ -34,6 +34,7 @@ const ACTIONS = [
   'changePassword',
   'deleteUser',
   'updateUserApis',
+  'setMangaAdult',
   'userGroup',
   'updateUserGroups',
   'batchUpdateUserGroups',
@@ -82,6 +83,7 @@ export async function POST(request: NextRequest) {
       action !== 'changePassword' &&
       action !== 'deleteUser' &&
       action !== 'updateUserApis' &&
+      action !== 'setMangaAdult' &&
       action !== 'userGroup' &&
       action !== 'updateUserGroups' &&
       action !== 'batchUpdateUserGroups' &&
@@ -371,6 +373,28 @@ export async function POST(request: NextRequest) {
         await db.updateUserInfoV2(targetUsername!, {
           enabledApis: enabledApis && enabledApis.length > 0 ? enabledApis : []
         });
+
+        break;
+      }
+      case 'setMangaAdult': {
+        const { allowed } = body as { allowed?: unknown };
+        if (!targetEntry || typeof allowed !== 'boolean') {
+          return NextResponse.json({ error: '参数错误' }, { status: 400 });
+        }
+
+        // 權限檢查與採集源相同：站長可設定所有人，管理員可設定普通用戶和自己
+        if (
+          isTargetAdmin &&
+          operatorRole !== 'owner' &&
+          username !== targetUsername
+        ) {
+          return NextResponse.json(
+            { error: '仅站长可设定其他管理员' },
+            { status: 401 }
+          );
+        }
+
+        await db.updateUserInfoV2(targetUsername!, { mangaAdult: allowed });
 
         break;
       }

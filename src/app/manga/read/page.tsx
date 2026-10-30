@@ -66,6 +66,7 @@ import { useOverlayFocus } from '@/hooks/useOverlayFocus';
 import MangaChapterOrderToggle from '@/components/manga/MangaChapterOrderToggle';
 import MangaLoadingStatus from '@/components/manga/MangaLoadingStatus';
 import MangaPageImage from '@/components/manga/MangaPageImage';
+import { MANGA_SAFE_MODE_MESSAGE, MangaSafeModeOffButton } from '@/components/manga/MangaSafeMode';
 import MangaZoomViewer, {
   type MangaZoomTarget,
 } from '@/components/manga/MangaZoomViewer';
@@ -805,7 +806,13 @@ export default function MangaReadPage() {
     })
       .then(async (res) => {
         const data = await res.json();
-        if (!res.ok) throw new Error(data?.error || '无法载入章节内容');
+        if (!res.ok) {
+          throw new Error(
+            data?.code === 'safe_mode'
+              ? MANGA_SAFE_MODE_MESSAGE
+              : data?.error || '无法载入章节内容'
+          );
+        }
         const nextPages = Array.isArray(data.pages) ? data.pages : [];
         if (nextPages.length === 0) {
           throw new Error('当前章节没有可阅读页面');
@@ -2382,7 +2389,7 @@ export default function MangaReadPage() {
               {pagesError}
             </p>
             <div className='mt-4 flex flex-wrap items-center justify-center gap-3'>
-              {chapterId && mangaId && sourceId && (
+              {chapterId && mangaId && sourceId && pagesError !== MANGA_SAFE_MODE_MESSAGE && (
                 <button
                   type='button'
                   onClick={() => setPagesRetryToken((token) => token + 1)}
@@ -2397,6 +2404,15 @@ export default function MangaReadPage() {
               >
                 返回作品详情
               </Link>
+              {pagesError === MANGA_SAFE_MODE_MESSAGE && (
+                <MangaSafeModeOffButton
+                  className={`inline-flex min-h-11 items-center rounded-2xl border px-4 text-sm font-medium transition-colors duration-200 ${
+                    immersiveMode
+                      ? 'border-white/30 text-white/90 hover:bg-white/10'
+                      : 'border-gray-300 text-gray-700 hover:bg-gray-100 dark:border-gray-700 dark:text-gray-200 dark:hover:bg-gray-800'
+                  }`}
+                />
+              )}
             </div>
           </div>
         ) : pagesLoading || historyRestorePending ? (

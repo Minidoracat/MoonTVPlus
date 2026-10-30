@@ -48,6 +48,7 @@
 | `src/app/music/music.css` | 檔尾 `prefers-reduced-motion: reduce` 區塊 |
 | `src/lib/d1.db.ts`、`src/lib/postgres.db.ts`、`migrations/006_manga.sql`、`migrations/postgres/006_manga.sql` | 漫畫書架 `update_time`／`favorite` 欄位（`d8def654`）。上游 v227 拿掉啟動時的 `ensureMangaShelfColumns`、改由 migration 補欄位，本 fork 的兩欄搬到 `migrations/015_custom_manga_shelf_columns.sql` 與 `migrations/postgres/015_custom_manga_shelf_columns.sql`（獨立成檔，上游之後的 015 檔名不同、不衝突） |
 | 頂部安全區 `--safe-top`（上游 v227 `globals.css`） | 上游把 header／內容區的 `env(safe-area-inset-top)` 換成 `var(--safe-top)`（只在 standalone 才留空）。本 fork 漫畫模組（`MangaLayout`、閱讀器、`MangaZoomViewer`）header 與內容區一致沿用 `env()`，沒跟進；音樂頁 `<main>` 跟上游 header 用 `var(--safe-top)`，`MUSIC_SIDEBAR_DOCKED` 只在 ≥1024px 出現、仍是 `env()` |
+| `src/lib/suwayomi.client.ts`、`src/app/api/manga/**`、`src/app/api/cron/[password]/route.ts`、`src/app/api/notifications/route.ts`、`src/app/api/admin/user/route.ts`、`src/app/admin/page.tsx`、`src/app/layout.tsx`、使用者存儲（`types.ts`、`db.ts`、`user-cache.ts`、`redis-base.db.ts`、`d1.db.ts`、`postgres.db.ts`） | 成人漫畫源權限與安全模式（第 19 節）：Suwayomi 每個對外方法都帶 `adult`，`assertSourceAllowed` 是唯一關卡；路由一律 `getMangaViewer`；使用者欄位 `mangaAdult`／`mangaSafeMode`；`setMangaAdult` 動作與「成人漫画」欄；`RUNTIME_CONFIG.MANGA_ADULT` |
 
 ## 1. 全站繁體中文介面
 
@@ -323,6 +324,32 @@ OpenCC twp 不是冪等的（`算法`→`演算法`，再轉一次又多一個�
   正在看單行本時照舊直接進下一個（連著看單行本不必每卷被問）；章節列表點選不問
 - 實測（2026-10-11，WebKit 26.0、iPhone 13 模擬、水平模式、拋棄式 kvrocks）：第76話章末按「下一话：第11卷」跳出「第11卷（共 174 页）是单行本」，Esc 可關；選跳到第77話後第11卷的圖片請求 0 張；
   第11卷章末直接進第77話、第75話直接進第76話，都不問
+
+## 19. 成人漫畫源權限與安全模式（2026-10-31）
+
+- 新增：`src/components/manga/MangaSafeMode.tsx`、`src/app/api/manga/safe-mode/route.ts`、`src/lib/permissions.test.ts`、`migrations/016_manga_adult.sql`、`migrations/postgres/016_manga_adult.sql`；
+  修改：`src/lib/manga.types.ts`（`MangaAdultView`、`isAdultSourceName`、`isAdultMangaSource`）、`src/lib/suwayomi-errors.ts`（`MangaSafeModeError`）、`src/lib/permissions.ts`（`getMangaAdultView`）、
+  `src/lib/suwayomi.client.ts`（`adult` 參數、`getAdultSourceIds`）、`src/app/api/manga/_utils.ts`（`getMangaViewer`、`hideAdultRecords`、`rejectAdultRecord`）與其他漫畫路由、排程、通知、
+  `src/app/api/admin/user/route.ts`、`src/app/admin/page.tsx`、`src/app/layout.tsx`、`src/app/manga/layout.tsx`、`src/lib/db.client.ts`、`src/lib/manga-source-groups.ts`、`src/components/manga/{MangaLayout,MangaSourceManagerPanel}.tsx`、
+  `src/app/manga/{detail,read,shelf,history,search}/page.tsx`、使用者存儲（見上方衝突熱檔表）
+- 成人源：Suwayomi 標 NSFW，或名稱含 23 個關鍵字之一（`ADULT_SOURCE_MARKERS`：禁漫、紳士、哔咔、wnacg…）。源管理面板的「成人」徽章與分類用同一個 `isAdultMangaSource`
+- 誰看得到：預設看不到；站長（`USERNAME`）永遠看得到；其他人（含管理員）要在「用户管理」的「成人漫画」開關逐一開放（`setMangaAdult`，管理員改其他管理員要站長）
+- 檢視狀態 `getMangaAdultView`：`none`（沒開放、被封禁、讀不到使用者資料）、`shown`、`hidden`（已開放且開著安全模式）。
+  localstorage 模式一律 `shown`，沒有安全模式：前端不顯示盾牌，`PUT /api/manga/safe-mode` 回 400
+- 伺服器端把關：沒開放的人拿到一般的「所选来源不可用或已被管理员停用」（403），看不出是成人源；安全模式拿到 403 `code: 'safe_mode'`，
+  詳情／閱讀頁顯示「这部漫画在安全模式下不显示。」與「关闭安全模式」。來源清單、推薦、篩選、搜尋、詳情、章節、圖片代理、章節摘要全部經過 `assertSourceAllowed`
+- 書架、歷史、漫畫更新通知在讀取時略過成人源（`hideAdultRecords` 對照 `getAdultSourceIds`，清單含被全站停用的源），資料不刪，開放或關掉安全模式後原樣回來；
+  寫入成人源回 403。成人源 id 從沒取到過時書架／歷史回 503、通知藏起全部漫畫更新（寧可讀不到也不露出）
+- 排程：沒開放或開著安全模式的人，成人源的書架項目整個略過，不抓詳情、不發通知、不寄信
+- 安全模式：漫畫頂欄的盾牌按一下就開；關閉要在確認框按「关闭安全模式」（初始焦點在「取消」，Esc 關閉）。記在帳號（`mangaSafeMode`），所有裝置與排程一起生效；
+  切換後清掉 `MANGA_BROWSE_STATE_KEY`、`MANGA_SEARCH_STATE_KEY` 並整頁重載
+- 必守：盾牌狀態與詳情／閱讀頁標題由 `src/app/manga/layout.tsx`（server component）算好、用 `adultView` prop 傳給 `MangaLayout`，首屏就定、不閃也不跳動。
+  改回掛載後才讀的話，安全模式下網址裡的書名會先顯示在頂欄。前端的書架與閱讀紀錄快取帶 `view`，狀態不同視為未命中
+- 部署：D1／Postgres 要先跑 migration 016（`manga_adult`、`manga_safe_mode`），沒跑的話 `getUserListV2` 失敗、用戶列表變空
+- 已知限制：同一部還沒快取的成人漫畫，`none` 與 `shown` 的人幾乎同時打開詳情或同一話時，共用的那一發依先到的人驗權，`shown` 的人可能拿到一次 403，重試即可
+- 實測（2026-10-31，拋棄式 kvrocks＋正式 Suwayomi 的 50 個 zh 源：一般 20、混合 14、成人 16）：站長與已開放者看到 50 個源，未開放的使用者與管理員 34 個；
+  開安全模式後 34 個，成人源的篩選、詳情、章節、圖片、章節摘要回 `safe_mode`，書架／歷史／通知只剩一般源，未讀數跟著減；排程只替站長產生成人漫畫更新通知，安全模式帳號的書架項目沒被處理；
+  頁面上盾牌首屏 HTML 就帶 `aria-pressed`，320px 寬只剩圖示、不溢出
 
 ## 設定鍵一覽（localStorage）
 

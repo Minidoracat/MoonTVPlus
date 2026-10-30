@@ -1236,6 +1236,8 @@ export abstract class BaseRedisStorage implements IStorage {
     last_movie_request_time?: number;
     email?: string;
     emailNotifications?: boolean;
+    mangaAdult?: boolean;
+    mangaSafeMode?: boolean;
   } | null> {
     // 先从缓存获取
     const cached = userInfoCache?.get(userName);
@@ -1313,6 +1315,8 @@ export abstract class BaseRedisStorage implements IStorage {
         : undefined,
       email: userInfoRaw.email,
       emailNotifications: userInfoRaw.emailNotifications === 'true',
+      mangaAdult: userInfoRaw.mangaAdult === 'true',
+      mangaSafeMode: userInfoRaw.mangaSafeMode === 'true',
     };
 
     // 如果是站长，强制将 role 设置为 owner
@@ -1335,6 +1339,8 @@ export abstract class BaseRedisStorage implements IStorage {
       tags?: string[];
       oidcSub?: string;
       enabledApis?: string[];
+      mangaAdult?: boolean;
+      mangaSafeMode?: boolean;
     }
   ): Promise<void> {
     const userInfo: Record<string, string> = {};
@@ -1345,6 +1351,14 @@ export abstract class BaseRedisStorage implements IStorage {
 
     if (updates.banned !== undefined) {
       userInfo.banned = updates.banned ? 'true' : 'false';
+    }
+
+    if (updates.mangaAdult !== undefined) {
+      userInfo.mangaAdult = updates.mangaAdult ? 'true' : 'false';
+    }
+
+    if (updates.mangaSafeMode !== undefined) {
+      userInfo.mangaSafeMode = updates.mangaSafeMode ? 'true' : 'false';
     }
 
     if (updates.tags !== undefined) {
@@ -1436,6 +1450,8 @@ export abstract class BaseRedisStorage implements IStorage {
       oidcSub?: string;
       enabledApis?: string[];
       created_at: number;
+      mangaAdult?: boolean;
+      mangaSafeMode?: boolean;
     }>;
     total: number;
   }> {
@@ -1538,6 +1554,8 @@ export abstract class BaseRedisStorage implements IStorage {
         oidcSub: ownerInfo?.oidcSub,
         enabledApis: ownerInfo?.enabledApis,
         created_at: ownerInfo?.created_at || 0,
+        mangaAdult: ownerInfo?.mangaAdult || false,
+        mangaSafeMode: ownerInfo?.mangaSafeMode || false,
       });
     }
 
@@ -1559,6 +1577,8 @@ export abstract class BaseRedisStorage implements IStorage {
           oidcSub: userInfo.oidcSub,
           enabledApis: userInfo.enabledApis,
           created_at: userInfo.created_at,
+          mangaAdult: userInfo.mangaAdult,
+          mangaSafeMode: userInfo.mangaSafeMode,
         });
       }
     }

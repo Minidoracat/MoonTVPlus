@@ -1368,6 +1368,8 @@ export class D1Storage implements IStorage {
             | undefined,
           email: user.email as string | undefined,
           emailNotifications: user.email_notifications === 1,
+          mangaAdult: user.manga_adult === 1,
+          mangaSafeMode: user.manga_safe_mode === 1,
         };
 
         // 如果是站长，强制将 role 设置为 owner
@@ -1542,7 +1544,7 @@ export class D1Storage implements IStorage {
         ? this.db
             .prepare(
               `
-              SELECT username, role, banned, tags, oidc_sub, enabled_apis, created_at
+              SELECT username, role, banned, tags, oidc_sub, enabled_apis, created_at, manga_adult, manga_safe_mode
               FROM users
               WHERE username LIKE ?
               ORDER BY created_at DESC
@@ -1553,7 +1555,7 @@ export class D1Storage implements IStorage {
         : this.db
             .prepare(
               `
-              SELECT username, role, banned, tags, oidc_sub, enabled_apis, created_at
+              SELECT username, role, banned, tags, oidc_sub, enabled_apis, created_at, manga_adult, manga_safe_mode
               FROM users
               ORDER BY created_at DESC
               LIMIT ? OFFSET ?
@@ -1578,6 +1580,8 @@ export class D1Storage implements IStorage {
           oidcSub: ownerInfo?.oidcSub,
           enabledApis: ownerInfo?.enabledApis,
           created_at: ownerInfo?.created_at || 0,
+          mangaAdult: ownerInfo?.mangaAdult || false,
+          mangaSafeMode: ownerInfo?.mangaSafeMode || false,
         });
       }
 
@@ -1599,6 +1603,8 @@ export class D1Storage implements IStorage {
               ? JSON.parse(user.enabled_apis as string)
               : undefined,
             created_at: user.created_at as number,
+            mangaAdult: user.manga_adult === 1,
+            mangaSafeMode: user.manga_safe_mode === 1,
           });
         }
       }
@@ -1635,6 +1641,8 @@ export class D1Storage implements IStorage {
       tags?: string[];
       oidcSub?: string;
       enabledApis?: string[];
+      mangaAdult?: boolean;
+      mangaSafeMode?: boolean;
     }
   ): Promise<void> {
     try {
@@ -1660,6 +1668,14 @@ export class D1Storage implements IStorage {
       if (updates.enabledApis !== undefined) {
         fields.push('enabled_apis = ?');
         values.push(JSON.stringify(updates.enabledApis));
+      }
+      if (updates.mangaAdult !== undefined) {
+        fields.push('manga_adult = ?');
+        values.push(updates.mangaAdult ? 1 : 0);
+      }
+      if (updates.mangaSafeMode !== undefined) {
+        fields.push('manga_safe_mode = ?');
+        values.push(updates.mangaSafeMode ? 1 : 0);
       }
 
       if (fields.length === 0) return;

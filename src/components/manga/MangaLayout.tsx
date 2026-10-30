@@ -18,6 +18,7 @@ import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 
 import { LanguageToggle } from '@/components/LanguageToggle';
+import { MangaSafeModeButton } from '@/components/manga/MangaSafeMode';
 import MangaSourceManagerPanel from '@/components/manga/MangaSourceManagerPanel';
 import { useOverlayFocus } from '@/hooks/useOverlayFocus';
 import { useSite } from '@/components/SiteProvider';
@@ -26,9 +27,12 @@ import { UpdateNotification } from '@/components/UpdateNotification';
 import { UserMenu } from '@/components/UserMenu';
 import { getAuthInfoFromBrowserCookie } from '@/lib/auth';
 import { buildMangaDetailHref } from '@/lib/manga-reader';
+import type { MangaAdultView } from '@/lib/manga.types';
 
 interface MangaLayoutProps {
   children: React.ReactNode;
+  /** 伺服器端算好的狀態：首屏就決定盾牌與標題，不閃、不跳動 */
+  adultView: MangaAdultView;
 }
 
 const sectionTabs = [
@@ -47,7 +51,8 @@ const readerActions = [
 
 function getMeta(
   pathname: string,
-  searchParams: ReturnType<typeof useSearchParams>
+  searchParams: ReturnType<typeof useSearchParams>,
+  safeMode: boolean
 ) {
   if (pathname === '/manga/shelf') {
     return { title: '漫画书架', subtitle: '集中管理收藏的漫画' };
@@ -59,6 +64,10 @@ function getMeta(
     return { title: '漫画搜索', subtitle: '按标题和来源搜索漫画' };
   }
   if (pathname === '/manga/detail') {
+    // 網址裡的書名與來源名可能正是被藏起來的那一本
+    if (safeMode) {
+      return { title: '漫画详情', backHref: searchParams.get('returnTo') || '/manga' };
+    }
     return {
       title: searchParams.get('title') || '漫画详情',
       subtitle: searchParams.get('sourceName') || '漫画详情',
@@ -72,20 +81,22 @@ function getMeta(
     const cover = searchParams.get('cover') || '';
     const sourceName = searchParams.get('sourceName') || sourceId;
     const returnTo = searchParams.get('returnTo') || '/manga';
+    const backHref = buildMangaDetailHref({ mangaId, sourceId, title, cover, sourceName, returnTo });
+    if (safeMode) return { title: '漫画阅读', backHref };
     return {
       title,
       subtitle: searchParams.get('chapterName') || '章节',
-      backHref: buildMangaDetailHref({ mangaId, sourceId, title, cover, sourceName, returnTo }),
+      backHref,
     };
   }
   return { title: '漫画推荐', subtitle: '按来源查看热门与最新漫画' };
 }
 
-export default function MangaLayout({ children }: MangaLayoutProps) {
+export default function MangaLayout({ children, adultView }: MangaLayoutProps) {
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const { siteName } = useSite();
-  const meta = getMeta(pathname, searchParams);
+  const meta = getMeta(pathname, searchParams, adultView === 'hidden');
   const isReadingPage = pathname === '/manga/read';
 
   // 管理員入口：一般使用者完全看不到這顆按鈕，後端 API 也另有權限檢查
@@ -269,6 +280,7 @@ export default function MangaLayout({ children }: MangaLayoutProps) {
                 })
               ) : (
                 <>
+                  <MangaSafeModeButton view={adultView} />
                   <span className='hidden md:inline-flex'>
                     <LanguageToggle />
                   </span>

@@ -524,6 +524,8 @@ export class PostgresStorage implements IStorage {
             | undefined,
           email: user.email as string | undefined,
           emailNotifications: user.email_notifications === 1,
+          mangaAdult: user.manga_adult === 1,
+          mangaSafeMode: user.manga_safe_mode === 1,
         };
 
         // 缓存用户信息
@@ -633,6 +635,8 @@ export class PostgresStorage implements IStorage {
       oidcSub?: string;
       enabledApis?: string[];
       created_at: number;
+      mangaAdult?: boolean;
+      mangaSafeMode?: boolean;
     }>;
     total: number;
   }> {
@@ -690,7 +694,7 @@ export class PostgresStorage implements IStorage {
         ? this.db
             .prepare(
               `
-              SELECT username, role, banned, tags, oidc_sub, enabled_apis, created_at
+              SELECT username, role, banned, tags, oidc_sub, enabled_apis, created_at, manga_adult, manga_safe_mode
               FROM users
               WHERE username LIKE $1
               ORDER BY created_at DESC
@@ -701,7 +705,7 @@ export class PostgresStorage implements IStorage {
         : this.db
             .prepare(
               `
-              SELECT username, role, banned, tags, oidc_sub, enabled_apis, created_at
+              SELECT username, role, banned, tags, oidc_sub, enabled_apis, created_at, manga_adult, manga_safe_mode
               FROM users
               ORDER BY created_at DESC
               LIMIT $1 OFFSET $2
@@ -726,6 +730,8 @@ export class PostgresStorage implements IStorage {
           oidcSub: ownerInfo?.oidcSub,
           enabledApis: ownerInfo?.enabledApis,
           created_at: ownerInfo?.created_at || 0,
+          mangaAdult: ownerInfo?.mangaAdult || false,
+          mangaSafeMode: ownerInfo?.mangaSafeMode || false,
         });
       }
 
@@ -747,6 +753,8 @@ export class PostgresStorage implements IStorage {
               ? JSON.parse(user.enabled_apis as string)
               : undefined,
             created_at: user.created_at as number,
+            mangaAdult: user.manga_adult === 1,
+            mangaSafeMode: user.manga_safe_mode === 1,
           });
         }
       }
@@ -783,6 +791,8 @@ export class PostgresStorage implements IStorage {
       tags?: string[];
       oidcSub?: string;
       enabledApis?: string[];
+      mangaAdult?: boolean;
+      mangaSafeMode?: boolean;
     }
   ): Promise<void> {
     try {
@@ -809,6 +819,14 @@ export class PostgresStorage implements IStorage {
       if (updates.enabledApis !== undefined) {
         fields.push(`enabled_apis = $${paramIndex++}`);
         values.push(JSON.stringify(updates.enabledApis));
+      }
+      if (updates.mangaAdult !== undefined) {
+        fields.push(`manga_adult = $${paramIndex++}`);
+        values.push(updates.mangaAdult ? 1 : 0);
+      }
+      if (updates.mangaSafeMode !== undefined) {
+        fields.push(`manga_safe_mode = $${paramIndex++}`);
+        values.push(updates.mangaSafeMode ? 1 : 0);
       }
 
       if (fields.length === 0) return;

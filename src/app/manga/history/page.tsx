@@ -7,6 +7,7 @@ import { deleteMangaReadRecord, deleteMangaShelf, getAllMangaReadRecords, getAll
 import { MangaReadRecord, MangaShelfItem } from '@/lib/manga.types';
 
 import MangaHistoryCard from '@/components/manga/MangaHistoryCard';
+import { MangaSafeModeNotice } from '@/components/manga/MangaSafeMode';
 
 function MangaHistorySkeleton() {
   return (
@@ -97,6 +98,7 @@ export default function MangaHistoryPage() {
 
   return (
     <section className='mx-auto max-w-6xl'>
+      <MangaSafeModeNotice />
       <div className='mb-4 flex items-center gap-2 text-sm text-gray-500'>
         <History className='h-4 w-4 text-violet-500' /> 共 {historyList.length} 条阅读记录
       </div>

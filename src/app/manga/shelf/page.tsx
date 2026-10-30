@@ -22,6 +22,7 @@ import {
   ShelfTab,
 } from '@/lib/manga-shelf';
 
+import { MangaSafeModeNotice } from '@/components/manga/MangaSafeMode';
 import MangaCard from '@/components/MangaCard';
 
 function MangaShelfSkeleton() {
@@ -88,6 +89,7 @@ export default function MangaShelfPage() {
 
   return (
     <section className='mx-auto max-w-6xl'>
+      <MangaSafeModeNotice />
       <div className='mb-4 flex flex-wrap items-center gap-x-3 gap-y-2 text-sm text-gray-500'>
         <span className='inline-flex items-center gap-2'>
           <BookOpen className='h-4 w-4 text-emerald-500' /> 共{' '}

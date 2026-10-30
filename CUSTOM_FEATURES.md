@@ -12,7 +12,7 @@
 
 | 檔案 | 必留客製 |
 |---|---|
-| `src/app/play/page.tsx` | iOS PWA PiP／`disablePictureInPicture`、廣告誤跳集、豆瓣失敗 TMDB 補資料；同時留鴻蒙 HLS、`crossOrigin` |
+| `src/app/play/page.tsx` | iOS PWA PiP／`disablePictureInPicture`、PWA 全螢幕走 `fullscreenWeb = true`（第 6 節）、廣告誤跳集（短劇例外見第 6 節，v227 起不能只看 `duanju=1`）、豆瓣失敗 TMDB 補資料；同時留鴻蒙 HLS、`crossOrigin` |
 | `src/app/web-live/page.tsx` | PWA Safari fallback |
 | `src/app/globals.css` | PWA／mobile 控制列 safe-area |
 | `src/lib/ios-pwa.ts` | 整檔本地 |
@@ -46,6 +46,8 @@
 | `src/components/music/MusicSidebarDrawer.tsx` | 導覽項目改 `next/link`、`role="dialog"`、Esc、`useOverlayFocus`；`variant='docked'` 常駐版（不搶焦點、點導覽不收）；沒有 `onNavigate` prop |
 | `src/components/music/tokens.ts`、`src/components/music/SleeveCard.tsx` | `MUSIC_FACE_TONES` 6 色套面（依名次輪替，順序有算過）、`MUSIC_MENU_ITEM` 的 `dark:text-music-night-ink`、`MUSIC_SIDEBAR_DOCKED` |
 | `src/app/music/music.css` | 檔尾 `prefers-reduced-motion: reduce` 區塊 |
+| `src/lib/d1.db.ts`、`src/lib/postgres.db.ts`、`migrations/006_manga.sql`、`migrations/postgres/006_manga.sql` | 漫畫書架 `update_time`／`favorite` 欄位（`d8def654`）。上游 v227 拿掉啟動時的 `ensureMangaShelfColumns`、改由 migration 補欄位，本 fork 的兩欄搬到 `migrations/015_custom_manga_shelf_columns.sql` 與 `migrations/postgres/015_custom_manga_shelf_columns.sql`（獨立成檔，上游之後的 015 檔名不同、不衝突） |
+| 頂部安全區 `--safe-top`（上游 v227 `globals.css`） | 上游把 header／內容區的 `env(safe-area-inset-top)` 換成 `var(--safe-top)`（只在 standalone 才留空）。本 fork 漫畫模組（`MangaLayout`、閱讀器、`MangaZoomViewer`）header 與內容區一致沿用 `env()`，沒跟進；音樂頁 `<main>` 跟上游 header 用 `var(--safe-top)`，`MUSIC_SIDEBAR_DOCKED` 只在 ≥1024px 出現、仍是 `env()` |
 
 ## 1. 全站繁體中文介面
 
@@ -119,7 +121,10 @@ OpenCC twp 不是冪等的（`算法`→`演算法`，再轉一次又多一個�
 
 ### iOS PWA 控制列與 PiP fallback
 
-- 功能 commit：`3b8509cc Improve iOS PWA player controls`（後續還有網頁全螢幕修正）
+- 功能 commit：`3b8509cc Improve iOS PWA player controls`
+- PWA 全螢幕（`e92d8972`）：自訂全螢幕鈕在 PWA 一律 `artPlayerRef.current.fullscreenWeb = true`，靠 ArtPlayer `autoOrientation` 直向自動轉橫，並經 `hideNavigation={isWebFullscreen}` 收起頂欄與底部導覽。
+  上游 v227（`9775637b`）把這裡改成在播放器容器加 `.ios-pwa-immersive`，合併時**不採用**：它不轉屏，而且 `hideNavigation` 只跟 `fullscreenWeb` 連動，
+  直向時 `MobileHeader` 與底部導覽蓋在播放器上、全螢幕鈕被擋（2026-10-31 iPhone 13 模擬實測）。上游的 `isImmersiveFullscreen` 等 helper 與 `.ios-pwa-immersive` 樣式原樣留著不用，下次合併少一處衝突
 - Safari 網頁模式可 PiP；iOS 加到主畫面的 PWA 不支援 programmatic PiP，改顯示「用 Safari 開啟／分享／複製連結」
 - PWA／mobile 控制列 safe-area，避免右下角全螢幕鈕被圓角擋住
 
@@ -134,11 +139,12 @@ OpenCC twp 不是冪等的（`算法`→`演算法`，再轉一次又多一個�
 - `/play` Safari 網頁模式 PiP 可用
 - `/play` iOS PWA 不顯示會報錯的 PiP 鈕，有 Safari fallback
 - `/web-live` 同樣套用 PWA fallback
-- 手機 PWA 右下角全螢幕鈕可點
+- 手機 PWA 右下角全螢幕鈕可點；按下後直向自動轉橫、頂欄與底部導覽收起，再按一次能退出
 
 ### 廣告誤跳集
 
-- `src/lib/playback-auto-next.ts`；短劇 `duanju=1` 例外
+- `src/lib/playback-auto-next.ts`；短劇例外：網址 `duanju=1`（舊連結）或 `isDuanjuTypeName(detail.type_name || detail.class)`（與播放記錄 `is_duanju` 同一套判斷）。
+  上游 v227 起卡片不再帶 `duanju=1`，短劇預設走 `/duanju/play`；只有關掉竖屏模式、在觀影室或從短劇頁按「普通播放」才回 `/play`
 - v225 同時保留上游鴻蒙原生 HLS／`crossOrigin: 'anonymous'`
 
 ## 7. 其他必須鎖住
@@ -335,6 +341,9 @@ git fetch upstream
 git merge --no-ff upstream/main   # 保留既有 v223/v224 merge boundary；rerere 已啟用
 pnpm typecheck && pnpm test -- src/lib/title-alias.test.ts src/lib/search-title-match.test.ts src/components/DoubanSelector.test.ts src/lib/tmdb.client.test.ts src/lib/netflix-top10.test.ts src/lib/playback-auto-next.test.ts src/components/ProxyImage.test.tsx src/app/search/page.test.tsx --runInBand
 ```
+
+本機有 `.open-next/`（CF build 產物，已 gitignore）時，上游 v227 的 `cloudflare-worker.ts` 會經 `allowJs` 把它拉進型別檢查，
+`book-tts.ts`、`magnet-health.ts` 出現 `Buffer` 相關誤報。刪掉 `.open-next/` 或在乾淨 worktree 跑 `pnpm typecheck`；Docker build 不受影響（`.dockerignore` 已排除）。
 
 
 ## 本機開發：用 host Node 取代每次 docker rebuild
